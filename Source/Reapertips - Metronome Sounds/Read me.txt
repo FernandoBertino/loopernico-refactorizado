@@ -1,0 +1,16 @@
+Hello! Alejandro here. Hope you enjoy this!
+
+▶ For instructions check out: https://reapertips.com/freebies/metronome-sounds
+In there you will find illustrated instructions.
+
+
+⤵ Offline instructions:
+
+1. Open a REAPER Blank project and right click on the metronome icon.
+2. Load the metronome sound you liked in the primary/secondary beat fields.
+3. Save this blank project somewhere in your computer. Call it default.rpp
+4. Go to Preferences > Project and click browse. And select the project you just created.
+5. Done! from now on all future projects will have this metronome sound. 
+
+
+♡ If you need more help, DM me on my instagram @reapertips!

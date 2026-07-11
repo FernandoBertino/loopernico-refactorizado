@@ -1,0 +1,17 @@
+# Archivos generados por Visual Studio y JUCE
+Builds/
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+*.ipch
+*.pdb
+*.ilk
+*.obj
+*.pdb
+*.log
+
+# Archivos temporales del sistema
+Thumbs.db
+Desktop.ini

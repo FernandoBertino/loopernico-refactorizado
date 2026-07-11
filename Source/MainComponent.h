@@ -1,0 +1,165 @@
+#pragma once
+
+#include <JuceHeader.h>
+#include "LoopernicoLookAndFeel.h"
+#include "LoopernicoWidgets.h"
+#include "LooperEngine.h"
+#include "MidiController.h"
+#include "EffectsChain.h"
+
+class MainComponent : public juce::AudioAppComponent,
+                      public juce::Timer,
+                      public juce::MidiInputCallback
+{
+public:
+    MainComponent();
+    ~MainComponent() override;
+
+    void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override;
+    void getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill) override;
+    void releaseResources() override;
+
+    void paint(juce::Graphics& g) override;
+    void resized() override;
+    void timerCallback() override;
+    void updateMuteSoloMatrix();
+    void handleIncomingMidiMessage(juce::MidiInput* source, const juce::MidiMessage& message) override;
+
+private:
+    static constexpr int kNumFxPedals = 13;
+
+    LoopernicoLAF lnf;
+
+    LooperEngine             looper;
+    MidiController           midiController;
+    juce::AudioFormatManager formatManager;
+    EffectsChain             effectsChain;
+
+    juce::TextButton      btnRecConfirm, btnStopPlay, btnUndo, btnRedo;
+    juce::TextButton      btnCancel, btnMuteAll, btnPauseAll, btnReset;
+    juce::TextButton      btnSaveSession{"GUARDAR"};
+    juce::TextButton      btnLoadSession{"ABRIR"};
+    juce::TextButton      btnExportMix{"EXPORTAR MIX"};
+    juce::TextButton      btnExportTracks{"EXPORTAR PISTAS"};
+    juce::Viewport   trackViewport;
+    juce::Component  trackContainer;
+    std::vector<std::unique_ptr<TrackComponent>> visualTracks;
+
+    juce::Viewport    fxViewport;
+    juce::Component   fxContainer;
+    std::unique_ptr<FXPedalComponent> fxPedals[kNumFxPedals];
+    std::array<int, kNumFxPedals> fxOrder{};
+    int draggingFxPedal = -1;
+    int dragInsertSlot = -1;
+    juce::ComboBox    rhythmStyleSelector;
+    juce::ComboBox    rhythmPatternSelector;
+    juce::ComboBox    rhythmModeSelector;
+    juce::Label       lblRhythmStyle;
+    juce::Label       lblRhythmPattern;
+    juce::Label       lblRhythmMode;
+    juce::Label       lblRhythmBpmValue;
+    juce::Label       lblRhythmColorValue;
+    juce::Label       lblRhythmVerseBars;
+    juce::Label       lblRhythmChorusBars;
+    juce::Label       lblRhythmSectionState;
+    juce::Label       lblRhythmCountIn;
+    juce::Label       lblRhythmCountSound;
+    juce::ComboBox    rhythmVerseBarsSelector;
+    juce::ComboBox    rhythmChorusBarsSelector;
+    juce::ComboBox    rhythmCountInBarsSelector;
+    juce::ComboBox    rhythmCountInSoundSelector;
+    juce::TextButton  btnRhythmNextSection{"SIGUIENTE PARTE"};
+    juce::TextButton  btnRhythmCountInToggle{"PRECONTEO"};
+
+    juce::ComboBox   midiDeviceSelector, midiActionSelector, midiMessageTypeSelector;
+    juce::Slider     midiNumberSelector;
+    juce::TextButton btnMidiLearn{"MAP MIDI"};
+    juce::TextButton btnMidiClear{"BORRAR"};
+    juce::Label      lblMidiStatus;
+    juce::Label      lblMidiMapping;
+    juce::Label      lblLoopEdit;
+    juce::TextButton btnLoopInEarlier{"IN -"}, btnLoopInLater{"IN +"};
+    juce::TextButton btnLoopOutShorter{"OUT -"}, btnLoopOutLonger{"OUT +"};
+    juce::Label      lblSilenceThreshold;
+    juce::Slider     sldSilenceThreshold;
+
+    juce::Slider   masterKnob;
+    juce::TextButton btnOutputMode{"MONO"};
+
+    void changeMidiInput(int index);
+    void refreshMidiInputSelector();
+    void updateMidiMappingLabel();
+    void updateMidiManualControls();
+    void applyMidiManualMapping();
+    void loadMidiConfiguration();
+    void saveMidiConfiguration() const;
+    juce::File getMidiConfigurationFile() const;
+    int  lastMidiInputIndex = -1;
+    bool midiListenAllInputs = true;
+    std::atomic<juce::int64> lastMidiMs { 0 };
+    std::atomic<float> masterVolume { 0.85f };
+    std::atomic<bool> outputMono { true };
+
+    std::atomic<float> inputVU   { 0.0f };
+    std::atomic<float> outputVUL { 0.0f };
+    std::atomic<float> outputVUR { 0.0f };
+    float inputVUSmooth   = 0.0f;
+    float outputVUSmoothL = 0.0f;
+    float outputVUSmoothR = 0.0f;
+
+    MasterVUMeter masterVUMeter;
+
+    void optimiseAudioDeviceForLowLatency();
+    void setupFXPedals();
+    void beginFxPedalDrag(FXPedalComponent& pedal, const juce::MouseEvent& e);
+    void updateFxPedalDrag(FXPedalComponent& pedal, const juce::MouseEvent& e);
+    void endFxPedalDrag(FXPedalComponent& pedal, const juce::MouseEvent& e);
+    int findFxPedalIndex(const FXPedalComponent& pedal) const;
+    int fxSlotForX(int x) const;
+    void moveFxPedalToSlot(int pedalIndex, int targetSlot);
+    void updateOutputModeButton();
+    void updateLoopEditButtons();
+    void updateRhythmBoxReadouts();
+    void styleVstButton(juce::TextButton& button, juce::Colour accent);
+    void loadExternalVst3Plugin();
+    void unloadExternalVst3Plugin();
+    void openExternalVst3Editor();
+    void closeExternalVst3Editor();
+    void updateExternalVstUi();
+    void saveSessionToFile();
+    void loadSessionFromFile();
+    void exportMixToFile();
+    void exportTracksToFolder();
+    juce::ValueTree createSessionTree(const LooperEngine::SessionSnapshot& looperSnapshot,
+                                      const juce::MemoryBlock& vstState) const;
+    bool writeSessionFile(const juce::File& file,
+                          const juce::ValueTree& sessionTree,
+                          const LooperEngine::SessionSnapshot& looperSnapshot,
+                          const juce::MemoryBlock& vstState,
+                          juce::String& errorMessage) const;
+    bool readSessionFile(const juce::File& file,
+                         juce::ValueTree& sessionTree,
+                         LooperEngine::SessionSnapshot& looperSnapshot,
+                         juce::MemoryBlock& vstState,
+                         juce::String& errorMessage) const;
+    bool applySessionTree(const juce::ValueTree& sessionTree,
+                          const LooperEngine::SessionSnapshot& looperSnapshot,
+                          const juce::MemoryBlock& vstState,
+                          juce::String& errorMessage);
+    void refreshTrackUiFromLooper();
+    void refreshFxUiOrder();
+    void refreshAllThumbnails();
+    int findMidiDeviceIndexByIdentifier(const juce::String& identifier) const;
+
+    juce::TextButton btnLoadVst3{"CARGAR VST3"};
+    juce::TextButton btnUnloadVst3{"QUITAR"};
+    juce::TextButton btnEditVst3{"ABRIR"};
+    juce::TextButton btnBypassVst3{"VST3 ON"};
+    juce::Label lblVst3Status;
+    std::unique_ptr<juce::FileChooser> vst3FileChooser;
+    std::unique_ptr<juce::FileChooser> sessionFileChooser;
+    std::unique_ptr<juce::FileChooser> exportFileChooser;
+    std::unique_ptr<juce::DocumentWindow> vst3EditorWindow;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
+};

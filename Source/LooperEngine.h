@@ -1,0 +1,223 @@
+#pragma once
+#include <JuceHeader.h>
+#include <atomic>
+#include <array>
+
+// ==============================================================================
+// LooperEngine — Motor central del looper.
+//
+// Responsabilidades:
+//   - Estado de grabacion/reproduccion (Stopped, RecordingBase, RecordingLayer, Playing)
+//   - Buffers de audio de cada track (hasta kMaxTracks)
+//   - Tempo: BPM, firma de tiempo, compases por loop, cuantizacion, tap tempo
+//   - Fripp infinite decay por track.
+//
+// Los efectos (FX Pedalboard) viven en MainComponent::effectsChain y se aplican
+// ANTES de que la señal entre al looper. El looper graba y reproduce señal pura,
+// sin cadenas de efectos internas. Lo que escuchas es exactamente lo que se graba.
+//
+// Thread safety:
+//   - Todos los metodos publicos que cambian estado son seguros desde el
+//     message thread. El audio thread SOLO llama a processBlock().
+//   - Los parametros compartidos usan std::atomic.
+// ==============================================================================
+class LooperEngine
+{
+public:
+    static constexpr int   kMaxTracks  = 12;
+    static constexpr float kMaxLoopSecs = 30.0f;
+    static constexpr int   kMaxTaps    = 8;
+    static constexpr double kTapTimeout = 3.0;
+
+    enum class State { Stopped, ArmedBase, RecordingBase, RecordingLayer, Playing };
+
+    struct TrackSnapshot
+    {
+        juce::AudioBuffer<float> audio;
+        int lengthSamples{ 0 };
+        int redoLengthSamples{ 0 };
+        float volume{ 1.0f };
+        bool isMuted{ false };
+        bool isPaused{ false };
+        int pausedReadPos{ 0 };
+        float frippDecay{ 1.0f };
+        bool frippEnabled{ false };
+        float currentGain{ 1.0f };
+    };
+
+    struct SessionSnapshot
+    {
+        State state{ State::Stopped };
+        int totalTracks{ 0 };
+        int baseLoopLengthSamples{ 0 };
+        int loopReadPosition{ 0 };
+        int recordWritePosition{ 0 };
+        int recordStartPosition{ 0 };
+        int editableLoopSourceSamples{ 0 };
+        bool globalMute{ false };
+        bool globalPaused{ false };
+        float silenceThresholdDb{ -60.0f };
+        float bpm{ 120.0f };
+        int beatsPerBar{ 4 };
+        int barsPerLoop{ 0 };
+        bool quantizeEnabled{ true };
+        int redoCount{ 0 };
+        double sampleRate{ 44100.0 };
+        std::array<TrackSnapshot, kMaxTracks> tracks;
+    };
+
+    LooperEngine();
+    ~LooperEngine() = default;
+
+    // ---- Ciclo de vida (message thread) -------------------------------------
+    void prepare(double sampleRate, int maxBlockSize,
+                 juce::AudioFormatManager& fmt);
+    void releaseResources();
+
+    // ---- Procesamiento (audio thread) ---------------------------------------
+    void processBlock(juce::AudioBuffer<float>& buffer,
+                      int startSample, int numSamples,
+                      float masterVolume);
+
+    // ---- Control de grabacion (message thread) ------------------------------
+    void recConfirm();
+    void cancelRec();
+    void undoLastTrack();
+    void redoLastTrack();
+    void stopPlay();
+    void goToStart();
+    void resetAll();
+
+    // ---- Getters de estado (seguros desde cualquier thread) -----------------
+    State getState()           const { return currentState.load(); }
+    int   getTotalTracks()     const { return totalTracks.load(); }
+    int   getBaseLoopSamples() const { return baseLoopLengthSamples.load(); }
+    int   getReadPosition()    const { return loopReadPosition.load(); }
+    int   getRecordWritePosition() const { return recordWritePosition.load(); }
+    float getSampleRate()      const { return (float)sampleRate_; }
+    bool  canRedo()            const { return redoCount > 0; }
+
+    std::function<void()> onFixedLoopComplete;
+
+    // ---- Tempo (message thread) ---------------------------------------------
+    void tapTempo();
+    void setBpm(float bpm);
+    void setBeatsPerBar(int beats);
+    void setBarsPerLoop(int bars);
+    void setQuantizeEnabled(bool e) { quantizeEnabled.store(e); }
+
+    float getBpm()         const { return bpmParam.load(); }
+    int   getBeatsPerBar() const { return beatsPerBar.load(); }
+    int   getBarsPerLoop() const { return barsPerLoop.load(); }
+    bool  isQuantized()    const { return quantizeEnabled.load(); }
+
+    // ---- Mixer por track (message thread) -----------------------------------
+    void  setTrackVolume(int track, float vol);
+    void  setTrackMuted(int track, bool muted);
+    float getTrackVolume(int track) const;
+    bool  isTrackMuted(int track)   const;
+    void  setGlobalMute(bool m)     { globalMute.store(m); }
+    bool  isGlobalMuted()           const { return globalMute.load(); }
+
+    // ---- Pausa por track y global (message thread) --------------------------
+    void pauseTrack (int track);
+    void resumeTrack(int track);
+    void togglePauseTrack(int track);
+    bool isTrackPaused(int track) const;
+
+    void pauseAll();
+    void resumeAll();
+    void togglePauseAll();
+    bool isAnyTrackPaused() const;
+    bool isGlobalPaused()   const { return globalPaused.load(); }
+
+    // ---- Fripp infinite decay (message thread) ------------------------------
+    void  setFrippDecay(int track, float factor);
+    void  setFrippEnabled(int track, bool enabled);
+    float getFrippDecay(int track) const;
+    bool  isFrippEnabled(int track) const;
+
+    // ---- Import / export (message thread) -----------------------------------
+    void importAudioToBase(juce::AudioFormatManager& fmt, const juce::File& file);
+    void exportFullMix(juce::AudioFormatManager& fmt, const juce::File& dest);
+    void exportSeparateTracks(juce::AudioFormatManager& fmt, const juce::File& folder);
+
+    // ---- Edicion rapida del loop base (message thread) ----------------------
+    bool nudgeLoopStart(int deltaSamples);
+    bool adjustLoopTail(int deltaSamples);
+    int  getEditableLoopSourceSamples() const { return editableLoopSourceSamples.load(); }
+
+    // ---- Waveform display (message thread) ----------------------------------
+    juce::AudioThumbnail* getTrackThumbnail(int track);
+    void refreshThumbnail(int track, juce::AudioFormatManager& fmt);
+    SessionSnapshot createSessionSnapshot() const;
+    void restoreSessionSnapshot(const SessionSnapshot& snapshot);
+
+    // ---- Trim de silencio al confirmar grabacion (message thread) -----------
+    // Umbral en dBFS bajo el cual una muestra se considera silencio.
+    // Valor tipico: -60 dBFS. Rango util: -80 a 0.
+    void  setSilenceThresholdDb(float db) { silenceThresholdDb.store(db); }
+    float getSilenceThresholdDb() const   { return silenceThresholdDb.load(); }
+
+private:
+    // ---- Track interno -------------------------------------------------------
+    struct LoopTrack {
+        juce::AudioBuffer<float> buffer;
+        std::atomic<int>   lengthSamples { 0     };
+        std::atomic<int>   redoLengthSamples { 0 }; // longitud guardada al hacer undo, para poder hacer redo
+        std::atomic<float> volume        { 1.0f  };
+        std::atomic<bool>  isMuted       { false };
+        std::atomic<bool>  isPaused      { false };
+        std::atomic<int>   pausedReadPos { 0     };
+        std::atomic<float> frippDecay    { 1.0f  };
+        std::atomic<bool>  frippEnabled  { false };
+        float              currentGain   = 1.0f;
+    };
+
+    // ---- Helpers de tempo y trim (message thread) ---------------------------
+    void recalcLoopLength();
+    int  quantizeToNearestBar(int recordedSamples) const;
+
+    // Detecta el primer y ultimo sample con contenido sobre el umbral,
+    // copia la region activa al inicio del buffer y devuelve su longitud.
+    // Si toda la grabacion es silencio devuelve recordedSamples sin tocar nada.
+    int  trimSilence(int track, int recordedSamples);
+    void applyLoopSeamCrossfade(int activeLengthSamples);
+    void rotateTrackRegion(int track, int regionLengthSamples, int deltaSamples);
+
+    // ---- Estado (atomico, shared entre threads) -----------------------------
+    std::atomic<State> currentState          { State::Stopped };
+    std::atomic<int>   totalTracks           { 0 };
+    std::atomic<int>   baseLoopLengthSamples { 0 };
+    std::atomic<int>   loopReadPosition      { 0 };
+    std::atomic<int>   recordWritePosition   { 0 };
+    std::atomic<int>   recordStartPosition   { 0 };
+    std::atomic<int>   editableLoopSourceSamples { 0 };
+    std::atomic<bool>  globalMute            { false };
+    std::atomic<bool>  globalPaused          { false };
+    std::atomic<float> silenceThresholdDb    { -60.0f }; // umbral para trimSilence
+
+    // ---- Tempo --------------------------------------------------------------
+    std::atomic<float> bpmParam        { 120.0f };
+    std::atomic<int>   beatsPerBar     { 4      };
+    std::atomic<int>   barsPerLoop     { 0      };
+    std::atomic<bool>  quantizeEnabled { true   };
+
+    std::array<double, kMaxTaps> tapTimes {};
+    int tapCount  = 0;
+    int redoCount = 0; // cuantas operaciones de undo se pueden rehacer (message thread only)
+
+    // ---- Tracks -------------------------------------------------------------
+    LoopTrack tracks[kMaxTracks];
+    int       maxLoopLengthSamples = 0;
+
+    // ---- Waveform thumbnails ------------------------------------------------
+    juce::AudioFormatManager*              formatManager_ = nullptr;
+    juce::AudioThumbnailCache              thumbnailCache { kMaxTracks + 1 };
+    std::unique_ptr<juce::AudioThumbnail>  thumbnails[kMaxTracks];
+
+    double sampleRate_    = 44100.0;
+    int    maxBlockSize_  = 512;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LooperEngine)
+};

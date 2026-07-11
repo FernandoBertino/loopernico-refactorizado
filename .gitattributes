@@ -1,0 +1,2 @@
+# Las muestras de audio son archivos grandes: Git LFS evita inflar el historial.
+*.wav filter=lfs diff=lfs merge=lfs -text
