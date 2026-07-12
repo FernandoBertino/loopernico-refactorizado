@@ -5,9 +5,35 @@
 #include <vector>
 #include "EQProcessor.h"
 
-class EffectsChain
+class EffectsChain : private juce::Thread
 {
 public:
+    struct PreparedExternalPlugin
+    {
+        PreparedExternalPlugin() = default;
+        ~PreparedExternalPlugin();
+        PreparedExternalPlugin(PreparedExternalPlugin&&) noexcept;
+        PreparedExternalPlugin& operator=(PreparedExternalPlugin&&) noexcept;
+
+        PreparedExternalPlugin(const PreparedExternalPlugin&) = delete;
+        PreparedExternalPlugin& operator=(const PreparedExternalPlugin&) = delete;
+
+        bool isValid() const noexcept { return instance != nullptr; }
+
+    private:
+        friend class EffectsChain;
+        void release() noexcept;
+
+        std::unique_ptr<juce::AudioPluginInstance> instance;
+        juce::AudioBuffer<float> scratchBuffer;
+        juce::MidiBuffer midiBuffer;
+        int inputChannels{ 0 };
+        int outputChannels{ 0 };
+        juce::String name;
+        juce::String path;
+        bool enabled{ true };
+    };
+
     static constexpr int kFreezeMaxLayers = 5;
     static constexpr int kPedalCount = 13;
 
@@ -55,13 +81,19 @@ public:
     };
 
     EffectsChain();
-    ~EffectsChain() = default;
+    ~EffectsChain() override;
 
     void prepare(double sampleRate, int samplesPerBlockExpected);
     void processBlock(juce::AudioBuffer<float>& buffer, int startSample, int numSamples);
     void reset();
     bool loadExternalVst3(const juce::File& pluginFile, juce::String& errorMessage);
     void unloadExternalPlugin();
+    bool prepareExternalVst3(const juce::File& pluginFile,
+                             PreparedExternalPlugin& candidate,
+                             juce::String& errorMessage,
+                             const juce::MemoryBlock* stateToRestore = nullptr);
+    PreparedExternalPlugin commitExternalPlugin(PreparedExternalPlugin&& candidate) noexcept;
+    PreparedExternalPlugin detachExternalPlugin() noexcept;
     bool hasExternalPlugin() const { return externalPluginInstance != nullptr; }
     void setExternalPluginEnabled(bool shouldBeEnabled) { externalPluginEnabled.store(shouldBeEnabled); }
     bool isExternalPluginEnabled() const { return externalPluginEnabled.load() && externalPluginInstance != nullptr; }
@@ -71,8 +103,6 @@ public:
     bool copyExternalPluginState(juce::MemoryBlock& state) const;
     bool restoreExternalPluginState(const juce::MemoryBlock& state, juce::String& errorMessage);
 
-    bool isPreLooper() const { return preLooper.load(); }
-    void setPreLooper(bool b) { preLooper.store(b); }
     void setPedalOrder(const std::array<int, kPedalCount>& order);
 
     // --- SETTERS ATÓMICOS CONECTADOS A LA INTERFAZ GRÁFICA ---
@@ -269,25 +299,35 @@ private:
         const LoadedSample* sample{ nullptr };
     };
 
+    struct RhythmSampleBank
+    {
+        std::array<SamplePool, (size_t) RhythmSampleSlot::Count> pools;
+        int styleIndex{ -1 };
+        bool metronomeMode{ false };
+        bool samplesRootFound{ false };
+    };
+
     void triggerDrumVoice(DrumInstrument instrument, float velocity);
     void triggerRhythmSample(RhythmSampleSlot slot, float velocity);
-    float renderDrumSample(DrumInstrument instrument, int channel);
+    std::array<float, 2> renderDrumFrame(DrumInstrument instrument);
     float renderRhythmSample(RhythmSampleSlot slot, int channel);
     void advanceRhythmSampleVoices();
     void registerDrumTrigger(DrumInstrument instrument, float velocity);
     void configureRhythmPattern(int styleIndex, int variationIndex, bool metronomeMode);
     void advanceRhythmSequencer(float tempoBpm, float swingAmount, bool metronomeMode, int styleIndex);
-    void advanceDrumSequencer();
     float estimateRecentPitchHz(int channel, int writePosition) const;
     juce::File locateRhythmSamplesRoot() const;
     juce::File locateProjectRoot() const;
-    void loadRhythmSamples(int styleIndex, bool metronomeMode);
+    std::shared_ptr<RhythmSampleBank> loadRhythmSamples(int styleIndex, bool metronomeMode);
     void loadSamplesIntoPool(SamplePool& pool, const juce::File& folder, int maxFiles = 0);
     void loadSampleFileIntoPool(SamplePool& pool, const juce::File& file);
+    void requestRhythmSampleLoad(int styleIndex, bool metronomeMode) noexcept;
+    void applyPendingRhythmSampleBank(int styleIndex, bool metronomeMode) noexcept;
+    void run() override;
     static RhythmSampleSlot sampleSlotForInstrument(DrumInstrument instrument);
     void processExternalPluginBlock(juce::AudioBuffer<float>& buffer, int startSample, int numSamples);
+    void prepareExternalPluginScratchBuffer();
     // --- VARIABLES ATÓMICAS DE CONTROL DE ESTADO ---
-    std::atomic<bool> preLooper{ true };
     std::array<std::atomic<int>, kPedalCount> pedalOrder;
     std::atomic<bool> externalPluginEnabled{ true };
 
@@ -409,6 +449,8 @@ private:
     std::unique_ptr<juce::AudioPluginInstance> externalPluginInstance;
     juce::AudioBuffer<float> externalPluginScratchBuffer;
     juce::MidiBuffer externalPluginMidiBuffer;
+    int externalPluginInputChannels{ 0 };
+    int externalPluginOutputChannels{ 0 };
     juce::String externalPluginName;
     juce::String externalPluginPath;
     juce::AudioBuffer<float> delayBuffer;
@@ -456,12 +498,15 @@ private:
     DrumVoice kickVoice;
     DrumVoice snareVoice;
     DrumVoice hatVoice;
-    std::array<SamplePool, (size_t) RhythmSampleSlot::Count> rhythmSamplePools;
+    std::shared_ptr<RhythmSampleBank> rhythmSampleBank;
+    std::shared_ptr<RhythmSampleBank> pendingRhythmSampleBank;
+    std::shared_ptr<RhythmSampleBank> retiredRhythmSampleBank;
+    juce::SpinLock rhythmSampleBankLock;
+    std::atomic<int> requestedRhythmSampleStyle{ -1 };
+    std::atomic<bool> requestedRhythmSampleMetronome{ false };
+    std::atomic<unsigned int> rhythmSampleRequestSerial{ 0 };
     std::array<SampleVoice, (size_t) RhythmSampleSlot::Count> rhythmSampleVoices;
     juce::AudioFormatManager rhythmSampleFormatManager;
-    bool rhythmSamplesLoaded{ false };
-    juce::File rhythmSamplesRoot;
-
     static constexpr int kDrumPatternSteps = 16;
     std::array<float, kDrumPatternSteps> kickPattern{};
     std::array<float, kDrumPatternSteps> snarePattern{};
@@ -478,7 +523,6 @@ private:
     int drumDensityCounter{ 0 };
     int drumBarCounter{ 0 };
     int drumTriggerRoundRobin{ 0 };
-    bool drumClockRunning{ false };
     bool drumTriggerArmed{ true };
     bool drumWasEnabled{ false };
     bool rhythmWasEnabled{ false };
@@ -506,6 +550,4 @@ private:
     double chorusPhase{ 0.0 };
     double tremoloPhase{ 0.0 };
 
-    std::atomic<bool> enabled{ false };
-    std::atomic<float> feedback{ 0.0f }; // CORRECCIÓN: feedback como atómico por seguridad
 };

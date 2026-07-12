@@ -418,7 +418,27 @@ void TrackComponent::paint(juce::Graphics& g)
                         : isOvd ? LnfC::OvdAmber
                                 : tColor.brighter(0.05f);
         g.setColour(wC.withAlpha(isPlay ? 0.88f : 0.55f));
-        thumbnail->drawChannels(g, waveContent, 0.0, thumbnail->getTotalLength(), 1.0f);
+        if (!monoDisplay)
+        {
+            thumbnail->drawChannels(g, waveContent, 0.0, thumbnail->getTotalLength(), 1.0f);
+        }
+        else
+        {
+            const float centreY = waveContent.toFloat().getCentreY();
+            const float halfHeight = waveContent.toFloat().getHeight() * 0.44f;
+            const double totalLength = thumbnail->getTotalLength();
+            const int width = juce::jmax(1, waveContent.getWidth());
+            for (int x = 0; x < width; ++x)
+            {
+                const double t0 = totalLength * (double) x / (double) width;
+                const double t1 = totalLength * (double) (x + 1) / (double) width;
+                float minValue = 0.0f, maxValue = 0.0f;
+                thumbnail->getApproximateMinMax(t0, t1, 0, minValue, maxValue);
+                g.drawVerticalLine(waveContent.getX() + x,
+                                   centreY + minValue * halfHeight,
+                                   centreY + maxValue * halfHeight);
+            }
+        }
 
         if (playheadProg >= 0.0f && playheadProg <= 1.0f)
         {

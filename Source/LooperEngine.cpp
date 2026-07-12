@@ -20,7 +20,8 @@ void LooperEngine::prepare(double sr, int maxBlockSize,
     for (int i = 0; i < kMaxTracks; ++i) {
         tracks[i].buffer.setSize(2, maxLoopLengthSamples);
         tracks[i].buffer.clear();
-        tracks[i].currentGain = 1.0f;
+        tracks[i].currentGain.store(1.0f);
+        tracks[i].bufferRevision.fetch_add(1, std::memory_order_release);
         thumbnails[i] = std::make_unique<juce::AudioThumbnail>(512, fmt, thumbnailCache);
     }
 
@@ -30,7 +31,10 @@ void LooperEngine::prepare(double sr, int maxBlockSize,
 void LooperEngine::releaseResources()
 {
     for (int i = 0; i < kMaxTracks; ++i)
+    {
         tracks[i].buffer.setSize(0, 0);
+        tracks[i].bufferRevision.fetch_add(1, std::memory_order_release);
+    }
 }
 
 LooperEngine::SessionSnapshot LooperEngine::createSessionSnapshot() const
@@ -64,7 +68,7 @@ LooperEngine::SessionSnapshot LooperEngine::createSessionSnapshot() const
         track.pausedReadPos = tracks[i].pausedReadPos.load();
         track.frippDecay = tracks[i].frippDecay.load();
         track.frippEnabled = tracks[i].frippEnabled.load();
-        track.currentGain = tracks[i].currentGain;
+        track.currentGain = tracks[i].currentGain.load();
 
         int audioLength = juce::jmax(track.lengthSamples, track.redoLengthSamples);
         if (i < snapshot.totalTracks)
@@ -88,54 +92,284 @@ LooperEngine::SessionSnapshot LooperEngine::createSessionSnapshot() const
     return snapshot;
 }
 
-void LooperEngine::restoreSessionSnapshot(const SessionSnapshot& snapshot)
+LooperEngine::SnapshotCaptureResult LooperEngine::beginIncrementalSnapshot(
+    IncrementalSnapshot& capture) const
 {
-    sampleRate_ = snapshot.sampleRate > 0.0 ? snapshot.sampleRate : sampleRate_;
-    maxLoopLengthSamples = (int) (sampleRate_ * kMaxLoopSecs);
+    capture = {};
+    auto& snapshot = capture.snapshot;
+    snapshot.state = currentState.load();
 
-    currentState.store(snapshot.state);
-    totalTracks.store(juce::jlimit(0, kMaxTracks, snapshot.totalTracks));
-    baseLoopLengthSamples.store(juce::jlimit(0, maxLoopLengthSamples, snapshot.baseLoopLengthSamples));
-    loopReadPosition.store(juce::jlimit(0, juce::jmax(0, maxLoopLengthSamples - 1), snapshot.loopReadPosition));
-    recordWritePosition.store(juce::jlimit(0, maxLoopLengthSamples, snapshot.recordWritePosition));
-    recordStartPosition.store(juce::jlimit(0, maxLoopLengthSamples, snapshot.recordStartPosition));
-    editableLoopSourceSamples.store(juce::jlimit(0, maxLoopLengthSamples, snapshot.editableLoopSourceSamples));
-    globalMute.store(snapshot.globalMute);
-    globalPaused.store(snapshot.globalPaused);
-    silenceThresholdDb.store(snapshot.silenceThresholdDb);
-    bpmParam.store(snapshot.bpm);
-    beatsPerBar.store(snapshot.beatsPerBar);
-    barsPerLoop.store(snapshot.barsPerLoop);
-    quantizeEnabled.store(snapshot.quantizeEnabled);
-    redoCount = juce::jmax(0, snapshot.redoCount);
-    tapCount = 0;
-    tapTimes.fill(0.0);
+    // These modes modify loop memory from the callback.  Chunking them cannot
+    // produce a coherent point-in-time image without stopping that mutation.
+    if (snapshot.state == State::RecordingBase || snapshot.state == State::RecordingLayer)
+        return SnapshotCaptureResult::retryRequired;
+    snapshot.totalTracks = totalTracks.load();
+    snapshot.baseLoopLengthSamples = baseLoopLengthSamples.load();
+    snapshot.loopReadPosition = loopReadPosition.load();
+    snapshot.recordWritePosition = recordWritePosition.load();
+    snapshot.recordStartPosition = recordStartPosition.load();
+    snapshot.editableLoopSourceSamples = editableLoopSourceSamples.load();
+    snapshot.globalMute = globalMute.load();
+    snapshot.globalPaused = globalPaused.load();
+    snapshot.silenceThresholdDb = silenceThresholdDb.load();
+    snapshot.bpm = bpmParam.load();
+    snapshot.beatsPerBar = beatsPerBar.load();
+    snapshot.barsPerLoop = barsPerLoop.load();
+    snapshot.quantizeEnabled = quantizeEnabled.load();
+    snapshot.redoCount = redoCount;
+    snapshot.sampleRate = sampleRate_;
+
+    for (int i = 0; i < kMaxTracks; ++i)
+    {
+        auto& destination = snapshot.tracks[(size_t) i];
+        destination.lengthSamples = tracks[i].lengthSamples.load();
+        destination.redoLengthSamples = tracks[i].redoLengthSamples.load();
+        destination.volume = tracks[i].volume.load();
+        destination.isMuted = tracks[i].isMuted.load();
+        destination.isPaused = tracks[i].isPaused.load();
+        destination.pausedReadPos = tracks[i].pausedReadPos.load();
+        destination.frippDecay = tracks[i].frippDecay.load();
+        destination.frippEnabled = tracks[i].frippEnabled.load();
+        destination.currentGain = tracks[i].currentGain.load();
+        capture.bufferRevisions[(size_t) i] =
+            tracks[i].bufferRevision.load(std::memory_order_acquire);
+
+        int length = juce::jmax(destination.lengthSamples, destination.redoLengthSamples);
+        if (i < snapshot.totalTracks)
+            length = juce::jmax(length, juce::jmax(snapshot.baseLoopLengthSamples,
+                                                   snapshot.editableLoopSourceSamples));
+        capture.audioLengths[(size_t) i] = juce::jlimit(0, maxLoopLengthSamples, length);
+    }
+    return SnapshotCaptureResult::inProgress;
+}
+
+void LooperEngine::prepareIncrementalSnapshot(IncrementalSnapshot& capture)
+{
+    for (int i = 0; i < kMaxTracks; ++i)
+    {
+        const int length = capture.audioLengths[(size_t) i];
+        if (length > 0)
+            capture.snapshot.tracks[(size_t) i].audio.setSize(2, length,
+                                                               false, false, true);
+    }
+    capture.prepared = true;
+}
+
+LooperEngine::SnapshotCaptureResult LooperEngine::copyIncrementalSnapshotChunk(
+    IncrementalSnapshot& capture, int maxSamplesPerChannel) const
+{
+    if (!capture.prepared || maxSamplesPerChannel <= 0)
+        return SnapshotCaptureResult::retryRequired;
+
+    const auto& expected = capture.snapshot;
+    if (currentState.load() != expected.state
+        || totalTracks.load() != expected.totalTracks
+        || baseLoopLengthSamples.load() != expected.baseLoopLengthSamples
+        || editableLoopSourceSamples.load() != expected.editableLoopSourceSamples)
+        return SnapshotCaptureResult::retryRequired;
+
+    for (int i = 0; i < kMaxTracks; ++i)
+    {
+        const auto& expectedTrack = expected.tracks[(size_t) i];
+        if (tracks[i].bufferRevision.load(std::memory_order_acquire)
+                != capture.bufferRevisions[(size_t) i]
+            || tracks[i].lengthSamples.load() != expectedTrack.lengthSamples
+            || tracks[i].redoLengthSamples.load() != expectedTrack.redoLengthSamples)
+            return SnapshotCaptureResult::retryRequired;
+    }
+
+    while (capture.nextTrack < kMaxTracks
+           && capture.audioLengths[(size_t) capture.nextTrack] == 0)
+        ++capture.nextTrack;
+    if (capture.nextTrack >= kMaxTracks)
+        return SnapshotCaptureResult::complete;
+
+    const int remaining = capture.audioLengths[(size_t) capture.nextTrack] - capture.nextSample;
+    const int count = juce::jmin(remaining, maxSamplesPerChannel);
+    auto& destination = capture.snapshot.tracks[(size_t) capture.nextTrack].audio;
+    for (int channel = 0; channel < 2; ++channel)
+        destination.copyFrom(channel, capture.nextSample, tracks[capture.nextTrack].buffer,
+                             channel, capture.nextSample, count);
+
+    if (tracks[capture.nextTrack].bufferRevision.load(std::memory_order_acquire)
+            != capture.bufferRevisions[(size_t) capture.nextTrack])
+        return SnapshotCaptureResult::retryRequired;
+
+    capture.nextSample += count;
+    if (capture.nextSample == capture.audioLengths[(size_t) capture.nextTrack])
+    {
+        ++capture.nextTrack;
+        capture.nextSample = 0;
+    }
+    while (capture.nextTrack < kMaxTracks
+           && capture.audioLengths[(size_t) capture.nextTrack] == 0)
+        ++capture.nextTrack;
+    return capture.nextTrack >= kMaxTracks ? SnapshotCaptureResult::complete
+                                            : SnapshotCaptureResult::inProgress;
+}
+
+LooperEngine::PreparedSessionRestore LooperEngine::prepareSessionRestore(
+    const SessionSnapshot& snapshot) const
+{
+    // sampleRate_ belongs to the active audio device.  Session audio is stored
+    // at the rate that was active when it was saved, so convert it instead of
+    // making the engine run with a rate different from the device.
+    const double sourceSampleRate = snapshot.sampleRate > 0.0
+                                      ? snapshot.sampleRate
+                                      : sampleRate_;
+    const double sampleCountRatio = sampleRate_ / sourceSampleRate;
+
+    PreparedSessionRestore prepared;
+    prepared.targetSampleRate = sampleRate_;
+    prepared.maxLoopLengthSamples = (int) (sampleRate_ * kMaxLoopSecs);
+
+    const auto convertSamplePosition = [sampleCountRatio] (int sourcePosition,
+                                                           int upperLimit)
+    {
+        if (sourcePosition <= 0)
+            return 0;
+
+        const auto converted = juce::roundToIntAccurate((double) sourcePosition
+                                                        * sampleCountRatio);
+        return juce::jlimit(0, upperLimit, converted);
+    };
+
+    const int lastValidSample = juce::jmax(0, prepared.maxLoopLengthSamples - 1);
+
+    switch (snapshot.state)
+    {
+        case State::Stopped: case State::ArmedBase: case State::RecordingBase:
+        case State::RecordingLayer: case State::Playing: prepared.state = snapshot.state; break;
+        default: prepared.state = State::Stopped; break;
+    }
+    prepared.totalTracks = juce::jlimit(0, kMaxTracks, snapshot.totalTracks);
+    prepared.baseLoopLengthSamples = convertSamplePosition(snapshot.baseLoopLengthSamples,
+                                                            prepared.maxLoopLengthSamples);
+    prepared.loopReadPosition = convertSamplePosition(snapshot.loopReadPosition, lastValidSample);
+    prepared.recordWritePosition = convertSamplePosition(snapshot.recordWritePosition,
+                                                          prepared.maxLoopLengthSamples);
+    prepared.recordStartPosition = convertSamplePosition(snapshot.recordStartPosition,
+                                                          prepared.maxLoopLengthSamples);
+    prepared.editableLoopSourceSamples = convertSamplePosition(snapshot.editableLoopSourceSamples,
+                                                                prepared.maxLoopLengthSamples);
+    prepared.globalMute = snapshot.globalMute;
+    prepared.globalPaused = snapshot.globalPaused;
+    prepared.silenceThresholdDb = snapshot.silenceThresholdDb;
+    prepared.bpm = snapshot.bpm;
+    prepared.beatsPerBar = snapshot.beatsPerBar;
+    prepared.barsPerLoop = snapshot.barsPerLoop;
+    prepared.quantizeEnabled = snapshot.quantizeEnabled;
+    prepared.redoCount = juce::jmax(0, snapshot.redoCount);
 
     for (int i = 0; i < kMaxTracks; ++i)
     {
         const auto& track = snapshot.tracks[(size_t) i];
-        tracks[i].buffer.clear();
+        auto& destination = prepared.tracks[(size_t) i];
+        destination.audio.setSize(2, prepared.maxLoopLengthSamples);
+        destination.audio.clear();
 
-        const int audioLength = juce::jmin(maxLoopLengthSamples, track.audio.getNumSamples());
-        if (audioLength > 0)
+        const int sourceAudioLength = track.audio.getNumSamples();
+        const int outputAudioLength = convertSamplePosition(sourceAudioLength,
+                                                            prepared.maxLoopLengthSamples);
+        if (sourceAudioLength > 0 && outputAudioLength > 0)
         {
             const int audioChannels = juce::jmin(2, track.audio.getNumChannels());
             for (int ch = 0; ch < audioChannels; ++ch)
-                tracks[i].buffer.copyFrom(ch, 0, track.audio, ch, 0, audioLength);
+            {
+                if (sourceSampleRate == sampleRate_)
+                {
+                    destination.audio.copyFrom(ch, 0, track.audio, ch, 0, outputAudioLength);
+                }
+                else
+                {
+                    // LagrangeInterpolator may inspect a few samples beyond the
+                    // consumed range.  The cleared tail provides safe padding.
+                    constexpr int interpolationPadding = 8;
+                    juce::AudioBuffer<float> paddedSource(1,
+                                                          sourceAudioLength
+                                                            + interpolationPadding);
+                    paddedSource.clear();
+                    paddedSource.copyFrom(0, 0, track.audio, ch, 0,
+                                          sourceAudioLength);
+
+                    juce::LagrangeInterpolator interpolator;
+                    interpolator.process(sourceSampleRate / sampleRate_,
+                                         paddedSource.getReadPointer(0),
+                                         destination.audio.getWritePointer(ch),
+                                         outputAudioLength);
+                }
+            }
             if (audioChannels == 1)
-                tracks[i].buffer.copyFrom(1, 0, track.audio, 0, 0, audioLength);
+                destination.audio.copyFrom(1, 0, destination.audio, 0, 0, outputAudioLength);
         }
 
-        tracks[i].lengthSamples.store(juce::jlimit(0, maxLoopLengthSamples, track.lengthSamples));
-        tracks[i].redoLengthSamples.store(juce::jlimit(0, maxLoopLengthSamples, track.redoLengthSamples));
-        tracks[i].volume.store(juce::jlimit(0.0f, 1.0f, track.volume));
-        tracks[i].isMuted.store(track.isMuted);
-        tracks[i].isPaused.store(track.isPaused);
-        tracks[i].pausedReadPos.store(juce::jlimit(0, juce::jmax(0, maxLoopLengthSamples - 1), track.pausedReadPos));
-        tracks[i].frippDecay.store(juce::jlimit(0.0f, 1.0f, track.frippDecay));
-        tracks[i].frippEnabled.store(track.frippEnabled);
-        tracks[i].currentGain = track.currentGain;
+        destination.lengthSamples = convertSamplePosition(track.lengthSamples, prepared.maxLoopLengthSamples);
+        destination.redoLengthSamples = convertSamplePosition(track.redoLengthSamples, prepared.maxLoopLengthSamples);
+        destination.volume = juce::jlimit(0.0f, 1.0f, track.volume);
+        destination.isMuted = track.isMuted;
+        destination.isPaused = track.isPaused;
+        destination.pausedReadPos = convertSamplePosition(track.pausedReadPos, lastValidSample);
+        destination.frippDecay = juce::jlimit(0.0f, 1.0f, track.frippDecay);
+        destination.frippEnabled = track.frippEnabled;
+        destination.currentGain = track.currentGain;
     }
+
+    return prepared;
+}
+
+bool LooperEngine::commitPreparedSessionRestore(PreparedSessionRestore&& prepared)
+{
+    if (!juce::approximatelyEqual(prepared.targetSampleRate, sampleRate_)
+        || prepared.maxLoopLengthSamples != maxLoopLengthSamples)
+        return false;
+
+    maxLoopLengthSamples = prepared.maxLoopLengthSamples;
+    for (int i = 0; i < kMaxTracks; ++i)
+    {
+        auto& source = prepared.tracks[(size_t) i];
+        // AudioBuffer has no constant-time swap in this JUCE version.  These
+        // three noexcept moves exchange ownership without releasing either
+        // allocation here: source ends up owning the previous engine buffer.
+        auto newAudio = std::move(source.audio);
+        source.audio = std::move(tracks[i].buffer);
+        tracks[i].buffer = std::move(newAudio);
+        tracks[i].lengthSamples.store(source.lengthSamples);
+        tracks[i].redoLengthSamples.store(source.redoLengthSamples);
+        tracks[i].volume.store(source.volume);
+        tracks[i].isMuted.store(source.isMuted);
+        tracks[i].isPaused.store(source.isPaused);
+        tracks[i].pausedReadPos.store(source.pausedReadPos);
+        tracks[i].frippDecay.store(source.frippDecay);
+        tracks[i].frippEnabled.store(source.frippEnabled);
+        tracks[i].currentGain.store(source.currentGain);
+        tracks[i].bufferRevision.fetch_add(1, std::memory_order_release);
+    }
+
+    currentState.store(prepared.state);
+    totalTracks.store(prepared.totalTracks);
+    baseLoopLengthSamples.store(prepared.baseLoopLengthSamples);
+    loopReadPosition.store(prepared.loopReadPosition);
+    recordWritePosition.store(prepared.recordWritePosition);
+    recordStartPosition.store(prepared.recordStartPosition);
+    editableLoopSourceSamples.store(prepared.editableLoopSourceSamples);
+    fixedLoopCompletionRequested.store(false);
+    globalMute.store(prepared.globalMute);
+    globalPaused.store(prepared.globalPaused);
+    silenceThresholdDb.store(prepared.silenceThresholdDb);
+    bpmParam.store(prepared.bpm);
+    beatsPerBar.store(prepared.beatsPerBar);
+    barsPerLoop.store(prepared.barsPerLoop);
+    quantizeEnabled.store(prepared.quantizeEnabled);
+    redoCount = prepared.redoCount;
+    tapCount = 0;
+    tapTimes.fill(0.0);
+    return true;
+}
+
+void LooperEngine::restoreSessionSnapshot(const SessionSnapshot& snapshot)
+{
+    auto prepared = prepareSessionRestore(snapshot);
+    commitPreparedSessionRestore(std::move(prepared));
 }
 
 // ==============================================================================
@@ -143,7 +377,7 @@ void LooperEngine::restoreSessionSnapshot(const SessionSnapshot& snapshot)
 // ==============================================================================
 void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
     int startSample, int numSamples,
-    float masterVolume)
+    float masterVolume, bool forceDualMonoInput)
 {
     juce::ScopedNoDenormals noDenormals;
 
@@ -157,6 +391,7 @@ void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
     bool      gPaused   = globalPaused.load();
     bool      gMuted    = globalMute.load();
     const float triggerThresholdLinear = std::pow(10.0f, silenceThresholdDb.load() / 20.0f);
+    int writtenTrack = -1;
 
     // Hoist de parametros por track — una sola lectura atomica por bloque.
     struct TrackCache {
@@ -174,7 +409,7 @@ void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
     {
         tc[t].len       = tracks[t].lengthSamples.load();
         tc[t].vol       = tracks[t].volume.load();
-        tc[t].gain      = tracks[t].currentGain;
+        tc[t].gain      = tracks[t].currentGain.load();
         tc[t].muted     = tracks[t].isMuted.load();
         tc[t].paused    = tracks[t].isPaused.load();
         tc[t].pausedPos = tracks[t].pausedReadPos.load();
@@ -192,8 +427,8 @@ void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
     for (int ch = 0; ch < numCh; ++ch)
         outPtr[ch] = buffer.getWritePointer(ch) + startSample;
 
-    const bool canPlay = !gMuted &&
-                         (state == State::Playing || state == State::RecordingLayer);
+    bool canPlay = !gMuted &&
+                   (state == State::Playing || state == State::RecordingLayer);
 
     // Loop principal — libre de allocaciones, atomic loads y FX internos.
     // La señal de entrada ya viene procesada por effectsChain (MainComponent).
@@ -210,6 +445,7 @@ void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
             {
                 state = State::RecordingBase;
                 currentState.store(State::RecordingBase);
+                fixedLoopCompletionRequested.store(false);
                 localWrite = 0;
                 recordWritePosition.store(0);
                 recordStartPosition.store(0);
@@ -218,19 +454,45 @@ void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
 
         // 1. Grabacion ANTES de agregar el playback — para que los overdubs
         //    capturen solo la entrada nueva, no la mezcla de todos los tracks.
-        for (int ch = 0; ch < numCh; ++ch)
+        if (forceDualMonoInput && numCh > 0)
         {
-            const float inSamp = outPtr[ch][s];
-
+            const float inSamp = outPtr[0][s];
             if (state == State::RecordingBase && localWrite < maxLoopLengthSamples)
             {
-                tracks[0].buffer.setSample(ch, localWrite, inSamp);
+                tracks[0].buffer.setSample(0, localWrite, inSamp);
+                tracks[0].buffer.setSample(1, localWrite, inSamp);
+                writtenTrack = 0;
             }
             else if (state == State::RecordingLayer && baseSmp > 0 && localWrite < maxLoopLengthSamples)
             {
                 const int active = totalTr - 1;
                 if (active >= 0 && active < kMaxTracks)
-                    tracks[active].buffer.setSample(ch, localWrite, inSamp);
+                {
+                    tracks[active].buffer.setSample(0, localWrite, inSamp);
+                    tracks[active].buffer.setSample(1, localWrite, inSamp);
+                    writtenTrack = active;
+                }
+            }
+        }
+        else
+        {
+            for (int ch = 0; ch < numCh; ++ch)
+            {
+                const float inSamp = outPtr[ch][s];
+                if (state == State::RecordingBase && localWrite < maxLoopLengthSamples)
+                {
+                    tracks[0].buffer.setSample(ch, localWrite, inSamp);
+                    writtenTrack = 0;
+                }
+                else if (state == State::RecordingLayer && baseSmp > 0 && localWrite < maxLoopLengthSamples)
+                {
+                    const int active = totalTr - 1;
+                    if (active >= 0 && active < kMaxTracks)
+                    {
+                        tracks[active].buffer.setSample(ch, localWrite, inSamp);
+                        writtenTrack = active;
+                    }
+                }
             }
         }
 
@@ -269,7 +531,7 @@ void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
                     if (tc[t].frippOn)
                     {
                         tc[t].gain *= tc[t].frippDecay;
-                        tracks[t].currentGain = tc[t].gain;
+                        tracks[t].currentGain.store(tc[t].gain);
                     }
                 }
             }
@@ -280,8 +542,20 @@ void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
         {
             if (localWrite < maxLoopLengthSamples) ++localWrite;
             if (fixBars > 0 && baseSmp > 0 && localWrite >= baseSmp)
-                if (onFixedLoopComplete)
+            {
+                localWrite = baseSmp;
+                editableLoopSourceSamples.store(baseSmp);
+                tracks[0].lengthSamples.store(baseSmp);
+                localRead = 0;
+                state = State::Playing;
+                currentState.store(State::Playing);
+                canPlay = !gMuted;
+
+                bool expected = false;
+                if (onFixedLoopComplete
+                    && fixedLoopCompletionRequested.compare_exchange_strong(expected, true))
                     juce::MessageManager::callAsync(onFixedLoopComplete);
+            }
         }
         else if (state == State::RecordingLayer)
         {
@@ -298,6 +572,8 @@ void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
         loopReadPosition.store(localRead);
 
     recordWritePosition.store(localWrite);
+    if (writtenTrack >= 0)
+        tracks[writtenTrack].bufferRevision.fetch_add(1, std::memory_order_release);
 
     // FX post-mix: Se aplica el FX del track 0 sobre el bus de salida completo.
     // NOTA ARQUITECTURAL: En el diseño actual esto actua como un "Insert FX master".
@@ -322,7 +598,9 @@ void LooperEngine::recConfirm()
         recordWritePosition.store(0);
         recordStartPosition.store(0);
         editableLoopSourceSamples.store(0);
-        tracks[0].currentGain = 1.0f;
+        tracks[0].currentGain.store(1.0f);
+        tracks[0].bufferRevision.fetch_add(1, std::memory_order_release);
+        fixedLoopCompletionRequested.store(false);
         currentState.store(State::ArmedBase);
     }
     else if (s == State::ArmedBase)
@@ -332,7 +610,9 @@ void LooperEngine::recConfirm()
         recordWritePosition.store(0);
         recordStartPosition.store(0);
         editableLoopSourceSamples.store(0);
-        tracks[0].currentGain = 1.0f;
+        tracks[0].currentGain.store(1.0f);
+        tracks[0].bufferRevision.fetch_add(1, std::memory_order_release);
+        fixedLoopCompletionRequested.store(false);
         currentState.store(State::RecordingBase);
     }
     else if (s == State::RecordingBase)
@@ -354,6 +634,7 @@ void LooperEngine::recConfirm()
         tracks[0].lengthSamples.store(recorded);
 
         loopReadPosition.store(0);
+        fixedLoopCompletionRequested.store(false);
         currentState.store(State::Playing);
     }
     else if (s == State::Playing)
@@ -370,7 +651,8 @@ void LooperEngine::recConfirm()
             recordWritePosition.store(writeStart);
             recordStartPosition.store(writeStart);
             totalTracks.store(n + 1);
-            tracks[n].currentGain = 1.0f;
+            tracks[n].currentGain.store(1.0f);
+            tracks[n].bufferRevision.fetch_add(1, std::memory_order_release);
             currentState.store(State::RecordingLayer);
         }
     }
@@ -387,8 +669,10 @@ void LooperEngine::cancelRec()
 {
     State s = currentState.load();
     if (s == State::ArmedBase || s == State::RecordingBase) {
+        fixedLoopCompletionRequested.store(false);
         currentState.store(State::Stopped);
         tracks[0].buffer.clear();
+        tracks[0].bufferRevision.fetch_add(1, std::memory_order_release);
         totalTracks.store(0);
         baseLoopLengthSamples.store(0);
         editableLoopSourceSamples.store(0);
@@ -399,7 +683,10 @@ void LooperEngine::cancelRec()
         currentState.store(State::Playing);
         int n = totalTracks.load() - 1;
         totalTracks.store(n);
-        if (n >= 0 && n < kMaxTracks) tracks[n].buffer.clear();
+        if (n >= 0 && n < kMaxTracks) {
+            tracks[n].buffer.clear();
+            tracks[n].bufferRevision.fetch_add(1, std::memory_order_release);
+        }
     }
 }
 
@@ -417,7 +704,7 @@ void LooperEngine::undoLastTrack()
         // totalTracks decrementó y el audio thread ya no lo lee.
         tracks[n].redoLengthSamples.store(tracks[n].lengthSamples.load());
         tracks[n].lengthSamples.store(0);
-        tracks[n].currentGain = 1.0f;
+        tracks[n].currentGain.store(1.0f);
         redoCount++;
     }
 
@@ -441,7 +728,7 @@ void LooperEngine::redoLastTrack()
 
     // Restaurar la longitud — el buffer ya tiene los datos, nunca se borró.
     tracks[n].lengthSamples.store(redoLen);
-    tracks[n].currentGain = 1.0f;
+    tracks[n].currentGain.store(1.0f);
     totalTracks.store(n + 1);
     redoCount--;
 
@@ -483,6 +770,7 @@ void LooperEngine::goToStart()
 
 void LooperEngine::resetAll()
 {
+    fixedLoopCompletionRequested.store(false);
     currentState.store(State::Stopped);
     totalTracks.store(0);
     baseLoopLengthSamples.store(0);
@@ -500,7 +788,8 @@ void LooperEngine::resetAll()
         tracks[i].isMuted.store(false);
         tracks[i].isPaused.store(false);
         tracks[i].pausedReadPos.store(0);
-        tracks[i].currentGain = 1.0f;
+        tracks[i].currentGain.store(1.0f);
+        tracks[i].bufferRevision.fetch_add(1, std::memory_order_release);
         tracks[i].frippEnabled.store(false);
         tracks[i].frippDecay.store(1.0f);
     }
@@ -581,7 +870,7 @@ bool LooperEngine::isAnyTrackPaused() const
 // FRIPP INFINITE DECAY
 // ==============================================================================
 void  LooperEngine::setFrippDecay(int t, float f) { if (t >= 0 && t < kMaxTracks) tracks[t].frippDecay.store(juce::jlimit(0.0f, 1.0f, f)); }
-void  LooperEngine::setFrippEnabled(int t, bool e) { if (t >= 0 && t < kMaxTracks) { tracks[t].frippEnabled.store(e); if (!e) tracks[t].currentGain = 1.0f; } }
+void  LooperEngine::setFrippEnabled(int t, bool e) { if (t >= 0 && t < kMaxTracks) { tracks[t].frippEnabled.store(e); if (!e) tracks[t].currentGain.store(1.0f); } }
 float LooperEngine::getFrippDecay(int t) const { return (t >= 0 && t < kMaxTracks) ? tracks[t].frippDecay.load() : 1.0f; }
 bool  LooperEngine::isFrippEnabled(int t) const { return (t >= 0 && t < kMaxTracks) && tracks[t].frippEnabled.load(); }
 
@@ -662,6 +951,8 @@ int LooperEngine::trimSilence(int track, int recordedSamples)
             tracks[track].buffer.clear(ch, trimmedLength, remaining);
     }
 
+    tracks[track].bufferRevision.fetch_add(1, std::memory_order_release);
+
     return trimmedLength;
 }
 
@@ -689,6 +980,7 @@ void LooperEngine::rotateTrackRegion(int track, int regionLengthSamples, int del
         std::memcpy(data, temp.get() + shift, (size_t) tailLen * sizeof(float));
         std::memcpy(data + tailLen, temp.get(), (size_t) shift * sizeof(float));
     }
+    tracks[track].bufferRevision.fetch_add(1, std::memory_order_release);
 }
 
 void LooperEngine::applyLoopSeamCrossfade(int activeLengthSamples)
@@ -724,6 +1016,7 @@ void LooperEngine::applyLoopSeamCrossfade(int activeLengthSamples)
                 data[i] = b * (1.0f - mix) + a * mix;
             }
         }
+        tracks[t].bufferRevision.fetch_add(1, std::memory_order_release);
     }
 }
 
@@ -864,6 +1157,7 @@ void LooperEngine::importAudioToBase(juce::AudioFormatManager& fmt, const juce::
 
     tracks[0].buffer.clear();
     reader->read(&tracks[0].buffer, 0, len, 0, true, true);
+    tracks[0].bufferRevision.fetch_add(1, std::memory_order_release);
     baseLoopLengthSamples.store(len);
     editableLoopSourceSamples.store(len);
     tracks[0].lengthSamples.store(len);
@@ -872,10 +1166,17 @@ void LooperEngine::importAudioToBase(juce::AudioFormatManager& fmt, const juce::
     loopReadPosition.store(0);
 }
 
-void LooperEngine::exportFullMix(juce::AudioFormatManager& fmt, const juce::File& dest)
+void LooperEngine::exportFullMix(juce::AudioFormatManager& fmt, const juce::File& dest,
+                                 bool outputMono)
 {
     juce::ignoreUnused(fmt);
-    int len = baseLoopLengthSamples.load();
+    exportFullMix(createSessionSnapshot(), dest, outputMono);
+}
+
+void LooperEngine::exportFullMix(const SessionSnapshot& snapshot, const juce::File& dest,
+                                 bool outputMono)
+{
+    const int len = snapshot.baseLoopLengthSamples;
     if (len <= 0) return;
 
     juce::WavAudioFormat wav;
@@ -885,36 +1186,58 @@ void LooperEngine::exportFullMix(juce::AudioFormatManager& fmt, const juce::File
     JUCE_BEGIN_IGNORE_DEPRECATION_WARNINGS
     auto* raw = stream.get();
     std::unique_ptr<juce::AudioFormatWriter> writer(
-        wav.createWriterFor(raw, sampleRate_, 2, 24, {}, 0));
+        wav.createWriterFor(raw, snapshot.sampleRate > 0.0 ? snapshot.sampleRate : 44100.0,
+                            outputMono ? 1 : 2, 24, {}, 0));
     JUCE_END_IGNORE_DEPRECATION_WARNINGS
 
     if (!writer) return;
     stream.release();
 
     juce::AudioBuffer<float> mix(2, len); mix.clear();
-    int n = totalTracks.load();
+    const int n = juce::jlimit(0, kMaxTracks, snapshot.totalTracks);
     for (int t = 0; t < n && t < kMaxTracks; ++t)
     {
         // La mezcla exportada debe reflejar el mezclador que escucha el usuario.
-        if (tracks[t].isMuted.load())
+        const auto& track = snapshot.tracks[(size_t) t];
+        if (track.isMuted)
             continue;
 
-        const float gain = tracks[t].volume.load();
-        for (int ch = 0; ch < 2; ++ch)
-            mix.addFrom(ch, 0, tracks[t].buffer.getReadPointer(ch), len, gain);
+        const float gain = track.volume;
+        const int samplesToMix = juce::jmin(len, track.audio.getNumSamples());
+        const int channelsToMix = juce::jmin(2, track.audio.getNumChannels());
+        for (int ch = 0; ch < channelsToMix; ++ch)
+            mix.addFrom(ch, 0, track.audio, ch, 0, samplesToMix, gain);
     }
 
-    writer->writeFromAudioSampleBuffer(mix, 0, len);
+    if (outputMono)
+    {
+        juce::AudioBuffer<float> mono(1, len);
+        mono.clear();
+        mono.addFrom(0, 0, mix, 0, 0, len, 0.5f);
+        mono.addFrom(0, 0, mix, 1, 0, len, 0.5f);
+        writer->writeFromAudioSampleBuffer(mono, 0, len);
+    }
+    else
+    {
+        writer->writeFromAudioSampleBuffer(mix, 0, len);
+    }
 }
 
-void LooperEngine::exportSeparateTracks(juce::AudioFormatManager& fmt, const juce::File& folder)
+void LooperEngine::exportSeparateTracks(juce::AudioFormatManager& fmt, const juce::File& folder,
+                                        bool outputMono)
 {
     juce::ignoreUnused(fmt);
-    int len = baseLoopLengthSamples.load();
+    exportSeparateTracks(createSessionSnapshot(), folder, outputMono);
+}
+
+void LooperEngine::exportSeparateTracks(const SessionSnapshot& snapshot, const juce::File& folder,
+                                        bool outputMono)
+{
+    const int len = snapshot.baseLoopLengthSamples;
     if (len <= 0) return;
 
     juce::WavAudioFormat wav;
-    int n = totalTracks.load();
+    const int n = juce::jlimit(0, kMaxTracks, snapshot.totalTracks);
     for (int t = 0; t < n && t < kMaxTracks; ++t)
     {
         auto file = folder.getChildFile("Pista_" + juce::String(t + 1) + ".wav");
@@ -924,12 +1247,33 @@ void LooperEngine::exportSeparateTracks(juce::AudioFormatManager& fmt, const juc
         JUCE_BEGIN_IGNORE_DEPRECATION_WARNINGS
         auto* raw = stream.get();
         std::unique_ptr<juce::AudioFormatWriter> writer(
-            wav.createWriterFor(raw, sampleRate_, 2, 24, {}, 0));
+            wav.createWriterFor(raw, snapshot.sampleRate > 0.0 ? snapshot.sampleRate : 44100.0,
+                                outputMono ? 1 : 2, 24, {}, 0));
         JUCE_END_IGNORE_DEPRECATION_WARNINGS
 
         if (!writer) continue;
         stream.release();
-        writer->writeFromAudioSampleBuffer(tracks[t].buffer, 0, len);
+
+        const auto& track = snapshot.tracks[(size_t) t];
+        juce::AudioBuffer<float> exportBuffer(2, len);
+        exportBuffer.clear();
+        const int samplesToCopy = juce::jmin(len, track.audio.getNumSamples());
+        const int channelsToCopy = juce::jmin(2, track.audio.getNumChannels());
+        for (int ch = 0; ch < channelsToCopy; ++ch)
+            exportBuffer.copyFrom(ch, 0, track.audio, ch, 0, samplesToCopy);
+
+        if (outputMono)
+        {
+            juce::AudioBuffer<float> mono(1, len);
+            mono.clear();
+            mono.addFrom(0, 0, exportBuffer, 0, 0, len, 0.5f);
+            mono.addFrom(0, 0, exportBuffer, 1, 0, len, 0.5f);
+            writer->writeFromAudioSampleBuffer(mono, 0, len);
+        }
+        else
+        {
+            writer->writeFromAudioSampleBuffer(exportBuffer, 0, len);
+        }
     }
 }
 

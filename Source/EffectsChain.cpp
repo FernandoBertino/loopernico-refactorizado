@@ -81,17 +81,81 @@ namespace
 }
 
 EffectsChain::EffectsChain()
+    : juce::Thread("Rhythm sample loader")
 {
     for (int i = 0; i < kPedalCount; ++i)
         pedalOrder[(size_t) i].store(i);
 
     juce::addDefaultFormatsToManager(pluginFormatManager);
     rhythmSampleFormatManager.registerBasicFormats();
+    rhythmSampleBank = std::make_shared<RhythmSampleBank>();
+    startThread(juce::Thread::Priority::low);
+}
+
+EffectsChain::~EffectsChain()
+{
+    signalThreadShouldExit();
+    notify();
+    stopThread(5000);
+}
+
+EffectsChain::PreparedExternalPlugin::~PreparedExternalPlugin()
+{
+    release();
+}
+
+EffectsChain::PreparedExternalPlugin::PreparedExternalPlugin(PreparedExternalPlugin&& other) noexcept
+{
+    *this = std::move(other);
+}
+
+EffectsChain::PreparedExternalPlugin& EffectsChain::PreparedExternalPlugin::operator=(PreparedExternalPlugin&& other) noexcept
+{
+    if (this != &other)
+    {
+        release();
+        instance = std::move(other.instance);
+        scratchBuffer = std::move(other.scratchBuffer);
+        midiBuffer = std::move(other.midiBuffer);
+        inputChannels = other.inputChannels;
+        outputChannels = other.outputChannels;
+        name = std::move(other.name);
+        path = std::move(other.path);
+        enabled = other.enabled;
+        other.inputChannels = 0;
+        other.outputChannels = 0;
+    }
+    return *this;
+}
+
+void EffectsChain::PreparedExternalPlugin::release() noexcept
+{
+    if (instance != nullptr)
+        instance->releaseResources();
+    instance.reset();
 }
 
 bool EffectsChain::loadExternalVst3(const juce::File& pluginFile, juce::String& errorMessage)
 {
-    unloadExternalPlugin();
+    PreparedExternalPlugin candidate;
+    if (!prepareExternalVst3(pluginFile, candidate, errorMessage))
+    {
+        // Compatibilidad: la API historica descargaba el plugin actual aun si
+        // el nuevo archivo no podia abrirse.
+        unloadExternalPlugin();
+        return false;
+    }
+
+    auto retired = commitExternalPlugin(std::move(candidate));
+    return true;
+}
+
+bool EffectsChain::prepareExternalVst3(const juce::File& pluginFile,
+                                       PreparedExternalPlugin& candidate,
+                                       juce::String& errorMessage,
+                                       const juce::MemoryBlock* stateToRestore)
+{
+    PreparedExternalPlugin prepared;
 
     if (!pluginFile.exists())
     {
@@ -125,36 +189,71 @@ bool EffectsChain::loadExternalVst3(const juce::File& pluginFile, juce::String& 
         return false;
     }
 
-    auto plugin = pluginFormatManager.createPluginInstance(*descriptions.getFirst(),
-                                                           sampleRate_,
-                                                           maxBlockSize_,
-                                                           errorMessage);
+    prepared.instance = pluginFormatManager.createPluginInstance(*descriptions.getFirst(),
+                                                                 sampleRate_,
+                                                                 maxBlockSize_,
+                                                                 errorMessage);
 
-    if (plugin == nullptr)
+    if (prepared.instance == nullptr)
         return false;
 
-    plugin->enableAllBuses();
-    plugin->setRateAndBufferSizeDetails(sampleRate_, maxBlockSize_);
-    plugin->prepareToPlay(sampleRate_, maxBlockSize_);
-    plugin->reset();
+    prepared.instance->enableAllBuses();
+    prepared.instance->setRateAndBufferSizeDetails(sampleRate_, maxBlockSize_);
+    prepared.instance->prepareToPlay(sampleRate_, maxBlockSize_);
+    prepared.instance->reset();
 
-    externalPluginName = plugin->getName();
-    externalPluginPath = pluginFile.getFullPathName();
-    externalPluginInstance = std::move(plugin);
-    externalPluginEnabled.store(true);
+    if (stateToRestore != nullptr && stateToRestore->getSize() > 0)
+        prepared.instance->setStateInformation(stateToRestore->getData(), (int) stateToRestore->getSize());
+
+    prepared.inputChannels = prepared.instance->getTotalNumInputChannels();
+    prepared.outputChannels = prepared.instance->getTotalNumOutputChannels();
+    const int requiredChannels = juce::jmax(1, juce::jmax(prepared.inputChannels,
+                                                          prepared.outputChannels));
+    prepared.scratchBuffer.setSize(requiredChannels, maxBlockSize_, false, true, false);
+    prepared.scratchBuffer.clear();
+    prepared.midiBuffer.ensureSize(64 * 1024);
+    prepared.midiBuffer.clear();
+    prepared.name = prepared.instance->getName();
+    prepared.path = pluginFile.getFullPathName();
+    prepared.enabled = true;
+
+    candidate = std::move(prepared);
+    errorMessage.clear();
     return true;
+}
+
+EffectsChain::PreparedExternalPlugin EffectsChain::commitExternalPlugin(PreparedExternalPlugin&& candidate) noexcept
+{
+    PreparedExternalPlugin retired;
+    std::swap(retired.instance, externalPluginInstance);
+    std::swap(retired.scratchBuffer, externalPluginScratchBuffer);
+    std::swap(retired.midiBuffer, externalPluginMidiBuffer);
+    std::swap(retired.inputChannels, externalPluginInputChannels);
+    std::swap(retired.outputChannels, externalPluginOutputChannels);
+    std::swap(retired.name, externalPluginName);
+    std::swap(retired.path, externalPluginPath);
+    retired.enabled = externalPluginEnabled.exchange(candidate.enabled);
+
+    std::swap(candidate.instance, externalPluginInstance);
+    std::swap(candidate.scratchBuffer, externalPluginScratchBuffer);
+    std::swap(candidate.midiBuffer, externalPluginMidiBuffer);
+    std::swap(candidate.inputChannels, externalPluginInputChannels);
+    std::swap(candidate.outputChannels, externalPluginOutputChannels);
+    std::swap(candidate.name, externalPluginName);
+    std::swap(candidate.path, externalPluginPath);
+    return retired;
+}
+
+EffectsChain::PreparedExternalPlugin EffectsChain::detachExternalPlugin() noexcept
+{
+    PreparedExternalPlugin empty;
+    empty.enabled = false;
+    return commitExternalPlugin(std::move(empty));
 }
 
 void EffectsChain::unloadExternalPlugin()
 {
-    if (externalPluginInstance != nullptr)
-        externalPluginInstance->releaseResources();
-
-    externalPluginInstance.reset();
-    externalPluginScratchBuffer.setSize(0, 0);
-    externalPluginMidiBuffer.clear();
-    externalPluginName.clear();
-    externalPluginPath.clear();
+    auto retired = detachExternalPlugin();
 }
 
 bool EffectsChain::copyExternalPluginState(juce::MemoryBlock& state) const
@@ -209,7 +308,7 @@ EffectsChain::RhythmSampleSlot EffectsChain::sampleSlotForInstrument(DrumInstrum
 
 void EffectsChain::triggerRhythmSample(RhythmSampleSlot slot, float velocity)
 {
-    auto& pool = rhythmSamplePools[(size_t) slot];
+    auto& pool = rhythmSampleBank->pools[(size_t) slot];
     if (pool.entries.empty())
         return;
 
@@ -226,7 +325,7 @@ void EffectsChain::triggerDrumVoice(DrumInstrument instrument, float velocity)
 {
     const auto slot = sampleSlotForInstrument(instrument);
     triggerRhythmSample(slot, velocity);
-    if (!rhythmSamplePools[(size_t) slot].entries.empty())
+    if (!rhythmSampleBank->pools[(size_t) slot].entries.empty())
         return;
 
     DrumVoice* voice = nullptr;
@@ -304,11 +403,11 @@ void EffectsChain::advanceRhythmSampleVoices()
     }
 }
 
-float EffectsChain::renderDrumSample(DrumInstrument instrument, int channel)
+std::array<float, 2> EffectsChain::renderDrumFrame(DrumInstrument instrument)
 {
     const auto slot = sampleSlotForInstrument(instrument);
-    if (!rhythmSamplePools[(size_t) slot].entries.empty())
-        return renderRhythmSample(slot, channel);
+    if (!rhythmSampleBank->pools[(size_t) slot].entries.empty())
+        return { renderRhythmSample(slot, 0), renderRhythmSample(slot, 1) };
 
     DrumVoice* voice = nullptr;
     switch (instrument)
@@ -319,7 +418,7 @@ float EffectsChain::renderDrumSample(DrumInstrument instrument, int channel)
     }
 
     if (voice == nullptr || !voice->active || voice->env <= 0.0001f)
-        return 0.0f;
+        return {};
 
     const float white = juce::Random::getSystemRandom().nextFloat() * 2.0f - 1.0f;
     float sample = 0.0f;
@@ -364,16 +463,17 @@ float EffectsChain::renderDrumSample(DrumInstrument instrument, int channel)
 
         voice->noiseState = 0.18f * voice->noiseState + 0.82f * white;
         const float hp = white - voice->noiseState;
-        const float pan = (channel == 0) ? 0.92f : 1.0f;
-        sample = (hp * 0.74f + oscA * 0.12f + oscB * 0.07f) * voice->env * pan;
-        sample = std::tanh(sample * 1.35f);
+        sample = (hp * 0.74f + oscA * 0.12f + oscB * 0.07f) * voice->env;
         voice->env *= 0.9560f;
     }
 
     if (voice->env <= 0.0015f)
         voice->active = false;
 
-    return sample;
+    if (instrument == DrumInstrument::Hat)
+        return { std::tanh(sample * 0.92f * 1.35f), std::tanh(sample * 1.35f) };
+
+    return { sample, sample };
 }
 
 void EffectsChain::registerDrumTrigger(DrumInstrument instrument, float velocity)
@@ -483,28 +583,22 @@ void EffectsChain::loadSamplesIntoPool(SamplePool& pool, const juce::File& folde
         loadSampleFileIntoPool(pool, file);
 }
 
-void EffectsChain::loadRhythmSamples(int styleIndex, bool metronomeMode)
+std::shared_ptr<EffectsChain::RhythmSampleBank> EffectsChain::loadRhythmSamples(int styleIndex, bool metronomeMode)
 {
-    for (auto& pool : rhythmSamplePools)
-    {
-        pool.entries.clear();
-        pool.nextIndex = 0;
-    }
+    auto bank = std::make_shared<RhythmSampleBank>();
+    bank->styleIndex = styleIndex;
+    bank->metronomeMode = metronomeMode;
 
-    for (auto& voice : rhythmSampleVoices)
-        voice = {};
+    const auto samplesRoot = locateRhythmSamplesRoot();
+    if (!samplesRoot.isDirectory())
+        return bank;
 
-    rhythmSamplesRoot = locateRhythmSamplesRoot();
-    if (!rhythmSamplesRoot.isDirectory())
-    {
-        rhythmSamplesLoaded = false;
-        return;
-    }
+    bank->samplesRootFound = true;
 
-    loadSamplesIntoPool(rhythmSamplePools[(size_t) RhythmSampleSlot::Accent],
-                        rhythmSamplesRoot.getChildFile("Metronome").getChildFile("Accent"), 1);
-    loadSamplesIntoPool(rhythmSamplePools[(size_t) RhythmSampleSlot::Tick],
-                        rhythmSamplesRoot.getChildFile("Metronome").getChildFile("Tick"), 1);
+    loadSamplesIntoPool(bank->pools[(size_t) RhythmSampleSlot::Accent],
+                        samplesRoot.getChildFile("Metronome").getChildFile("Accent"), 1);
+    loadSamplesIntoPool(bank->pools[(size_t) RhythmSampleSlot::Tick],
+                        samplesRoot.getChildFile("Metronome").getChildFile("Tick"), 1);
 
     const auto projectRoot = locateProjectRoot();
     if (projectRoot.isDirectory())
@@ -514,8 +608,8 @@ void EffectsChain::loadRhythmSamples(int styleIndex, bool metronomeMode)
             .getChildFile("Percs")
             .getChildFile("Sticks");
 
-        auto& countInAccentPool = rhythmSamplePools[(size_t) RhythmSampleSlot::CountInAccent];
-        auto& countInTickPool = rhythmSamplePools[(size_t) RhythmSampleSlot::CountInTick];
+        auto& countInAccentPool = bank->pools[(size_t) RhythmSampleSlot::CountInAccent];
+        auto& countInTickPool = bank->pools[(size_t) RhythmSampleSlot::CountInTick];
         countInAccentPool.entries.clear();
         countInAccentPool.nextIndex = 0;
         countInTickPool.entries.clear();
@@ -527,16 +621,66 @@ void EffectsChain::loadRhythmSamples(int styleIndex, bool metronomeMode)
     if (!metronomeMode)
     {
         const int safeStyleIndex = juce::jlimit(0, (int) juce::numElementsInArray(kRhythmStyleFolders) - 1, styleIndex);
-        const auto styleFolder = rhythmSamplesRoot.getChildFile(kRhythmStyleFolders[safeStyleIndex]);
+        const auto styleFolder = samplesRoot.getChildFile(kRhythmStyleFolders[safeStyleIndex]);
         const bool curatedTightSelection =
             styleFolder.getFileName() == "BossaNova" || styleFolder.getFileName() == "Blues";
         const int styleSampleLimit = curatedTightSelection ? 4 : 0;
-        loadSamplesIntoPool(rhythmSamplePools[(size_t) RhythmSampleSlot::Kick],  styleFolder.getChildFile("Kick"), styleSampleLimit);
-        loadSamplesIntoPool(rhythmSamplePools[(size_t) RhythmSampleSlot::Snare], styleFolder.getChildFile("Snare"), styleSampleLimit);
-        loadSamplesIntoPool(rhythmSamplePools[(size_t) RhythmSampleSlot::Hat],   styleFolder.getChildFile("Hat"), styleSampleLimit);
+        loadSamplesIntoPool(bank->pools[(size_t) RhythmSampleSlot::Kick],  styleFolder.getChildFile("Kick"), styleSampleLimit);
+        loadSamplesIntoPool(bank->pools[(size_t) RhythmSampleSlot::Snare], styleFolder.getChildFile("Snare"), styleSampleLimit);
+        loadSamplesIntoPool(bank->pools[(size_t) RhythmSampleSlot::Hat],   styleFolder.getChildFile("Hat"), styleSampleLimit);
     }
 
-    rhythmSamplesLoaded = true;
+    return bank;
+}
+
+void EffectsChain::requestRhythmSampleLoad(int styleIndex, bool metronomeMode) noexcept
+{
+    if (requestedRhythmSampleStyle.load() == styleIndex
+        && requestedRhythmSampleMetronome.load() == metronomeMode)
+        return;
+
+    requestedRhythmSampleStyle.store(styleIndex);
+    requestedRhythmSampleMetronome.store(metronomeMode);
+    rhythmSampleRequestSerial.fetch_add(1);
+    notify();
+}
+
+void EffectsChain::applyPendingRhythmSampleBank(int styleIndex, bool metronomeMode) noexcept
+{
+    const juce::SpinLock::ScopedTryLockType lock(rhythmSampleBankLock);
+    if (!lock.isLocked() || pendingRhythmSampleBank == nullptr
+        || pendingRhythmSampleBank->styleIndex != styleIndex
+        || pendingRhythmSampleBank->metronomeMode != metronomeMode)
+        return;
+
+    for (auto& voice : rhythmSampleVoices)
+        voice = {};
+
+    retiredRhythmSampleBank = std::move(rhythmSampleBank);
+    rhythmSampleBank = std::move(pendingRhythmSampleBank);
+}
+
+void EffectsChain::run()
+{
+    unsigned int handledSerial = 0;
+    while (!threadShouldExit())
+    {
+        const auto serial = rhythmSampleRequestSerial.load();
+        if (serial == handledSerial)
+        {
+            wait(-1);
+            continue;
+        }
+
+        const int style = requestedRhythmSampleStyle.load();
+        const bool metronome = requestedRhythmSampleMetronome.load();
+        auto loadedBank = loadRhythmSamples(style, metronome);
+        handledSerial = serial;
+
+        const juce::SpinLock::ScopedLockType lock(rhythmSampleBankLock);
+        retiredRhythmSampleBank.reset();
+        pendingRhythmSampleBank = std::move(loadedBank);
+    }
 }
 
 void EffectsChain::configureRhythmPattern(int styleIndex, int variationIndex, bool metronomeMode)
@@ -704,8 +848,8 @@ void EffectsChain::advanceRhythmSequencer(float tempoBpm, float swingAmount, boo
         const float hatVel = hatPattern[(size_t) step];
 
         const bool hasMetronomeSamples =
-            !rhythmSamplePools[(size_t) RhythmSampleSlot::Accent].entries.empty()
-            || !rhythmSamplePools[(size_t) RhythmSampleSlot::Tick].entries.empty();
+            !rhythmSampleBank->pools[(size_t) RhythmSampleSlot::Accent].entries.empty()
+            || !rhythmSampleBank->pools[(size_t) RhythmSampleSlot::Tick].entries.empty();
 
         if (metronomeMode && hasMetronomeSamples)
         {
@@ -831,7 +975,21 @@ float EffectsChain::estimateRecentPitchHz(int channel, int writePosition) const
     return (float) sampleRate_ / ((float) selectedLag + adjustment);
 }
 
-void EffectsChain::advanceDrumSequencer() {}
+void EffectsChain::prepareExternalPluginScratchBuffer()
+{
+    auto* plugin = externalPluginInstance.get();
+    externalPluginInputChannels = plugin != nullptr ? plugin->getTotalNumInputChannels() : 0;
+    externalPluginOutputChannels = plugin != nullptr ? plugin->getTotalNumOutputChannels() : 0;
+
+    const int requiredChannels = juce::jmax(1, juce::jmax(externalPluginInputChannels,
+                                                          externalPluginOutputChannels));
+    externalPluginScratchBuffer.setSize(requiredChannels, maxBlockSize_, false, true, false);
+    externalPluginScratchBuffer.clear();
+
+    // clear() conserva esta reserva, evitando crecimiento del MidiBuffer en el callback.
+    externalPluginMidiBuffer.ensureSize(64 * 1024);
+    externalPluginMidiBuffer.clear();
+}
 
 void EffectsChain::processExternalPluginBlock(juce::AudioBuffer<float>& buffer, int startSample, int numSamples)
 {
@@ -839,25 +997,40 @@ void EffectsChain::processExternalPluginBlock(juce::AudioBuffer<float>& buffer, 
         return;
 
     auto* plugin = externalPluginInstance.get();
-    if (plugin == nullptr)
+    if (plugin == nullptr || plugin->isSuspended())
         return;
 
-    const int sourceChannels = juce::jmax(1, buffer.getNumChannels());
-    const int pluginChannels = juce::jmax(sourceChannels,
-                                          juce::jmax(plugin->getTotalNumInputChannels(),
-                                                     plugin->getTotalNumOutputChannels()));
+    const int availableSamples = buffer.getNumSamples() - startSample;
+    const int samplesToProcess = juce::jmin(numSamples, juce::jmax(0, availableSamples));
+    const int scratchBlockSize = externalPluginScratchBuffer.getNumSamples();
+    const int scratchChannels = externalPluginScratchBuffer.getNumChannels();
+    if (samplesToProcess <= 0 || scratchBlockSize <= 0 || scratchChannels <= 0)
+        return;
 
-    externalPluginScratchBuffer.setSize(pluginChannels, numSamples, false, false, true);
-    externalPluginScratchBuffer.clear();
+    const int sourceChannels = buffer.getNumChannels();
+    const int copiedInputChannels = juce::jmin(sourceChannels,
+                                               juce::jmin(externalPluginInputChannels, scratchChannels));
+    const int copiedOutputChannels = juce::jmin(sourceChannels,
+                                                juce::jmin(externalPluginOutputChannels, scratchChannels));
 
-    for (int channel = 0; channel < sourceChannels; ++channel)
-        externalPluginScratchBuffer.copyFrom(channel, 0, buffer, channel, startSample, numSamples);
+    for (int offset = 0; offset < samplesToProcess; offset += scratchBlockSize)
+    {
+        const int chunkSize = juce::jmin(scratchBlockSize, samplesToProcess - offset);
+        externalPluginScratchBuffer.clear(0, chunkSize);
 
-    externalPluginMidiBuffer.clear();
-    plugin->processBlock(externalPluginScratchBuffer, externalPluginMidiBuffer);
+        for (int channel = 0; channel < copiedInputChannels; ++channel)
+            externalPluginScratchBuffer.copyFrom(channel, 0, buffer, channel,
+                                                 startSample + offset, chunkSize);
 
-    for (int channel = 0; channel < sourceChannels; ++channel)
-        buffer.copyFrom(channel, startSample, externalPluginScratchBuffer, channel, 0, numSamples);
+        // La capacidad permanece fija; el plugin solo ve el tramo valido del scratch.
+        juce::AudioBuffer<float> chunk(externalPluginScratchBuffer.getArrayOfWritePointers(),
+                                       scratchChannels, 0, chunkSize);
+        externalPluginMidiBuffer.clear();
+        plugin->processBlock(chunk, externalPluginMidiBuffer);
+
+        for (int channel = 0; channel < copiedOutputChannels; ++channel)
+            buffer.copyFrom(channel, startSample + offset, chunk, channel, 0, chunkSize);
+    }
 }
 
 void EffectsChain::prepare(double sampleRate, int maxBlockSize)
@@ -870,14 +1043,11 @@ void EffectsChain::prepare(double sampleRate, int maxBlockSize)
     pitchBuffer.setSize(2, kPitchBufLen);
     freezeBuffer.setSize(2, kFreezeBufLen);
     chordBodyBuffer.setSize(2, juce::jmax(4096, (int) (sampleRate_ * 0.070)));
-    externalPluginScratchBuffer.setSize(2, maxBlockSize_);
     for (auto& layer : sustainLayers)
         layer.buffer.setSize(2, kFreezeBufLen);
     chordSustainLayer.buffer.setSize(2, kFreezeBufLen);
     roomReverb.setSampleRate(sampleRate_);
     outputEq.prepare(sampleRate_);
-    rhythmSamplesRoot = locateRhythmSamplesRoot();
-
     if (externalPluginInstance != nullptr)
     {
         externalPluginInstance->releaseResources();
@@ -885,6 +1055,8 @@ void EffectsChain::prepare(double sampleRate, int maxBlockSize)
         externalPluginInstance->prepareToPlay(sampleRate_, maxBlockSize_);
         externalPluginInstance->reset();
     }
+
+    prepareExternalPluginScratchBuffer();
 
     reset();
 }
@@ -992,7 +1164,6 @@ void EffectsChain::reset()
     drumDensityCounter = 0;
     drumBarCounter = 0;
     drumTriggerRoundRobin = 0;
-    drumClockRunning = false;
     drumTriggerArmed = true;
     drumWasEnabled = false;
     rhythmWasEnabled = false;
@@ -1181,11 +1352,8 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
         }
 
         const int rhythmVariationIndex = variationIndexForSection(rhythmSectionState);
-        if (rhythmCurrentStyle != rhythmStyleIndex
-            || rhythmCurrentMetronome != metronomeMode)
-        {
-            loadRhythmSamples(rhythmStyleIndex, metronomeMode);
-        }
+        requestRhythmSampleLoad(rhythmStyleIndex, metronomeMode);
+        applyPendingRhythmSampleBank(rhythmStyleIndex, metronomeMode);
 
         if (rhythmCurrentStyle != rhythmStyleIndex
             || rhythmCurrentVariation != rhythmVariationIndex
@@ -1781,12 +1949,16 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
         float drumBusSample[2]{};
         if (rhythmOn || drumOn)
         {
+            const auto kickFrame = renderDrumFrame(DrumInstrument::Kick);
+            const auto snareFrame = renderDrumFrame(DrumInstrument::Snare);
+            const auto hatFrame = renderDrumFrame(DrumInstrument::Hat);
+
             for (int ch = 0; ch < channels; ++ch)
             {
                 float baseRhythmSample =
-                    (renderDrumSample(DrumInstrument::Kick, ch) * drumKickMix
-                   + renderDrumSample(DrumInstrument::Snare, ch) * drumSnareMix
-                   + renderDrumSample(DrumInstrument::Hat, ch) * drumHatMix
+                    (kickFrame[(size_t) ch] * drumKickMix
+                   + snareFrame[(size_t) ch] * drumSnareMix
+                   + hatFrame[(size_t) ch] * drumHatMix
                    + renderRhythmSample(RhythmSampleSlot::Accent, ch)
                    + renderRhythmSample(RhythmSampleSlot::Tick, ch))
                     * (kDrumMixGain * (rhythmOn ? rhythmLevelValue : drumLevel));

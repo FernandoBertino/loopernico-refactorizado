@@ -5,8 +5,6 @@ using namespace LoopernicoUi;
 namespace
 {
     constexpr float kLoopTrimStepSeconds = 0.02f;
-    constexpr int kSessionMagic = 0x4c4e5331; // LNS1
-    constexpr int kSessionVersion = 1;
 
     class ExternalPluginEditorWindow final : public juce::DocumentWindow
     {
@@ -107,42 +105,6 @@ namespace
         "Clicks"
     };
 
-    bool writeAudioBufferToStream(juce::OutputStream& stream, const juce::AudioBuffer<float>& buffer)
-    {
-        const int numChannels = buffer.getNumChannels();
-        const int numSamples = buffer.getNumSamples();
-
-        stream.writeCompressedInt(numChannels);
-        stream.writeCompressedInt(numSamples);
-
-        for (int ch = 0; ch < numChannels; ++ch)
-        {
-            const auto bytes = (size_t) numSamples * sizeof(float);
-            if (bytes > 0 && !stream.write(buffer.getReadPointer(ch), bytes))
-                return false;
-        }
-
-        return true;
-    }
-
-    bool readAudioBufferFromStream(juce::InputStream& stream, juce::AudioBuffer<float>& buffer)
-    {
-        const int numChannels = stream.readCompressedInt();
-        const int numSamples = stream.readCompressedInt();
-
-        if (numChannels < 0 || numChannels > 2 || numSamples < 0)
-            return false;
-
-        buffer.setSize(numChannels, numSamples);
-        for (int ch = 0; ch < numChannels; ++ch)
-        {
-            const auto bytes = (size_t) numSamples * sizeof(float);
-            if (bytes > 0 && stream.read(buffer.getWritePointer(ch), bytes) != (int) bytes)
-                return false;
-        }
-
-        return true;
-    }
 }
 
 MainComponent::MainComponent()
@@ -165,9 +127,13 @@ MainComponent::MainComponent()
         visualTracks.push_back(std::move(tr));
     }
 
-    looper.onFixedLoopComplete = [this]() {
-        for (int i = 0; i < LooperEngine::kMaxTracks; ++i) looper.refreshThumbnail(i, formatManager);
-        repaint();
+    looper.onFixedLoopComplete = [safeThis = juce::Component::SafePointer<MainComponent>(this)]() {
+        if (auto* component = safeThis.getComponent())
+        {
+            for (int i = 0; i < LooperEngine::kMaxTracks; ++i)
+                component->looper.refreshThumbnail(i, component->formatManager);
+            component->repaint();
+        }
     };
 
     // Transport buttons
@@ -926,17 +892,20 @@ void MainComponent::loadExternalVst3Plugin()
         if (selectedFile == juce::File())
             return;
 
-        closeExternalVst3Editor();
-
+        EffectsChain::PreparedExternalPlugin candidate;
         juce::String errorMessage;
+        if (!effectsChain.prepareExternalVst3(selectedFile, candidate, errorMessage))
+        {
+            updateExternalVstUi();
+            lblVst3Status.setText(errorMessage, juce::dontSendNotification);
+            return;
+        }
+
+        closeExternalVst3Editor();
+        EffectsChain::PreparedExternalPlugin retired;
         {
             const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
-            if (!effectsChain.loadExternalVst3(selectedFile, errorMessage))
-            {
-                updateExternalVstUi();
-                lblVst3Status.setText(errorMessage, juce::dontSendNotification);
-                return;
-            }
+            retired = effectsChain.commitExternalPlugin(std::move(candidate));
         }
 
         updateExternalVstUi();
@@ -947,9 +916,10 @@ void MainComponent::unloadExternalVst3Plugin()
 {
     closeExternalVst3Editor();
 
+    EffectsChain::PreparedExternalPlugin retired;
     {
         const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
-        effectsChain.unloadExternalPlugin();
+        retired = effectsChain.detachExternalPlugin();
     }
 
     updateExternalVstUi();
@@ -1002,6 +972,58 @@ void MainComponent::updateExternalVstUi()
         lblVst3Status.setText("Inicio de cadena en bypass: " + pluginName, juce::dontSendNotification);
 }
 
+bool MainComponent::captureLooperSnapshotIncrementally(LooperEngine::SessionSnapshot& snapshot,
+                                                       juce::String& errorMessage)
+{
+    constexpr int kChunkSamplesPerChannel = 4096;
+    constexpr int kMaxAttempts = 3;
+
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt)
+    {
+        LooperEngine::IncrementalSnapshot capture;
+        LooperEngine::SnapshotCaptureResult result;
+        {
+            const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+            result = looper.beginIncrementalSnapshot(capture);
+        }
+
+        if (result == LooperEngine::SnapshotCaptureResult::retryRequired)
+        {
+            const auto state = looper.getState();
+            if (state == LooperEngine::State::RecordingBase
+                || state == LooperEngine::State::RecordingLayer)
+            {
+                errorMessage = "Finaliza o cancela la grabacion antes de guardar o exportar.";
+                return false;
+            }
+            continue;
+        }
+
+        LooperEngine::prepareIncrementalSnapshot(capture);
+        do
+        {
+            {
+                const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+                result = looper.copyIncrementalSnapshotChunk(capture,
+                                                              kChunkSamplesPerChannel);
+            }
+            if (result == LooperEngine::SnapshotCaptureResult::inProgress)
+                juce::Thread::yield();
+        }
+        while (result == LooperEngine::SnapshotCaptureResult::inProgress);
+
+        if (result == LooperEngine::SnapshotCaptureResult::complete)
+        {
+            snapshot = std::move(capture.snapshot);
+            errorMessage.clear();
+            return true;
+        }
+    }
+
+    errorMessage = "El loop cambio durante la captura. Intenta nuevamente cuando este estable.";
+    return false;
+}
+
 void MainComponent::saveSessionToFile()
 {
     sessionFileChooser = std::make_unique<juce::FileChooser>("Guardar sesion",
@@ -1025,15 +1047,35 @@ void MainComponent::saveSessionToFile()
 
         LooperEngine::SessionSnapshot looperSnapshot;
         juce::MemoryBlock vstState;
+        juce::String snapshotError;
+        if (!captureLooperSnapshotIncrementally(looperSnapshot, snapshotError))
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                                                   "No se pudo capturar la sesion",
+                                                   snapshotError);
+            return;
+        }
+
+        juce::AudioPluginInstance* suspendedPlugin = nullptr;
         {
             const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
-            looperSnapshot = looper.createSessionSnapshot();
-            effectsChain.copyExternalPluginState(vstState);
+            suspendedPlugin = effectsChain.getExternalPluginInstance();
+            if (suspendedPlugin != nullptr)
+                suspendedPlugin->suspendProcessing(true);
+        }
+
+        effectsChain.copyExternalPluginState(vstState);
+
+        if (suspendedPlugin != nullptr)
+        {
+            const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+            if (effectsChain.getExternalPluginInstance() == suspendedPlugin)
+                suspendedPlugin->suspendProcessing(false);
         }
 
         const auto sessionTree = createSessionTree(looperSnapshot, vstState);
         juce::String errorMessage;
-        if (!writeSessionFile(selectedFile, sessionTree, looperSnapshot, vstState, errorMessage))
+        if (!SessionManager::writeSessionFile(selectedFile, sessionTree, looperSnapshot, vstState, errorMessage))
         {
             juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                    "No se pudo guardar",
@@ -1069,7 +1111,7 @@ void MainComponent::loadSessionFromFile()
         juce::MemoryBlock vstState;
         juce::String errorMessage;
 
-        if (!readSessionFile(selectedFile, sessionTree, looperSnapshot, vstState, errorMessage))
+        if (!SessionManager::readSessionFile(selectedFile, sessionTree, looperSnapshot, vstState, errorMessage))
         {
             juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                    "No se pudo abrir",
@@ -1112,8 +1154,17 @@ void MainComponent::exportMixToFile()
         if (file == juce::File()) return;
         if (!file.hasFileExtension("wav")) file = file.withFileExtension(".wav");
 
-        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
-        looper.exportFullMix(formatManager, file);
+        LooperEngine::SessionSnapshot snapshot;
+        juce::String snapshotError;
+        if (!captureLooperSnapshotIncrementally(snapshot, snapshotError))
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                                                   "No se pudo exportar",
+                                                   snapshotError);
+            return;
+        }
+        LooperEngine::exportFullMix(snapshot, file,
+                                    outputMono.load(std::memory_order_relaxed));
         lblMidiStatus.setText("Mezcla WAV exportada: " + file.getFileName(), juce::dontSendNotification);
         lblMidiStatus.setColour(juce::Label::textColourId, LnfC::PlayGreen);
     });
@@ -1138,8 +1189,17 @@ void MainComponent::exportTracksToFolder()
         exportFileChooser.reset();
         if (folder == juce::File()) return;
 
-        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
-        looper.exportSeparateTracks(formatManager, folder);
+        LooperEngine::SessionSnapshot snapshot;
+        juce::String snapshotError;
+        if (!captureLooperSnapshotIncrementally(snapshot, snapshotError))
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                                                   "No se pudo exportar",
+                                                   snapshotError);
+            return;
+        }
+        LooperEngine::exportSeparateTracks(snapshot, folder,
+                                           outputMono.load(std::memory_order_relaxed));
         lblMidiStatus.setText("Pistas WAV exportadas en: " + folder.getFileName(), juce::dontSendNotification);
         lblMidiStatus.setColour(juce::Label::textColourId, LnfC::PlayGreen);
     });
@@ -1149,7 +1209,7 @@ juce::ValueTree MainComponent::createSessionTree(const LooperEngine::SessionSnap
                                                  const juce::MemoryBlock& vstState) const
 {
     juce::ValueTree root("LOOPERNICO_SESSION");
-    root.setProperty("version", kSessionVersion, nullptr);
+    root.setProperty("version", SessionManager::currentVersion, nullptr);
     root.setProperty("savedAt", juce::Time::getCurrentTime().toISO8601(true), nullptr);
 
     juce::ValueTree global("GLOBAL");
@@ -1256,168 +1316,6 @@ juce::ValueTree MainComponent::createSessionTree(const LooperEngine::SessionSnap
     return root;
 }
 
-bool MainComponent::writeSessionFile(const juce::File& file,
-                                     const juce::ValueTree& sessionTree,
-                                     const LooperEngine::SessionSnapshot& looperSnapshot,
-                                     const juce::MemoryBlock& vstState,
-                                     juce::String& errorMessage) const
-{
-    auto xml = sessionTree.createXml();
-    if (xml == nullptr)
-    {
-        errorMessage = "No se pudo crear la metadata de la sesion.";
-        return false;
-    }
-
-    juce::FileOutputStream fileStream(file);
-    if (!fileStream.openedOk())
-    {
-        errorMessage = "No se pudo abrir el archivo destino.";
-        return false;
-    }
-
-    juce::GZIPCompressorOutputStream gzipStream(&fileStream, 9, false);
-    const juce::String xmlText = xml->toString();
-    const juce::MemoryBlock xmlBytes(xmlText.toRawUTF8(), xmlText.getNumBytesAsUTF8());
-
-    gzipStream.writeInt(kSessionMagic);
-    gzipStream.writeInt(kSessionVersion);
-    gzipStream.writeCompressedInt((int) xmlBytes.getSize());
-    if (!gzipStream.write(xmlBytes.getData(), xmlBytes.getSize()))
-    {
-        errorMessage = "No se pudo escribir la cabecera de la sesion.";
-        return false;
-    }
-
-    for (int i = 0; i < LooperEngine::kMaxTracks; ++i)
-        if (!writeAudioBufferToStream(gzipStream, looperSnapshot.tracks[(size_t) i].audio))
-        {
-            errorMessage = "No se pudo escribir el audio de la sesion.";
-            return false;
-        }
-
-    gzipStream.writeCompressedInt((int) vstState.getSize());
-
-    if (vstState.getSize() > 0 && !gzipStream.write(vstState.getData(), vstState.getSize()))
-    {
-        errorMessage = "No se pudo escribir el estado interno del VST3.";
-        return false;
-    }
-
-    gzipStream.flush();
-    return true;
-}
-
-bool MainComponent::readSessionFile(const juce::File& file,
-                                    juce::ValueTree& sessionTree,
-                                    LooperEngine::SessionSnapshot& looperSnapshot,
-                                    juce::MemoryBlock& vstState,
-                                    juce::String& errorMessage) const
-{
-    juce::FileInputStream fileStream(file);
-    if (!fileStream.openedOk())
-    {
-        errorMessage = "No se pudo abrir el archivo de sesion.";
-        return false;
-    }
-
-    juce::GZIPDecompressorInputStream gzipStream(&fileStream, false);
-    if (gzipStream.readInt() != kSessionMagic)
-    {
-        errorMessage = "El archivo no es una sesion valida de Loopernico.";
-        return false;
-    }
-
-    const int version = gzipStream.readInt();
-    if (version > kSessionVersion)
-    {
-        errorMessage = "La sesion fue creada con una version mas nueva del programa.";
-        return false;
-    }
-
-    const int xmlSize = gzipStream.readCompressedInt();
-    if (xmlSize <= 0)
-    {
-        errorMessage = "La metadata de la sesion esta dañada.";
-        return false;
-    }
-
-    juce::MemoryBlock xmlBytes((size_t) xmlSize);
-    if (gzipStream.read(xmlBytes.getData(), xmlSize) != xmlSize)
-    {
-        errorMessage = "No se pudo leer la metadata de la sesion.";
-        return false;
-    }
-
-    auto xml = juce::parseXML(juce::String::fromUTF8((const char*) xmlBytes.getData(), xmlSize));
-    if (xml == nullptr)
-    {
-        errorMessage = "La metadata XML de la sesion no es valida.";
-        return false;
-    }
-
-    sessionTree = juce::ValueTree::fromXml(*xml);
-    if (!sessionTree.isValid())
-    {
-        errorMessage = "No se pudo reconstruir la sesion guardada.";
-        return false;
-    }
-
-    const auto looperNode = sessionTree.getChildWithName("LOOPER");
-    looperSnapshot.state = (LooperEngine::State) (int) looperNode.getProperty("state", (int) LooperEngine::State::Stopped);
-    looperSnapshot.totalTracks = (int) looperNode.getProperty("totalTracks", 0);
-    looperSnapshot.baseLoopLengthSamples = (int) looperNode.getProperty("baseLoopLengthSamples", 0);
-    looperSnapshot.loopReadPosition = (int) looperNode.getProperty("loopReadPosition", 0);
-    looperSnapshot.recordWritePosition = (int) looperNode.getProperty("recordWritePosition", 0);
-    looperSnapshot.recordStartPosition = (int) looperNode.getProperty("recordStartPosition", 0);
-    looperSnapshot.editableLoopSourceSamples = (int) looperNode.getProperty("editableLoopSourceSamples", 0);
-    looperSnapshot.globalMute = (bool) looperNode.getProperty("globalMute", false);
-    looperSnapshot.globalPaused = (bool) looperNode.getProperty("globalPaused", false);
-    looperSnapshot.silenceThresholdDb = (float) (double) looperNode.getProperty("silenceThresholdDb", -60.0);
-    looperSnapshot.bpm = (float) (double) looperNode.getProperty("bpm", 120.0);
-    looperSnapshot.beatsPerBar = (int) looperNode.getProperty("beatsPerBar", 4);
-    looperSnapshot.barsPerLoop = (int) looperNode.getProperty("barsPerLoop", 0);
-    looperSnapshot.quantizeEnabled = (bool) looperNode.getProperty("quantizeEnabled", true);
-    looperSnapshot.redoCount = (int) looperNode.getProperty("redoCount", 0);
-    looperSnapshot.sampleRate = (double) looperNode.getProperty("sampleRate", 44100.0);
-
-    for (int i = 0; i < LooperEngine::kMaxTracks; ++i)
-    {
-        const auto trackNode = looperNode.getChild(i);
-        auto& track = looperSnapshot.tracks[(size_t) i];
-        track.lengthSamples = (int) trackNode.getProperty("lengthSamples", 0);
-        track.redoLengthSamples = (int) trackNode.getProperty("redoLengthSamples", 0);
-        track.volume = (float) (double) trackNode.getProperty("volume", 1.0);
-        track.isMuted = (bool) trackNode.getProperty("isMuted", false);
-        track.isPaused = (bool) trackNode.getProperty("isPaused", false);
-        track.pausedReadPos = (int) trackNode.getProperty("pausedReadPos", 0);
-        track.frippDecay = (float) (double) trackNode.getProperty("frippDecay", 1.0);
-        track.frippEnabled = (bool) trackNode.getProperty("frippEnabled", false);
-        track.currentGain = (float) (double) trackNode.getProperty("currentGain", 1.0);
-
-        if (!readAudioBufferFromStream(gzipStream, track.audio))
-        {
-            errorMessage = "No se pudo leer el audio de alguna pista.";
-            return false;
-        }
-    }
-
-    const int vstStateSize = gzipStream.readCompressedInt();
-    if (vstStateSize < 0)
-    {
-        errorMessage = "El estado del VST3 esta dañado.";
-        return false;
-    }
-
-    vstState.setSize((size_t) vstStateSize);
-    if (vstStateSize > 0 && gzipStream.read(vstState.getData(), vstStateSize) != vstStateSize)
-    {
-        errorMessage = "No se pudo leer el estado interno del VST3.";
-        return false;
-    }
-
-    return true;
-}
 
 bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
                                      const LooperEngine::SessionSnapshot& looperSnapshot,
@@ -1450,6 +1348,21 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
     const auto midi = sessionTree.getChildWithName("MIDI");
     const auto looperNode = sessionTree.getChildWithName("LOOPER");
     const auto vst = fx.getChildWithName("VST");
+
+    const juce::String pluginPath = vst.getProperty("path").toString();
+    const bool pluginEnabled = (bool) vst.getProperty("enabled", true);
+    EffectsChain::PreparedExternalPlugin candidate;
+    if (pluginPath.isNotEmpty())
+    {
+        juce::String pluginError;
+        if (!effectsChain.prepareExternalVst3(juce::File(pluginPath), candidate,
+                                              pluginError, &vstState))
+        {
+            errorMessage = pluginError;
+            return false;
+        }
+    }
+    auto preparedLooper = looper.prepareSessionRestore(looperSnapshot);
 
     setSlider(masterKnob, (double) global.getProperty("masterVolume", 0.85));
     outputMono.store((bool) global.getProperty("outputMono", true), std::memory_order_relaxed);
@@ -1515,33 +1428,27 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
     setCombo(rhythmCountInSoundSelector, (int) fx.getProperty("rhythmCountInSound", 1));
     setToggle(btnRhythmCountInToggle, (bool) fx.getProperty("rhythmCountInToggle", true));
 
-    const juce::String pluginPath = vst.getProperty("path").toString();
-    const bool pluginEnabled = (bool) vst.getProperty("enabled", true);
+    closeExternalVst3Editor();
+    EffectsChain::PreparedExternalPlugin retired;
 
     {
         const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        if (!looper.commitPreparedSessionRestore(std::move(preparedLooper)))
+        {
+            errorMessage = "El dispositivo de audio cambio mientras se preparaba la sesion. Intenta abrirla nuevamente.";
+            return false;
+        }
 
-        closeExternalVst3Editor();
         if (pluginPath.isNotEmpty())
         {
-            juce::String pluginError;
-            if (!effectsChain.loadExternalVst3(juce::File(pluginPath), pluginError))
-            {
-                errorMessage = pluginError;
-            }
-            else
-            {
-                juce::String stateError;
-                effectsChain.restoreExternalPluginState(vstState, stateError);
-                effectsChain.setExternalPluginEnabled(pluginEnabled);
-            }
+            retired = effectsChain.commitExternalPlugin(std::move(candidate));
+            effectsChain.setExternalPluginEnabled(pluginEnabled);
         }
         else
         {
-            effectsChain.unloadExternalPlugin();
+            retired = effectsChain.detachExternalPlugin();
         }
 
-        looper.restoreSessionSnapshot(looperSnapshot);
     }
 
     updateExternalVstUi();
@@ -1763,6 +1670,7 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate
 void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buf)
 {
     if (!buf.buffer) return;
+    const bool monoOutput = outputMono.load(std::memory_order_relaxed);
     for (int ch = 2; ch < buf.buffer->getNumChannels(); ++ch)
         buf.buffer->clear(ch, buf.startSample, buf.numSamples);
 
@@ -1777,10 +1685,23 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buf)
     }
 
     effectsChain.processBlock(*buf.buffer, buf.startSample, buf.numSamples);
-    looper.processBlock(*buf.buffer, buf.startSample, buf.numSamples,
-                        masterVolume.load(std::memory_order_relaxed));
 
-    if (outputMono.load(std::memory_order_relaxed) && buf.buffer->getNumChannels() > 1)
+    if (monoOutput && buf.buffer->getNumChannels() > 1)
+    {
+        auto* left  = buf.buffer->getWritePointer(0, buf.startSample);
+        auto* right = buf.buffer->getWritePointer(1, buf.startSample);
+        for (int i = 0; i < buf.numSamples; ++i)
+        {
+            const float mono = 0.5f * (left[i] + right[i]);
+            left[i] = mono;
+            right[i] = mono;
+        }
+    }
+
+    looper.processBlock(*buf.buffer, buf.startSample, buf.numSamples,
+                        masterVolume.load(std::memory_order_relaxed), monoOutput);
+
+    if (monoOutput && buf.buffer->getNumChannels() > 1)
     {
         auto* left  = buf.buffer->getWritePointer(0, buf.startSample);
         auto* right = buf.buffer->getWritePointer(1, buf.startSample);
@@ -2053,6 +1974,8 @@ void MainComponent::updateOutputModeButton()
     const bool mono = outputMono.load(std::memory_order_relaxed);
     btnOutputMode.setButtonText(mono ? "MONO" : "STEREO");
     btnOutputMode.setToggleState(mono, juce::dontSendNotification);
+    for (auto& track : visualTracks)
+        track->setMonoDisplay(mono);
 }
 
 void MainComponent::updateLoopEditButtons()

@@ -6,6 +6,7 @@
 #include "LooperEngine.h"
 #include "MidiController.h"
 #include "EffectsChain.h"
+#include "SessionManager.h"
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::Timer,
@@ -130,18 +131,10 @@ private:
     void loadSessionFromFile();
     void exportMixToFile();
     void exportTracksToFolder();
+    bool captureLooperSnapshotIncrementally(LooperEngine::SessionSnapshot& snapshot,
+                                            juce::String& errorMessage);
     juce::ValueTree createSessionTree(const LooperEngine::SessionSnapshot& looperSnapshot,
                                       const juce::MemoryBlock& vstState) const;
-    bool writeSessionFile(const juce::File& file,
-                          const juce::ValueTree& sessionTree,
-                          const LooperEngine::SessionSnapshot& looperSnapshot,
-                          const juce::MemoryBlock& vstState,
-                          juce::String& errorMessage) const;
-    bool readSessionFile(const juce::File& file,
-                         juce::ValueTree& sessionTree,
-                         LooperEngine::SessionSnapshot& looperSnapshot,
-                         juce::MemoryBlock& vstState,
-                         juce::String& errorMessage) const;
     bool applySessionTree(const juce::ValueTree& sessionTree,
                           const LooperEngine::SessionSnapshot& looperSnapshot,
                           const juce::MemoryBlock& vstState,

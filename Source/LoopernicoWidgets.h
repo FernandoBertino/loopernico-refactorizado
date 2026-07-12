@@ -143,6 +143,7 @@ public:
     ~TrackComponent() override = default;
 
     void setThumbnailPointer(juce::AudioThumbnail* t) { thumbnail = t; }
+    void setMonoDisplay(bool mono) { if (monoDisplay != mono) { monoDisplay = mono; repaint(); } }
     bool isMuteActive() const { return muteBtn.getToggleState(); }
     bool isSoloActive() const { return soloBtn.getToggleState(); }
     void setMuteActive(bool active) { muteBtn.setToggleState(active, juce::dontSendNotification); }
@@ -174,6 +175,7 @@ private:
     float playheadProg = -1.0f;
     bool isRec = false, isPlay = false, isOvd = false;
     float timeSecs = 0.0f, lenSecs = 0.0f;
+    bool monoDisplay = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TrackComponent)
 };

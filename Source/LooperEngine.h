@@ -66,6 +66,64 @@ public:
         std::array<TrackSnapshot, kMaxTracks> tracks;
     };
 
+    // Incremental snapshot capture.  The owner must hold the same callback
+    // lock used around processBlock() while calling begin/copy.  Allocation is
+    // deliberately performed by prepareIncrementalSnapshot() without that
+    // lock.  Captures are rejected while recording; buffer revisions detect
+    // any loop-memory mutation between chunks and force a coherent retry.
+    enum class SnapshotCaptureResult { inProgress, complete, retryRequired };
+
+    struct IncrementalSnapshot
+    {
+        SessionSnapshot snapshot;
+        std::array<int, kMaxTracks> audioLengths {};
+        std::array<uint64_t, kMaxTracks> bufferRevisions {};
+        int nextTrack{ 0 };
+        int nextSample{ 0 };
+        bool prepared{ false };
+    };
+
+    // A session restore is deliberately split in two phases.  Building this
+    // object may allocate and resample, so it must happen without the audio
+    // callback lock.  commitPreparedSessionRestore only swaps buffers and
+    // publishes scalar state; after the commit this object owns the old engine
+    // buffers, allowing their destruction to happen after the lock is released.
+    struct PreparedTrackRestore
+    {
+        juce::AudioBuffer<float> audio;
+        int lengthSamples{ 0 };
+        int redoLengthSamples{ 0 };
+        float volume{ 1.0f };
+        bool isMuted{ false };
+        bool isPaused{ false };
+        int pausedReadPos{ 0 };
+        float frippDecay{ 1.0f };
+        bool frippEnabled{ false };
+        float currentGain{ 1.0f };
+    };
+
+    struct PreparedSessionRestore
+    {
+        State state{ State::Stopped };
+        int totalTracks{ 0 };
+        int baseLoopLengthSamples{ 0 };
+        int loopReadPosition{ 0 };
+        int recordWritePosition{ 0 };
+        int recordStartPosition{ 0 };
+        int editableLoopSourceSamples{ 0 };
+        bool globalMute{ false };
+        bool globalPaused{ false };
+        float silenceThresholdDb{ -60.0f };
+        float bpm{ 120.0f };
+        int beatsPerBar{ 4 };
+        int barsPerLoop{ 0 };
+        bool quantizeEnabled{ true };
+        int redoCount{ 0 };
+        int maxLoopLengthSamples{ 0 };
+        double targetSampleRate{ 0.0 };
+        std::array<PreparedTrackRestore, kMaxTracks> tracks;
+    };
+
     LooperEngine();
     ~LooperEngine() = default;
 
@@ -77,7 +135,8 @@ public:
     // ---- Procesamiento (audio thread) ---------------------------------------
     void processBlock(juce::AudioBuffer<float>& buffer,
                       int startSample, int numSamples,
-                      float masterVolume);
+                      float masterVolume,
+                      bool forceDualMonoInput = false);
 
     // ---- Control de grabacion (message thread) ------------------------------
     void recConfirm();
@@ -139,8 +198,14 @@ public:
 
     // ---- Import / export (message thread) -----------------------------------
     void importAudioToBase(juce::AudioFormatManager& fmt, const juce::File& file);
-    void exportFullMix(juce::AudioFormatManager& fmt, const juce::File& dest);
-    void exportSeparateTracks(juce::AudioFormatManager& fmt, const juce::File& folder);
+    void exportFullMix(juce::AudioFormatManager& fmt, const juce::File& dest,
+                       bool outputMono = false);
+    void exportSeparateTracks(juce::AudioFormatManager& fmt, const juce::File& folder,
+                              bool outputMono = false);
+    static void exportFullMix(const SessionSnapshot& snapshot, const juce::File& dest,
+                              bool outputMono = false);
+    static void exportSeparateTracks(const SessionSnapshot& snapshot, const juce::File& folder,
+                                     bool outputMono = false);
 
     // ---- Edicion rapida del loop base (message thread) ----------------------
     bool nudgeLoopStart(int deltaSamples);
@@ -151,6 +216,12 @@ public:
     juce::AudioThumbnail* getTrackThumbnail(int track);
     void refreshThumbnail(int track, juce::AudioFormatManager& fmt);
     SessionSnapshot createSessionSnapshot() const;
+    SnapshotCaptureResult beginIncrementalSnapshot(IncrementalSnapshot& capture) const;
+    static void prepareIncrementalSnapshot(IncrementalSnapshot& capture);
+    SnapshotCaptureResult copyIncrementalSnapshotChunk(IncrementalSnapshot& capture,
+                                                       int maxSamplesPerChannel) const;
+    PreparedSessionRestore prepareSessionRestore(const SessionSnapshot& snapshot) const;
+    bool commitPreparedSessionRestore(PreparedSessionRestore&& prepared);
     void restoreSessionSnapshot(const SessionSnapshot& snapshot);
 
     // ---- Trim de silencio al confirmar grabacion (message thread) -----------
@@ -171,7 +242,8 @@ private:
         std::atomic<int>   pausedReadPos { 0     };
         std::atomic<float> frippDecay    { 1.0f  };
         std::atomic<bool>  frippEnabled  { false };
-        float              currentGain   = 1.0f;
+        std::atomic<float> currentGain   { 1.0f };
+        std::atomic<uint64_t> bufferRevision { 0 };
     };
 
     // ---- Helpers de tempo y trim (message thread) ---------------------------
@@ -193,6 +265,7 @@ private:
     std::atomic<int>   recordWritePosition   { 0 };
     std::atomic<int>   recordStartPosition   { 0 };
     std::atomic<int>   editableLoopSourceSamples { 0 };
+    std::atomic<bool>  fixedLoopCompletionRequested { false };
     std::atomic<bool>  globalMute            { false };
     std::atomic<bool>  globalPaused          { false };
     std::atomic<float> silenceThresholdDb    { -60.0f }; // umbral para trimSilence
