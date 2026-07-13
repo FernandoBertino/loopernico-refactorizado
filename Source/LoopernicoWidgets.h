@@ -183,6 +183,8 @@ private:
 class FXPedalComponent : public juce::Component
 {
 public:
+    enum class JackSide { input, output };
+
     FXPedalComponent(const juce::String& name, juce::Colour col,
                      const juce::String& l1, const juce::String& l2, const juce::String& l3);
     ~FXPedalComponent() override = default;
@@ -195,15 +197,67 @@ public:
     void setKnobValueFormatter(int knobIndex, std::function<juce::String(double)> formatter);
     void setInfoText(const juce::String& mainText, const juce::String& subText = {});
     void setDragHintVisible(bool visible);
+    /** Centre of the physical side jack, expressed in this component's coordinates. */
+    juce::Point<float> getJackCentre(JackSide side) const noexcept;
     juce::ToggleButton onBtn{"ON"};
     juce::Slider knob1, knob2, knob3, knob4, knob5, knob6, knob7, knob8, knob9;
+    std::function<void()> onSecondaryFootswitch;
+    std::function<void()> onTap;
     std::function<void(FXPedalComponent&, const juce::MouseEvent&)> onDragStart;
     std::function<void(FXPedalComponent&, const juce::MouseEvent&)> onDragMove;
     std::function<void(FXPedalComponent&, const juce::MouseEvent&)> onDragEnd;
 
     void mouseDown(const juce::MouseEvent& e) override
     {
-        if (e.y > getHeight() - 30)
+        if (pedalName == "RHYTHM BOX")
+        {
+            auto body = getLocalBounds().toFloat().reduced(3.0f);
+            const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / 0.88f);
+            body = { body.getX(), body.getCentreY() - bodyHeight * 0.5f,
+                     body.getWidth(), bodyHeight };
+
+            const auto mouse = e.position;
+            const auto isInsideCircle = [mouse](juce::Point<float> centre, float radius)
+            {
+                const float dx = mouse.x - centre.x;
+                const float dy = mouse.y - centre.y;
+                return dx * dx + dy * dy <= radius * radius;
+            };
+
+            const auto leftFoot = juce::Point<float>(body.getX() + body.getWidth() * 0.255f,
+                                                      body.getY() + body.getHeight() * 0.885f);
+            const auto rightFoot = juce::Point<float>(body.getX() + body.getWidth() * 0.745f,
+                                                       body.getY() + body.getHeight() * 0.885f);
+            const auto tap = juce::Point<float>(body.getCentreX(),
+                                                 body.getY() + body.getHeight() * 0.820f);
+
+            if (isInsideCircle(leftFoot, 25.0f))
+            {
+                onBtn.setToggleState(!onBtn.getToggleState(), juce::sendNotification);
+                repaint();
+                return;
+            }
+
+            if (isInsideCircle(rightFoot, 25.0f))
+            {
+                if (onSecondaryFootswitch)
+                    onSecondaryFootswitch();
+                repaint();
+                return;
+            }
+
+            if (isInsideCircle(tap, 23.0f))
+            {
+                if (onTap)
+                    onTap();
+                repaint();
+                return;
+            }
+        }
+
+        const bool customWideFootswitch = (pedalName == "FUZZ" || pedalName == "OVERDRIVE" || pedalName == "COMPRESSOR")
+            && e.y > juce::roundToInt(getHeight() * 0.66f);
+        if (e.y > getHeight() - 30 || customWideFootswitch)
         {
             onBtn.setToggleState(!onBtn.getToggleState(), juce::sendNotification);
             repaint();
@@ -239,4 +293,24 @@ private:
     std::function<juce::String(double)> knobValueFormatters[9];
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FXPedalComponent)
+};
+
+/** Paints the hardware that belongs behind a row of pedals. Call this from the
+    pedalboard/container paint() before painting its child pedals. */
+class FXPedalboardWiring
+{
+public:
+    struct CableStyle
+    {
+        juce::Colour sheath { 0xff17181b };
+        float thickness = 7.0f;
+        float sag = 18.0f;
+    };
+
+    static void drawCable(juce::Graphics&, const juce::Component& coordinateSpace,
+                          const FXPedalComponent& from, const FXPedalComponent& to,
+                          CableStyle style = {});
+    static void drawChain(juce::Graphics&, const juce::Component& coordinateSpace,
+                          const juce::Array<FXPedalComponent*>& pedals,
+                          CableStyle style = {});
 };

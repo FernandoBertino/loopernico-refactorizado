@@ -112,6 +112,50 @@ MainComponent::MainComponent()
     setLookAndFeel(&lnf);
     formatManager.registerBasicFormats();
 
+    const auto workingDirectory = juce::File::getCurrentWorkingDirectory();
+    const juce::File textureCandidates[] = {
+        juce::File(__FILE__).getParentDirectory()
+            .getSiblingFile("Assets").getChildFile("Textures/dark-tolex-v1.png"),
+        workingDirectory.getChildFile("Assets/Textures/dark-tolex-v1.png"),
+        workingDirectory.getChildFile("Loopernico Refactorizado/Assets/Textures/dark-tolex-v1.png"),
+        juce::File::getSpecialLocation(juce::File::currentExecutableFile)
+            .getParentDirectory().getChildFile("Assets/Textures/dark-tolex-v1.png")
+    };
+    for (const auto& candidate : textureCandidates)
+    {
+        if (candidate.existsAsFile())
+        {
+            rackSurfaceTexture = juce::ImageFileFormat::loadFrom(candidate);
+            if (rackSurfaceTexture.isValid())
+                break;
+        }
+    }
+
+    looperFxDivider.onDragBegin = [this]() { dividerStartFxHeight = fxSectionHeight; };
+    looperFxDivider.onDrag = [this](int delta)
+    {
+        const int available = getHeight() - 78 - 118 - 20;
+        const int maxFx = juce::jmax(180, available - controlSectionHeight - 180 - 24);
+        fxSectionHeight = juce::jlimit(180, maxFx, dividerStartFxHeight - delta);
+        resized();
+        repaint();
+    };
+    fxControlDivider.onDragBegin = [this]()
+    {
+        dividerStartFxHeight = fxSectionHeight;
+        dividerStartControlHeight = controlSectionHeight;
+    };
+    fxControlDivider.onDrag = [this](int delta)
+    {
+        const int combined = dividerStartFxHeight + dividerStartControlHeight;
+        fxSectionHeight = juce::jlimit(180, combined - 96, dividerStartFxHeight + delta);
+        controlSectionHeight = combined - fxSectionHeight;
+        resized();
+        repaint();
+    };
+    addAndMakeVisible(looperFxDivider);
+    addAndMakeVisible(fxControlDivider);
+
     trackViewport.setScrollBarsShown(true, false);
     trackViewport.setScrollBarThickness(7);
     trackViewport.setViewedComponent(&trackContainer, false);
@@ -207,6 +251,21 @@ MainComponent::MainComponent()
     addAndMakeVisible(btnExportTracks);
 
     setupFXPedals();
+    fxContainer.onPaint = [this](juce::Graphics& g)
+    {
+        juce::Array<FXPedalComponent*> chain;
+        for (int slot = 0; slot < kNumFxPedals; ++slot)
+        {
+            const int pedalIndex = fxOrder[(size_t) slot];
+            if (pedalIndex != draggingFxPedal && fxPedals[pedalIndex] != nullptr)
+                chain.add(fxPedals[pedalIndex].get());
+        }
+        FXPedalboardWiring::CableStyle style;
+        style.sheath = juce::Colour(0xff111216);
+        style.thickness = 7.5f;
+        style.sag = 22.0f;
+        FXPedalboardWiring::drawChain(g, fxContainer, chain, style);
+    };
 
     // MIDI
     midiDeviceSelector.setTextWhenNoChoicesAvailable("No MIDI Devices");
@@ -579,6 +638,9 @@ void MainComponent::setupFXPedals()
     fxPedals[0]->setKnobValueFormatter(2, formatMs);
 
     fxPedals[1]->configureExtendedKnobs("BPM", "MIX", "COLOR", "STYLE", "PATTERN", "MODO");
+    fxPedals[1]->knob1.setComponentID("beatBuddyKnob");
+    fxPedals[1]->knob2.setComponentID("beatBuddyKnob");
+    fxPedals[1]->knob3.setComponentID("beatBuddyKnob");
     cfg(fxPedals[1]->knob1, 60.0, 180.0, 112.0);
     cfg(fxPedals[1]->knob2, 0.0, 1.4, 0.78);
     cfg(fxPedals[1]->knob3, 0.0, 1.0, 0.5);
@@ -600,6 +662,8 @@ void MainComponent::setupFXPedals()
     styleRhythmInfoLabel(lblRhythmStyle,   "STYLE");
     styleRhythmInfoLabel(lblRhythmPattern, "PARTE");
     styleRhythmInfoLabel(lblRhythmMode,    "MODO");
+    for (auto* lbl : { &lblRhythmStyle, &lblRhythmPattern, &lblRhythmMode })
+        lbl->setColour(juce::Label::textColourId, juce::Colour(0xff82e6eb).withAlpha(0.90f));
     for (auto* lbl : { &lblRhythmStyle, &lblRhythmPattern, &lblRhythmMode, &lblRhythmBpmValue, &lblRhythmColorValue })
         fxPedals[1]->addAndMakeVisible(*lbl);
 
@@ -610,6 +674,8 @@ void MainComponent::setupFXPedals()
     rhythmStyleSelector.setJustificationType(juce::Justification::centredLeft);
     rhythmStyleSelector.setTextWhenNothingSelected("STYLE");
     rhythmStyleSelector.setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    rhythmStyleSelector.setComponentID("rhythmScreenCombo");
+    rhythmStyleSelector.setColour(juce::ComboBox::textColourId, juce::Colour(0xffdffcff));
     fxPedals[1]->addAndMakeVisible(rhythmStyleSelector);
 
     rhythmPatternSelector.clear(juce::dontSendNotification);
@@ -618,6 +684,8 @@ void MainComponent::setupFXPedals()
     rhythmPatternSelector.setSelectedId(1, juce::dontSendNotification);
     rhythmPatternSelector.setJustificationType(juce::Justification::centredLeft);
     rhythmPatternSelector.setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    rhythmPatternSelector.setComponentID("rhythmScreenCombo");
+    rhythmPatternSelector.setColour(juce::ComboBox::textColourId, juce::Colour(0xffdffcff));
     fxPedals[1]->addAndMakeVisible(rhythmPatternSelector);
 
     rhythmModeSelector.clear(juce::dontSendNotification);
@@ -626,9 +694,23 @@ void MainComponent::setupFXPedals()
     rhythmModeSelector.setSelectedId(1, juce::dontSendNotification);
     rhythmModeSelector.setJustificationType(juce::Justification::centredLeft);
     rhythmModeSelector.setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    rhythmModeSelector.setComponentID("rhythmScreenCombo");
+    rhythmModeSelector.setColour(juce::ComboBox::textColourId, juce::Colour(0xffdffcff));
     fxPedals[1]->addAndMakeVisible(rhythmModeSelector);
 
     fxPedals[1]->onBtn.onClick=[this](){ effectsChain.setRhythmEnabled(fxPedals[1]->onBtn.getToggleState()); };
+    fxPedals[1]->onSecondaryFootswitch=[this](){ effectsChain.queueRhythmSectionChange(); };
+    fxPedals[1]->onTap=[this]()
+    {
+        const juce::int64 now = juce::Time::currentTimeMillis();
+        const juce::int64 elapsed = now - lastRhythmTapMs;
+        lastRhythmTapMs = now;
+        if (elapsed >= 333 && elapsed <= 1000)
+        {
+            const double bpm = juce::jlimit(60.0, 180.0, 60000.0 / (double) elapsed);
+            fxPedals[1]->knob1.setValue(bpm, juce::sendNotificationSync);
+        }
+    };
     fxPedals[1]->knob1.onValueChange=[this](){ effectsChain.setRhythmTempo((float)fxPedals[1]->knob1.getValue()); updateRhythmBoxReadouts(); };
     fxPedals[1]->knob2.onValueChange=[this](){ effectsChain.setRhythmLevel((float)fxPedals[1]->knob2.getValue()); updateRhythmBoxReadouts(); };
     fxPedals[1]->knob3.onValueChange=[this](){ effectsChain.setRhythmTone((float)fxPedals[1]->knob3.getValue()); updateRhythmBoxReadouts(); };
@@ -654,6 +736,12 @@ void MainComponent::setupFXPedals()
     updateRhythmBoxReadouts();
 
     fxPedals[2]->configureExtendedKnobs("MIX", "GAIN", "COMP", "ACTION", "TAIL", "EQ");
+    fxPedals[2]->knob1.setComponentID("dedaloJetKnob");
+    fxPedals[2]->knob2.setComponentID("dedaloJetKnob");
+    fxPedals[2]->knob3.setComponentID("dedaloJetKnob");
+    fxPedals[2]->knob4.setComponentID("dedaloJetKnob");
+    fxPedals[2]->knob5.setComponentID("dedaloJetKnob");
+    fxPedals[2]->knob6.setComponentID("dedaloJetKnob");
     cfg(fxPedals[2]->knob1,0.0,1.0,0.65);
     cfg(fxPedals[2]->knob2,0.5,2.5,1.0);
     cfg(fxPedals[2]->knob3,-36.0,-6.0,-18.0);
@@ -717,12 +805,18 @@ void MainComponent::setupFXPedals()
     fxPedals[5]->setKnobValueFormatter(5, formatPercent01);
 
     cfg(fxPedals[6]->knob1,0,1,0.4); cfg(fxPedals[6]->knob2,0.05,1,0.4); cfg(fxPedals[6]->knob3,0,1,0.7);
+    fxPedals[6]->knob1.setComponentID("pampaFuzzKnob");
+    fxPedals[6]->knob2.setComponentID("pampaFuzzKnob");
+    fxPedals[6]->knob3.setComponentID("pampaFuzzKnob");
     fxPedals[6]->onBtn.onClick=[this](){ effectsChain.setFuzzEnabled(fxPedals[6]->onBtn.getToggleState()); };
     fxPedals[6]->knob1.onValueChange=[this](){ effectsChain.setFuzz((float)fxPedals[6]->knob1.getValue()); };
     fxPedals[6]->knob2.onValueChange=[this](){ effectsChain.setFuzzTone((float)fxPedals[6]->knob2.getValue()); };
     fxPedals[6]->knob3.onValueChange=[this](){ effectsChain.setFuzzLevel((float)fxPedals[6]->knob3.getValue()); };
 
     cfg(fxPedals[7]->knob1,0,1,0.5); cfg(fxPedals[7]->knob2,0.05,1,0.6); cfg(fxPedals[7]->knob3,0,1,0.8);
+    fxPedals[7]->knob1.setComponentID("mirrorDriveKnob");
+    fxPedals[7]->knob2.setComponentID("mirrorDriveKnob");
+    fxPedals[7]->knob3.setComponentID("mirrorDriveKnob");
     fxPedals[7]->onBtn.onClick=[this](){ effectsChain.setDriveEnabled(fxPedals[7]->onBtn.getToggleState()); };
     fxPedals[7]->knob1.onValueChange=[this](){ effectsChain.setDrive((float)fxPedals[7]->knob1.getValue()); };
     fxPedals[7]->knob2.onValueChange=[this](){ effectsChain.setDriveTone((float)fxPedals[7]->knob2.getValue()); };
@@ -784,10 +878,38 @@ int MainComponent::findFxPedalIndex(const FXPedalComponent& pedal) const
     return -1;
 }
 
+int MainComponent::fxPedalBodyWidth(int pedalIndex) const
+{
+    if (pedalIndex == 1) return 225;
+    if (pedalIndex == 2) return 245;
+    if (pedalIndex == 6) return 270;
+    if (pedalIndex == 7) return 225;
+    return 156;
+}
+
+int MainComponent::fxPedalPitch(int pedalIndex) const
+{
+    return fxPedalBodyWidth(pedalIndex) + 28;
+}
+
+int MainComponent::fxSlotStartX(int slot) const
+{
+    int x = 0;
+    for (int i = 0; i < juce::jlimit(0, kNumFxPedals, slot); ++i)
+        x += fxPedalPitch(fxOrder[(size_t) i]);
+    return x;
+}
+
 int MainComponent::fxSlotForX(int x) const
 {
-    constexpr int pedalW = 164;
-    return juce::jlimit(0, kNumFxPedals - 1, x / pedalW);
+    for (int slot = 0; slot < kNumFxPedals; ++slot)
+    {
+        const int start = fxSlotStartX(slot);
+        const int end = start + fxPedalPitch(fxOrder[(size_t) slot]);
+        if (x < (start + end) / 2)
+            return slot;
+    }
+    return kNumFxPedals - 1;
 }
 
 void MainComponent::moveFxPedalToSlot(int pedalIndex, int targetSlot)
@@ -1585,6 +1707,8 @@ void MainComponent::saveMidiConfiguration() const
 {
     juce::ValueTree root("LOOPERNICO_MIDI_CONFIG");
     root.setProperty("listenAllInputs", midiListenAllInputs, nullptr);
+    root.setProperty("uiFxSectionHeight", fxSectionHeight, nullptr);
+    root.setProperty("uiControlSectionHeight", controlSectionHeight, nullptr);
     root.setProperty("inputIdentifier", (!midiListenAllInputs && lastMidiInputIndex >= 0
         && lastMidiInputIndex < juce::MidiInput::getAvailableDevices().size())
         ? juce::MidiInput::getAvailableDevices().getReference(lastMidiInputIndex).identifier : juce::String(), nullptr);
@@ -1621,6 +1745,9 @@ void MainComponent::loadMidiConfiguration()
     const auto root = juce::ValueTree::fromXml(*xml);
     if (!root.isValid() || !root.hasType("LOOPERNICO_MIDI_CONFIG"))
         return;
+
+    fxSectionHeight = juce::jlimit(180, 720, (int) root.getProperty("uiFxSectionHeight", 332));
+    controlSectionHeight = juce::jlimit(96, 420, (int) root.getProperty("uiControlSectionHeight", 110));
 
     for (int i = 0; i < root.getNumChildren(); ++i)
     {
@@ -1779,7 +1906,7 @@ void MainComponent::updateRhythmBoxReadouts()
 
     lblRhythmColorValue.setText(toneText, juce::dontSendNotification);
     lblRhythmColorValue.setJustificationType(juce::Justification::centred);
-    lblRhythmColorValue.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.85f));
+    lblRhythmColorValue.setColour(juce::Label::textColourId, juce::Colour(0xffffd77a).withAlpha(0.92f));
     lblRhythmColorValue.setFont(juce::Font(juce::FontOptions(8.5f).withStyle("Bold")));
 }
 
@@ -2012,8 +2139,8 @@ void MainComponent::paint(juce::Graphics& g)
     const int gap = 12;
     const int hH = 78;
     const int sH = 118;
-    const int fxH = 332;
-    const int controlH = 110;
+    const int fxH = fxSectionHeight;
+    const int controlH = controlSectionHeight;
     const int fullX = outer;
     const int fullW = W - outer * 2;
     const int mY = hH + outer;
@@ -2027,6 +2154,11 @@ void MainComponent::paint(juce::Graphics& g)
         LnfC::BG.darker(0.12f),   0.0f, (float)getHeight(), false);
     g.setGradientFill(bgGrad);
     g.fillRect(0, 0, W, getHeight());
+    if (rackSurfaceTexture.isValid())
+    {
+        g.setTiledImageFill(rackSurfaceTexture, 0, 0, 0.22f);
+        g.fillRect(0, 0, W, getHeight());
+    }
     drawFineRackTexture(g, juce::Rectangle<float>(0.0f, 0.0f, (float)W, (float)getHeight()), 0.45f);
 
     g.setColour(juce::Colours::black.withAlpha(0.62f));
@@ -2051,18 +2183,47 @@ void MainComponent::paint(juce::Graphics& g)
     drawScrew(g, 22.0f, (float)hH * 0.5f, 6.0f);
     drawScrew(g, (float)W - 22.0f, (float)hH * 0.5f, 6.0f);
 
-    constexpr int titleAreaLeft = 22;
-    constexpr int titleAreaRight = 252;
+    constexpr int titleAreaLeft = 28;
+    constexpr int titleAreaRight = 244;
     const int titleAreaWidth = titleAreaRight - titleAreaLeft;
-    g.setFont(juce::Font(juce::FontOptions(21.0f).withStyle("Bold")));
+    g.setFont(juce::Font(juce::FontOptions(20.0f).withStyle("Bold")));
     g.setColour(juce::Colours::black.withAlpha(0.75f));
-    g.drawText("LOOPERNICO", titleAreaLeft + 1, 9, titleAreaWidth, 26, juce::Justification::centred);
+    g.drawText("LOOPERNICO", titleAreaLeft + 1, 12, 145, 26, juce::Justification::centredLeft);
     g.setColour(LnfC::TextHi);
-    g.drawText("LOOPERNICO", titleAreaLeft, 8, titleAreaWidth, 26, juce::Justification::centred);
+    g.drawText("LOOPERNICO", titleAreaLeft, 11, 145, 26, juce::Justification::centredLeft);
+    g.setColour(LnfC::RecRed);
+    g.drawText("PRO", titleAreaLeft + 142, 11, 48, 26, juce::Justification::centredLeft);
+    g.setColour(LnfC::TextDim.withAlpha(0.72f));
+    g.setFont(juce::Font(juce::FontOptions(9.5f).withStyle("Bold")));
+    g.drawText("MULTI-TRACK LOOPER", titleAreaLeft, 37, titleAreaWidth, 16,
+               juce::Justification::centredLeft);
 
     LoopernicoUi::drawPanel(g, { fullX, mY,       fullW, trackH },   "LOOPER",            LnfC::Accent);
     LoopernicoUi::drawPanel(g, { fullX, fxY,      fullW, fxH },      "CADENA DE EFECTOS", LnfC::OvdAmber);
     LoopernicoUi::drawPanel(g, { fullX, controlY, fullW, controlH }, "CONTROL GLOBAL",    LnfC::Accent);
+
+    const float rulerLeft = (float) fullX + 190.0f;
+    const float rulerRight = (float) fullX + (float) fullW - 16.0f;
+    const float rulerY = (float) mY + 37.0f;
+    g.setColour(juce::Colours::black.withAlpha(0.78f));
+    g.fillRect(rulerLeft, (float) mY + 27.0f, rulerRight - rulerLeft, 20.0f);
+    g.setColour(juce::Colours::white.withAlpha(0.14f));
+    g.drawHorizontalLine((int) rulerY, rulerLeft, rulerRight);
+    for (int beat = 0; beat <= 32; ++beat)
+    {
+        const float x = rulerLeft + (rulerRight - rulerLeft) * (float) beat / 32.0f;
+        const bool bar = beat % 8 == 0;
+        const bool half = beat % 4 == 0;
+        g.setColour(juce::Colours::white.withAlpha(bar ? 0.55f : half ? 0.25f : 0.12f));
+        g.drawVerticalLine((int) x, rulerY - (bar ? 8.0f : half ? 5.0f : 3.0f), rulerY + 1.0f);
+        if (bar && beat < 32)
+        {
+            g.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
+            g.setColour(LnfC::TextHi.withAlpha(0.85f));
+            g.drawText(juce::String(beat / 8 + 1), (int) x + 3, mY + 26, 24, 11,
+                       juce::Justification::centredLeft);
+        }
+    }
 
     const int loopGroupW = 270;
     const int loopGroupX = fullX + fullW - 18 - loopGroupW;
@@ -2116,8 +2277,11 @@ void MainComponent::resized()
     const int gap = 12;
     const int hH = 78;
     const int sH = 118;
-    const int fxH = 332;
-    const int controlH = 110;
+    const int maxCombined = juce::jmax(276, H - hH - sH - outer * 2 - 180 - gap * 2);
+    if (fxSectionHeight + controlSectionHeight > maxCombined)
+        fxSectionHeight = juce::jmax(180, maxCombined - controlSectionHeight);
+    const int fxH = fxSectionHeight;
+    const int controlH = controlSectionHeight;
     const int fullX = outer;
     const int fullW = W - outer * 2;
     const int mY = hH + outer;
@@ -2125,6 +2289,11 @@ void MainComponent::resized()
     const int trackH = mH - fxH - controlH - gap * 2;
     const int fxY = mY + trackH + gap;
     const int controlY = fxY + fxH + gap;
+
+    looperFxDivider.setBounds(fullX + 8, mY + trackH, fullW - 16, gap);
+    fxControlDivider.setBounds(fullX + 8, fxY + fxH, fullW - 16, gap);
+    looperFxDivider.toFront(false);
+    fxControlDivider.toFront(false);
 
     struct BtnLayout { juce::TextButton* btn; int w; };
     BtnLayout btns[] = {
@@ -2143,7 +2312,7 @@ void MainComponent::resized()
     btnExportMix.setBounds(W - 258, 16, 112, 24);
     btnExportTracks.setBounds(W - 138, 16, 112, 24);
 
-    auto vpRect = juce::Rectangle<int>(fullX + 4, mY + 30, fullW - 8, trackH - 34);
+    auto vpRect = juce::Rectangle<int>(fullX + 4, mY + 48, fullW - 8, trackH - 52);
     trackViewport.setBounds(vpRect);
 
     const int kTH = 116;
@@ -2168,29 +2337,32 @@ void MainComponent::resized()
     lblVst3Status.setBounds(fullX + 190, vstHeaderY + 2, fullW - 550, 18);
     fxViewport.setBounds(fullX + 8, fxPanY, fxPanW - 4, fxPanH - 16);
 
-    const int pedalW = 164;
-    fxContainer.setSize(kNumFxPedals * pedalW + 10, fxViewport.getHeight());
+    int totalPedalWidth = 10;
+    for (int slot = 0; slot < kNumFxPedals; ++slot)
+        totalPedalWidth += fxPedalPitch(fxOrder[(size_t) slot]);
+    fxContainer.setSize(totalPedalWidth, fxViewport.getHeight());
     for (int slot = 0; slot < kNumFxPedals; ++slot)
     {
         const int pedalIndex = fxOrder[(size_t) slot];
         if (pedalIndex == draggingFxPedal)
             continue;
 
-        fxPedals[pedalIndex]->setBounds(slot * pedalW + 5, 4, pedalW - 8, fxContainer.getHeight() - 8);
+        fxPedals[pedalIndex]->setBounds(fxSlotStartX(slot) + 14, 4,
+                                        fxPedalBodyWidth(pedalIndex), fxContainer.getHeight() - 8);
     }
 
     auto pedalArea = fxPedals[1].get();
     auto k1 = pedalArea->knob1.getBounds();
     auto k3 = pedalArea->knob3.getBounds();
-    auto styleBox = pedalArea->knob4.getBounds().reduced(2, 10);
-    auto patternBox = pedalArea->knob5.getBounds().reduced(2, 10);
-    auto modeBox = pedalArea->knob6.getBounds().reduced(2, 10);
+    auto styleBox = pedalArea->knob4.getBounds();
+    auto patternBox = pedalArea->knob5.getBounds();
+    auto modeBox = pedalArea->knob6.getBounds();
 
-    lblRhythmBpmValue.setBounds(k1.getX(), k1.getY() - 2, k1.getWidth(), 14);
-    lblRhythmColorValue.setBounds(k3.getX(), k3.getY() - 2, k3.getWidth(), 14);
-    lblRhythmStyle.setBounds(styleBox.getX(), styleBox.getY() - 12, styleBox.getWidth(), 10);
-    lblRhythmPattern.setBounds(patternBox.getX(), patternBox.getY() - 12, patternBox.getWidth(), 10);
-    lblRhythmMode.setBounds(modeBox.getX(), modeBox.getY() - 12, modeBox.getWidth(), 10);
+    lblRhythmBpmValue.setBounds(k1.getX(), k1.getBottom() - 1, k1.getWidth(), 14);
+    lblRhythmColorValue.setBounds(k3.getX(), k3.getBottom() - 1, k3.getWidth(), 14);
+    lblRhythmStyle.setBounds(0, 0, 0, 0);
+    lblRhythmPattern.setBounds(0, 0, 0, 0);
+    lblRhythmMode.setBounds(0, 0, 0, 0);
     rhythmStyleSelector.setBounds(styleBox);
     rhythmPatternSelector.setBounds(patternBox);
     rhythmModeSelector.setBounds(modeBox);

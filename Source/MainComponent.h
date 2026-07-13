@@ -29,7 +29,65 @@ public:
 private:
     static constexpr int kNumFxPedals = 13;
 
+    class SectionDragHandle final : public juce::Component
+    {
+    public:
+        SectionDragHandle()
+        {
+            setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+            setRepaintsOnMouseActivity(true);
+        }
+
+        std::function<void(int)> onDrag;
+        std::function<void()> onDragBegin;
+
+        void mouseDown(const juce::MouseEvent& e) override
+        {
+            dragOriginY = e.getScreenY();
+            if (onDragBegin != nullptr)
+                onDragBegin();
+        }
+        void mouseDrag(const juce::MouseEvent& e) override
+        {
+            if (onDrag != nullptr)
+                onDrag(e.getScreenY() - dragOriginY);
+        }
+
+        void paint(juce::Graphics& g) override
+        {
+            auto b = getLocalBounds().toFloat();
+            const bool hot = isMouseOverOrDragging();
+            g.setColour(juce::Colours::black.withAlpha(0.72f));
+            g.fillRoundedRectangle(b.reduced(3.0f, 2.0f), 3.0f);
+            g.setColour((hot ? LnfC::Accent : LnfC::Border).withAlpha(hot ? 0.92f : 0.48f));
+            g.drawHorizontalLine(getHeight() / 2, 18.0f, (float) getWidth() - 18.0f);
+            g.setColour(juce::Colours::white.withAlpha(hot ? 0.32f : 0.10f));
+            g.drawHorizontalLine(getHeight() / 2 - 1, 18.0f, (float) getWidth() - 18.0f);
+        }
+
+    private:
+        int dragOriginY = 0;
+    };
+
+    class FXChainCanvas final : public juce::Component
+    {
+    public:
+        std::function<void(juce::Graphics&)> onPaint;
+        void paint(juce::Graphics& g) override
+        {
+            auto b = getLocalBounds().toFloat();
+            juce::ColourGradient floor(juce::Colour(0xff111315), 0.0f, 0.0f,
+                                       juce::Colour(0xff050607), 0.0f, b.getBottom(), false);
+            g.setGradientFill(floor);
+            g.fillRect(b);
+            LoopernicoUi::drawFineRackTexture(g, b, 0.40f);
+            if (onPaint != nullptr)
+                onPaint(g);
+        }
+    };
+
     LoopernicoLAF lnf;
+    juce::Image rackSurfaceTexture;
 
     LooperEngine             looper;
     MidiController           midiController;
@@ -47,7 +105,7 @@ private:
     std::vector<std::unique_ptr<TrackComponent>> visualTracks;
 
     juce::Viewport    fxViewport;
-    juce::Component   fxContainer;
+    FXChainCanvas     fxContainer;
     std::unique_ptr<FXPedalComponent> fxPedals[kNumFxPedals];
     std::array<int, kNumFxPedals> fxOrder{};
     int draggingFxPedal = -1;
@@ -71,6 +129,7 @@ private:
     juce::ComboBox    rhythmCountInSoundSelector;
     juce::TextButton  btnRhythmNextSection{"SIGUIENTE PARTE"};
     juce::TextButton  btnRhythmCountInToggle{"PRECONTEO"};
+    juce::int64 lastRhythmTapMs = 0;
 
     juce::ComboBox   midiDeviceSelector, midiActionSelector, midiMessageTypeSelector;
     juce::Slider     midiNumberSelector;
@@ -101,6 +160,13 @@ private:
     std::atomic<float> masterVolume { 0.85f };
     std::atomic<bool> outputMono { true };
 
+    SectionDragHandle looperFxDivider;
+    SectionDragHandle fxControlDivider;
+    int fxSectionHeight = 332;
+    int controlSectionHeight = 110;
+    int dividerStartFxHeight = 332;
+    int dividerStartControlHeight = 110;
+
     std::atomic<float> inputVU   { 0.0f };
     std::atomic<float> outputVUL { 0.0f };
     std::atomic<float> outputVUR { 0.0f };
@@ -116,6 +182,9 @@ private:
     void updateFxPedalDrag(FXPedalComponent& pedal, const juce::MouseEvent& e);
     void endFxPedalDrag(FXPedalComponent& pedal, const juce::MouseEvent& e);
     int findFxPedalIndex(const FXPedalComponent& pedal) const;
+    int fxPedalBodyWidth(int pedalIndex) const;
+    int fxPedalPitch(int pedalIndex) const;
+    int fxSlotStartX(int slot) const;
     int fxSlotForX(int x) const;
     void moveFxPedalToSlot(int pedalIndex, int targetSlot);
     void updateOutputModeButton();

@@ -29,6 +29,9 @@ void MasterVUMeter::drawBar(juce::Graphics& g, juce::Rectangle<float> bar, float
         if (lit)
         {
             bool isTop = (i == topSeg);
+            g.setColour(col.withAlpha(isTop ? 0.22f : 0.07f));
+            g.fillRoundedRectangle(bar.getX() - 1.0f, top - 0.8f,
+                                   bar.getWidth() + 2.0f, segH + 0.5f, 2.0f);
             g.setColour(isTop ? col.brighter(0.5f) : col);
             g.fillRoundedRectangle(bar.getX() + 1.5f, top,
                                    bar.getWidth() - 3.0f, segH - 1.5f, 1.2f);
@@ -113,6 +116,9 @@ void VUMeter::paint(juce::Graphics& g)
         if (lit)
         {
             bool isTop = (i == topSeg);
+            g.setColour(col.withAlpha(isTop ? 0.22f : 0.065f));
+            g.fillRoundedRectangle(b.getX() - 0.5f, top - 0.6f,
+                                   b.getWidth() + 1.0f, segH + 0.3f, 2.0f);
             g.setColour(isTop ? col.brighter(0.4f) : col);
             g.fillRoundedRectangle(b.getX() + 1.5f, top,
                                    b.getWidth() - 3.0f, segH - 1.8f, 1.5f);
@@ -350,13 +356,35 @@ void TrackComponent::paint(juce::Graphics& g)
         && thumbnail->getNumChannels() > 0
         && thumbnail->getTotalLength() > 0.0;
 
-    g.setColour(juce::Colour(0xff040506));
-    g.fillRect((int)waveArea.getX(), (int)waveArea.getY(), (int)waveArea.getWidth(), (int)waveArea.getHeight());
+    g.setColour(juce::Colours::black.withAlpha(0.72f));
+    g.fillRoundedRectangle(b.reduced(2.0f, 3.0f).translated(0.0f, 2.0f), 6.0f);
+    juce::ColourGradient leftPanel(juce::Colour(0xff17191c), leftArea.getX(), leftArea.getY(),
+                                   juce::Colour(0xff090a0c), leftArea.getRight(), leftArea.getBottom(), true);
+    g.setGradientFill(leftPanel);
+    g.fillRoundedRectangle(leftArea.reduced(3.0f, 4.0f), 5.0f);
+    g.setColour(juce::Colours::white.withAlpha(0.045f));
+    g.drawRoundedRectangle(leftArea.reduced(3.5f, 4.5f), 5.0f, 1.0f);
+
+    auto wavePanel = waveArea.reduced(3.0f, 5.0f);
+    juce::ColourGradient waveWell(juce::Colour(0xff080a0b), wavePanel.getX(), wavePanel.getY(),
+                                  juce::Colour(0xff020304), wavePanel.getX(), wavePanel.getBottom(), false);
+    g.setGradientFill(waveWell);
+    g.fillRoundedRectangle(wavePanel, 4.0f);
+    g.setColour(tColor.withAlpha(hasWaveform ? 0.22f : 0.11f));
+    g.drawRoundedRectangle(wavePanel.reduced(0.5f), 4.0f, 1.0f);
+    g.setColour(juce::Colours::white.withAlpha(0.035f));
+    g.drawHorizontalLine((int) wavePanel.getCentreY(), wavePanel.getX() + 6.0f, wavePanel.getRight() - 6.0f);
+    for (int tick = 1; tick < 8; ++tick)
+    {
+        const float x = wavePanel.getX() + wavePanel.getWidth() * (float) tick / 8.0f;
+        g.setColour(juce::Colours::white.withAlpha(tick % 2 == 0 ? 0.055f : 0.028f));
+        g.drawVerticalLine((int) x, wavePanel.getY() + 5.0f, wavePanel.getBottom() - 5.0f);
+    }
     if (hasWaveform)
     {
         g.setColour(tint);
-        g.fillRect((int)waveArea.getX(), (int)waveArea.getY(), (int)waveArea.getWidth(), (int)waveArea.getHeight());
-        drawFineRackTexture(g, waveArea, 0.16f);
+        g.fillRoundedRectangle(wavePanel, 4.0f);
+        drawFineRackTexture(g, wavePanel, 0.16f);
     }
 
     juce::Colour stripC = isRec ? LnfC::RecRed : isOvd ? LnfC::OvdAmber : tColor;
@@ -383,6 +411,11 @@ void TrackComponent::paint(juce::Graphics& g)
     g.setFont(juce::Font(juce::FontOptions(13.0f).withStyle("Bold")));
     g.drawText(stateStr, 42, 14, 94, 16, juce::Justification::centredLeft);
 
+    const float stateLedX = 132.0f;
+    const float stateLedY = 22.0f;
+    const bool stateActive = isRec || isOvd || isPlay;
+    drawLedLens(g, stateLedX, stateLedY, 3.6f, stateC, stateActive);
+
     int tMin = (int)(timeSecs / 60);
     float tSec = timeSecs - tMin * 60;
     g.setColour(LnfC::TextHi.withAlpha(0.82f));
@@ -408,7 +441,7 @@ void TrackComponent::paint(juce::Graphics& g)
     int wy = (int)waveArea.getY();
     int ww = (int)waveArea.getWidth();
     int wh = (int)waveArea.getHeight();
-    auto waveRect = juce::Rectangle<int>(wx, wy, ww, wh);
+    auto waveRect = juce::Rectangle<int>(wx, wy, ww, wh).reduced(7, 8);
 
     auto waveContent = waveRect;
 
@@ -560,20 +593,209 @@ void FXPedalComponent::setDragHintVisible(bool visible)
     repaint();
 }
 
+juce::Point<float> FXPedalComponent::getJackCentre(JackSide side) const noexcept
+{
+    return { side == JackSide::input ? (float)getWidth() - 4.5f : 4.5f,
+             (float)getHeight() * 0.38f };
+}
+
+namespace
+{
+juce::Image loadPedalTexture(const juce::String& fileName)
+{
+    const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
+    const juce::File candidates[] = {
+        sourceDirectory.getSiblingFile("Assets").getChildFile(fileName),
+        juce::File::getCurrentWorkingDirectory().getChildFile("Assets").getChildFile(fileName),
+        juce::File::getCurrentWorkingDirectory()
+            .getChildFile("Loopernico Refactorizado/Assets").getChildFile(fileName)
+    };
+    for (const auto& file : candidates)
+        if (file.existsAsFile())
+            if (auto image = juce::ImageFileFormat::loadFrom(file); image.isValid())
+                return image;
+    return {};
+}
+
+const juce::Image& getPedalEnamelTexture(const juce::String& name)
+{
+    static const auto noiseGate = loadPedalTexture("Pedals/noise-gate-face-v1.png");
+    static const auto pampaFuzz = loadPedalTexture("Pedals/pampa-fuzz-face-v3.png");
+    static const auto mirrorDrive = loadPedalTexture("Pedals/mirror-drive-face-v1.png");
+    static const auto dedaloJet = loadPedalTexture("Pedals/dedalo-jet-compressor-face-v3.png");
+    static const auto neutral = loadPedalTexture("Textures/pedal-enamel-neutral-v1.png");
+    static const auto silver  = loadPedalTexture("Textures/pedal-brushed-silver-v1.png");
+    static const auto black   = loadPedalTexture("Textures/pedal-black-powder-v1.png");
+    static const auto lacquer = loadPedalTexture("Textures/pedal-blue-lacquer-v1.png");
+
+    if (name.containsIgnoreCase("NOISE GATE"))
+        return noiseGate;
+    if (name == "RHYTHM BOX")
+        return black;
+    if (name == "FUZZ")
+        return pampaFuzz;
+    if (name == "OVERDRIVE")
+        return mirrorDrive;
+    if (name == "COMPRESSOR")
+        return dedaloJet;
+    if (name.containsIgnoreCase("COMPRESSOR") || name.containsIgnoreCase("OUTPUT EQ"))
+        return silver;
+    if (name.containsIgnoreCase("FUZZ") || name.containsIgnoreCase("DELAY"))
+        return black;
+    if (name.containsIgnoreCase("CHORUS") || name.containsIgnoreCase("TREMOLO")
+        || name.containsIgnoreCase("REVERB") || name.containsIgnoreCase("SUSTAIN"))
+        return lacquer;
+    return neutral;
+}
+
+juce::Rectangle<int> getPedalTextureCrop(const juce::String& name, const juce::Image& image)
+{
+    const int w = image.getWidth();
+    const int h = image.getHeight();
+    if (name.containsIgnoreCase("NOISE GATE"))
+        return { juce::roundToInt(w * 0.25f), juce::roundToInt(h * 0.075f),
+                 juce::roundToInt(w * 0.50f), juce::roundToInt(h * 0.85f) };
+    if (name == "RHYTHM BOX")
+        return { juce::roundToInt(w * 0.08f), juce::roundToInt(h * 0.04f),
+                 juce::roundToInt(w * 0.84f), juce::roundToInt(h * 0.92f) };
+    if (name == "FUZZ")
+        return { juce::roundToInt(w * 0.065f), juce::roundToInt(h * 0.195f),
+                 juce::roundToInt(w * 0.87f), juce::roundToInt(h * 0.665f) };
+    if (name == "OVERDRIVE")
+        return { juce::roundToInt(w * 0.035f), juce::roundToInt(h * 0.02f),
+                 juce::roundToInt(w * 0.93f), juce::roundToInt(h * 0.95f) };
+    if (name == "COMPRESSOR")
+        return { juce::roundToInt(w * 0.015f), juce::roundToInt(h * 0.015f),
+                 juce::roundToInt(w * 0.97f), juce::roundToInt(h * 0.97f) };
+    if (name.containsIgnoreCase("COMPRESSOR") || name.containsIgnoreCase("OUTPUT EQ"))
+        return { juce::roundToInt(w * 0.22f), juce::roundToInt(h * 0.045f),
+                 juce::roundToInt(w * 0.56f), juce::roundToInt(h * 0.91f) };
+    if (name.containsIgnoreCase("FUZZ") || name.containsIgnoreCase("DELAY"))
+        return { juce::roundToInt(w * 0.10f), juce::roundToInt(h * 0.07f),
+                 juce::roundToInt(w * 0.80f), juce::roundToInt(h * 0.86f) };
+    if (name.containsIgnoreCase("CHORUS") || name.containsIgnoreCase("TREMOLO")
+        || name.containsIgnoreCase("REVERB") || name.containsIgnoreCase("SUSTAIN"))
+        return { juce::roundToInt(w * 0.13f), juce::roundToInt(h * 0.055f),
+                 juce::roundToInt(w * 0.74f), juce::roundToInt(h * 0.89f) };
+    return image.getBounds().reduced(8);
+}
+
+float getPedalTextureOpacity(const juce::String& name)
+{
+    if (name == "FUZZ")
+        return 0.96f;
+    if (name == "OVERDRIVE")
+        return 0.97f;
+    if (name == "COMPRESSOR")
+        return 0.98f;
+    if (name == "RHYTHM BOX")
+        return 0.82f;
+    return name.containsIgnoreCase("NOISE GATE") ? 0.82f : 0.24f;
+}
+
+void drawCablePlug(juce::Graphics& g, juce::Point<float> p, float direction)
+{
+    g.setColour(juce::Colours::black.withAlpha(0.62f));
+    g.fillRoundedRectangle(p.x - 13.0f * direction - (direction < 0 ? 10.0f : 0.0f),
+                           p.y - 5.5f, 23.0f, 11.0f, 4.0f);
+    juce::Rectangle<float> sleeve(direction > 0 ? p.x : p.x - 12.0f, p.y - 4.0f, 12.0f, 8.0f);
+    juce::ColourGradient metal(juce::Colour(0xffd5d1c6), sleeve.getX(), sleeve.getY(),
+                               juce::Colour(0xff494a4e), sleeve.getX(), sleeve.getBottom(), false);
+    g.setGradientFill(metal);
+    g.fillRoundedRectangle(sleeve, 2.0f);
+    g.setColour(juce::Colours::white.withAlpha(0.35f));
+    g.drawLine(sleeve.getX(), sleeve.getY() + 1.0f, sleeve.getRight(), sleeve.getY() + 1.0f, 0.7f);
+}
+}
+
+void FXPedalboardWiring::drawCable(juce::Graphics& g, const juce::Component& coordinateSpace,
+                                   const FXPedalComponent& from, const FXPedalComponent& to,
+                                   CableStyle style)
+{
+    auto a = coordinateSpace.getLocalPoint(&from, from.getJackCentre(FXPedalComponent::JackSide::input));
+    auto b = coordinateSpace.getLocalPoint(&to, to.getJackCentre(FXPedalComponent::JackSide::output));
+    if (a.x > b.x) std::swap(a, b);
+
+    const float dx = juce::jmax(18.0f, (b.x - a.x) * 0.36f);
+    juce::Path cable;
+    cable.startNewSubPath(a);
+    cable.cubicTo(a.x + dx, a.y + style.sag, b.x - dx, b.y + style.sag, b.x, b.y);
+    auto cableShadow = cable;
+    cableShadow.applyTransform(juce::AffineTransform::translation(0.0f, 4.0f));
+    g.setColour(juce::Colours::black.withAlpha(0.62f));
+    g.strokePath(cableShadow, juce::PathStrokeType(style.thickness + 6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour(juce::Colours::black.withAlpha(0.82f));
+    g.strokePath(cable, juce::PathStrokeType(style.thickness + 3.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour(style.sheath);
+    g.strokePath(cable, juce::PathStrokeType(style.thickness, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour(juce::Colours::white.withAlpha(0.075f));
+    g.strokePath(cable, juce::PathStrokeType(1.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    drawCablePlug(g, a, -1.0f);
+    drawCablePlug(g, b, 1.0f);
+}
+
+void FXPedalboardWiring::drawChain(juce::Graphics& g, const juce::Component& coordinateSpace,
+                                   const juce::Array<FXPedalComponent*>& pedals, CableStyle style)
+{
+    for (int i = 1; i < pedals.size(); ++i)
+        if (pedals[i - 1] != nullptr && pedals[i] != nullptr)
+            drawCable(g, coordinateSpace, *pedals[i - 1], *pedals[i], style);
+}
+
 // The pedal rendering remains intentionally detailed because it defines the hardware-like identity of the UI.
 void FXPedalComponent::paint(juce::Graphics& g)
 {
     auto b = getLocalBounds().toFloat().reduced(3.0f);
+    const bool wideFuzzArtwork = pedalName == "FUZZ";
+    const bool mirrorDriveArtwork = pedalName == "OVERDRIVE";
+    const bool dedaloJetArtwork = pedalName == "COMPRESSOR";
+    const bool beatBuddyArtwork = pedalName == "RHYTHM BOX";
+    const bool customArtwork = wideFuzzArtwork || mirrorDriveArtwork || dedaloJetArtwork || beatBuddyArtwork;
+    if (customArtwork)
+    {
+        const float aspect = wideFuzzArtwork ? 1.30f : (dedaloJetArtwork ? 1.23f : (beatBuddyArtwork ? 0.88f : 1.08f));
+        const float bodyHeight = juce::jmin(b.getHeight(), b.getWidth() / aspect);
+        b = juce::Rectangle<float>(b.getX(), b.getCentreY() - bodyHeight * 0.5f,
+                                   b.getWidth(), bodyHeight);
+    }
     auto originalBody = b;
 
-    g.setColour(juce::Colours::black.withAlpha(0.55f));
-    g.fillRoundedRectangle(b.translated(0.0f, 2.0f).expanded(1.0f), 10.0f);
+    g.setColour(juce::Colours::black.withAlpha(0.20f));
+    g.fillRoundedRectangle(b.translated(0.0f, 7.0f).expanded(4.0f, 2.0f), 12.0f);
+    g.setColour(juce::Colours::black.withAlpha(0.62f));
+    g.fillRoundedRectangle(b.translated(0.0f, 3.0f).expanded(1.5f), 10.0f);
 
+    const auto enamel = pedalCol.withMultipliedSaturation(0.68f).darker(0.08f);
     juce::ColourGradient bodyGrad(
-        pedalCol.brighter(0.12f), b.getX(), b.getY(),
-        pedalCol.darker(0.50f),   b.getX(), b.getBottom(), false);
+        enamel.brighter(0.10f), b.getX(), b.getY(),
+        enamel.darker(0.58f),   b.getX(), b.getBottom(), false);
     g.setGradientFill(bodyGrad);
     g.fillRoundedRectangle(b, 9.0f);
+
+    if (const auto& enamelTexture = getPedalEnamelTexture(pedalName); enamelTexture.isValid())
+    {
+        juce::Graphics::ScopedSaveState state(g);
+        g.reduceClipRegion(b.toNearestInt());
+        g.setOpacity(getPedalTextureOpacity(pedalName));
+        const auto crop = getPedalTextureCrop(pedalName, enamelTexture);
+        const auto target = b.toNearestInt();
+        g.drawImage(enamelTexture,
+                    target.getX(), target.getY(), target.getWidth(), target.getHeight(),
+                    crop.getX(), crop.getY(), crop.getWidth(), crop.getHeight());
+    }
+
+    // A cast aluminium enclosure: rolled top lip, darker side walls and a subtle centre sheen.
+    g.setColour(enamel.brighter(0.42f).withAlpha(0.18f));
+    g.fillRoundedRectangle(b.reduced(2.0f).withHeight(7.0f), 5.0f);
+    juce::ColourGradient centreSheen(juce::Colours::white.withAlpha(0.10f), b.getCentreX(), b.getY(),
+                                     juce::Colours::transparentWhite, b.getRight(), b.getY(), false);
+    g.setGradientFill(centreSheen);
+    g.fillRoundedRectangle(b.reduced(6.0f, 3.0f), 6.0f);
+
+    juce::ColourGradient directionalLight(juce::Colours::white.withAlpha(0.12f), b.getX(), b.getY(),
+                                           juce::Colours::transparentWhite, b.getCentreX(), b.getCentreY(), true);
+    g.setGradientFill(directionalLight);
+    g.fillRoundedRectangle(b.reduced(3.0f), 7.0f);
 
     int bh = (int)b.getHeight();
     for (int i = 0; i < bh; i += 3)
@@ -600,42 +822,140 @@ void FXPedalComponent::paint(juce::Graphics& g)
     g.setColour(juce::Colours::white.withAlpha(0.08f));
     g.drawLine(b.getX() + 9.0f, b.getY() + 3.0f, b.getRight() - 9.0f, b.getY() + 3.0f, 1.0f);
 
-    g.setColour(pedalCol.brighter(0.55f).withAlpha(0.88f));
+    g.setColour(enamel.brighter(0.45f).withAlpha(0.64f));
     g.drawRoundedRectangle(b.reduced(0.5f), 9.0f, 1.4f);
     g.setColour(juce::Colours::black.withAlpha(0.55f));
     g.drawRoundedRectangle(b.reduced(2.5f), 7.0f, 1.0f);
     g.setColour(juce::Colours::black.withAlpha(0.20f));
     g.drawRoundedRectangle(b.reduced(1.5f), 8.0f, 1.5f);
 
-    auto namePlate = b.removeFromTop(28.0f);
-    auto plate = namePlate.reduced(4.0f, 3.0f);
-    juce::ColourGradient plateGrad(
-        juce::Colours::black.withAlpha(0.38f), plate.getX(), plate.getY(),
-        juce::Colours::black.withAlpha(0.66f), plate.getX(), plate.getBottom(), false);
-    g.setGradientFill(plateGrad);
-    g.fillRoundedRectangle(plate, 4.0f);
-    g.setColour(juce::Colours::white.withAlpha(0.09f));
-    g.drawRoundedRectangle(plate.reduced(0.5f), 4.0f, 1.0f);
-    g.setColour(juce::Colours::black.withAlpha(0.35f));
-    g.drawRoundedRectangle(plate.reduced(1.5f), 3.0f, 1.0f);
+    juce::Rectangle<float> plate;
+    if (!customArtwork)
+    {
+        auto namePlate = b.removeFromTop(28.0f);
+        plate = namePlate.reduced(4.0f, 3.0f);
+        juce::ColourGradient plateGrad(
+            juce::Colours::black.withAlpha(0.38f), plate.getX(), plate.getY(),
+            juce::Colours::black.withAlpha(0.66f), plate.getX(), plate.getBottom(), false);
+        g.setGradientFill(plateGrad);
+        g.fillRoundedRectangle(plate, 4.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.09f));
+        g.drawRoundedRectangle(plate.reduced(0.5f), 4.0f, 1.0f);
+        g.setColour(juce::Colours::black.withAlpha(0.35f));
+        g.drawRoundedRectangle(plate.reduced(1.5f), 3.0f, 1.0f);
 
-    g.setColour(juce::Colours::black.withAlpha(0.55f));
-    g.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
-    g.drawText(pedalName, namePlate.translated(1.0f, 1.0f).toNearestInt(), juce::Justification::centred);
-    g.setColour(juce::Colours::white.withAlpha(0.95f));
-    g.drawText(pedalName, namePlate.toNearestInt(), juce::Justification::centred);
+        g.setColour(juce::Colours::black.withAlpha(0.55f));
+        g.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
+        g.drawText(pedalName, namePlate.translated(1.0f, 1.0f).toNearestInt(), juce::Justification::centred);
+        g.setColour(juce::Colours::white.withAlpha(0.95f));
+        g.drawText(pedalName, namePlate.toNearestInt(), juce::Justification::centred);
+    }
     if (dragHintVisible)
     {
+        const auto dragPlate = customArtwork ? b.reduced(8.0f).withHeight(18.0f) : plate;
         g.setColour(juce::Colours::white.withAlpha(0.22f));
-        g.drawRoundedRectangle(plate.expanded(1.0f), 5.0f, 1.6f);
+        g.drawRoundedRectangle(dragPlate.expanded(1.0f), 5.0f, 1.6f);
         g.setFont(juce::Font(juce::FontOptions(8.0f).withStyle("Bold")));
-        g.drawText("DRAG", plate.removeFromRight(32.0f).toNearestInt(), juce::Justification::centredRight);
+        g.drawText("DRAG", dragPlate.toNearestInt(), juce::Justification::centredRight);
     }
 
-    float sb = getLocalBounds().toFloat().reduced(3.0f).getY();
+    float sb = customArtwork ? b.getY() : getLocalBounds().toFloat().reduced(3.0f).getY();
+    const float screwBottom = customArtwork ? b.getBottom() : (float) getHeight();
     float scrR = 4.2f;
     drawScrew(g, b.getX() + scrR + 2.0f, sb + scrR + 2.5f, scrR);
     drawScrew(g, b.getRight() - scrR - 2.0f, sb + scrR + 2.5f, scrR);
+    drawScrew(g, b.getX() + scrR + 2.0f, screwBottom - scrR - 5.5f, scrR);
+    drawScrew(g, b.getRight() - scrR - 2.0f, screwBottom - scrR - 5.5f, scrR);
+
+    if (beatBuddyArtwork)
+    {
+        const auto gold = juce::Colour(0xffd8a84a);
+        const auto warmGold = juce::Colour(0xfff1c66d);
+
+        juce::ColourGradient topRail(gold.brighter(0.30f), b.getX(), b.getY(),
+                                     gold.darker(0.58f), b.getRight(), b.getY(), false);
+        g.setGradientFill(topRail);
+        g.fillRoundedRectangle(b.getX() + 11.0f, b.getY() + 4.0f, b.getWidth() - 22.0f, 3.0f, 1.5f);
+        g.setColour(juce::Colours::black.withAlpha(0.66f));
+        g.drawLine(b.getX() + 12.0f, b.getY() + 8.0f, b.getRight() - 12.0f, b.getY() + 8.0f, 1.0f);
+
+        const bool rhythmOn = onBtn.getToggleState();
+        const auto magenta = juce::Colour(0xffff2bd6);
+        const auto beatsArea = juce::Rectangle<float>(b.getX() + 13.0f, b.getY() + 7.0f,
+                                                       b.getWidth() - 26.0f, 20.0f);
+        g.setFont(juce::Font(juce::FontOptions(14.0f).withStyle("Bold")));
+        if (rhythmOn)
+        {
+            for (int dy = -2; dy <= 2; ++dy)
+                for (int dx = -2; dx <= 2; ++dx)
+                    if (dx != 0 || dy != 0)
+                    {
+                        g.setColour(magenta.withAlpha((std::abs(dx) + std::abs(dy) <= 2) ? 0.12f : 0.045f));
+                        g.drawText("BEATS", beatsArea.translated((float) dx, (float) dy),
+                                   juce::Justification::centred);
+                    }
+        }
+        g.setColour(rhythmOn ? magenta : magenta.darker(0.72f).withAlpha(0.72f));
+        g.drawText("BEATS", beatsArea, juce::Justification::centred);
+
+        const float screenY = b.getY() + b.getHeight() * 0.370f;
+        const float screenH = b.getHeight() * 0.270f;
+        auto screenOuter = juce::Rectangle<float>(b.getX() + b.getWidth() * 0.095f, screenY,
+                                                   b.getWidth() * 0.81f, screenH);
+        g.setColour(juce::Colours::black.withAlpha(0.72f));
+        g.fillRoundedRectangle(screenOuter.translated(0.0f, 2.5f).expanded(2.0f), 7.0f);
+        juce::ColourGradient bezel(juce::Colour(0xffd6a64d), screenOuter.getX(), screenOuter.getY(),
+                                   juce::Colour(0xff5b3a0b), screenOuter.getRight(), screenOuter.getBottom(), true);
+        g.setGradientFill(bezel);
+        g.fillRoundedRectangle(screenOuter.expanded(2.0f), 6.0f);
+        g.setColour(juce::Colour(0xff050708));
+        g.fillRoundedRectangle(screenOuter, 4.5f);
+        juce::ColourGradient glass(juce::Colour(0xff17353a), screenOuter.getX(), screenOuter.getY(),
+                                   juce::Colour(0xff071416), screenOuter.getX(), screenOuter.getBottom(), false);
+        g.setGradientFill(glass);
+        g.fillRoundedRectangle(screenOuter.reduced(3.0f), 3.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.11f));
+        g.fillRoundedRectangle(screenOuter.reduced(4.0f).withHeight(screenH * 0.18f), 2.5f);
+        g.setColour(juce::Colour(0xff8eeaf0).withAlpha(0.35f));
+        g.drawRoundedRectangle(screenOuter.reduced(3.5f), 3.0f, 0.8f);
+
+        const juce::String topLabels[] = { "", "VOLUME", "" };
+        const float centres[] = { 0.205f, 0.500f, 0.795f };
+        g.setColour(warmGold.withAlpha(0.92f));
+        g.setFont(juce::Font(juce::FontOptions(7.0f).withStyle("Bold")));
+        for (int i = 0; i < 3; ++i)
+        {
+            const float cx = b.getX() + b.getWidth() * centres[i];
+            if (topLabels[i].isNotEmpty())
+                g.drawText(topLabels[i], juce::roundToInt(cx - b.getWidth() * 0.12f),
+                           juce::roundToInt(b.getY() + b.getHeight() * 0.295f),
+                           juce::roundToInt(b.getWidth() * 0.24f), 10, juce::Justification::centred);
+        }
+
+    }
+
+    if (dedaloJetArtwork)
+    {
+        const float centres[] = { 0.218f, 0.502f, 0.786f };
+        const juce::String topLabels[] = { "BLEND", "GAIN", "COMP" };
+        const juce::String bottomLabels[] = { "ATTACK", "RELEASE", "TONE" };
+        const float labelWidth = b.getWidth() * 0.245f;
+        const float topY = b.getY() + b.getHeight() * 0.300f;
+        const float bottomY = b.getY() + b.getHeight() * 0.592f;
+
+        g.setColour(juce::Colour(0xff171411).withAlpha(0.94f));
+        g.setFont(juce::Font(juce::FontOptions(7.2f).withStyle("Bold")));
+        for (int i = 0; i < 3; ++i)
+        {
+            const float cx = b.getX() + b.getWidth() * centres[i];
+            g.drawFittedText(topLabels[i],
+                             juce::Rectangle<float>(cx - labelWidth * 0.5f, topY, labelWidth, 11.0f).toNearestInt(),
+                             juce::Justification::centred, 1, 0.80f);
+            g.drawFittedText(bottomLabels[i],
+                             juce::Rectangle<float>(cx - labelWidth * 0.5f, bottomY, labelWidth, 11.0f).toNearestInt(),
+                             juce::Justification::centred, 1, 0.80f);
+        }
+    }
 
     g.setColour(juce::Colours::white.withAlpha(0.80f));
     g.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
@@ -670,15 +990,18 @@ void FXPedalComponent::paint(juce::Graphics& g)
     drawKnobValue(knob7, knobValueFormatters[6]);
     drawKnobValue(knob8, knobValueFormatters[7]);
     drawKnobValue(knob9, knobValueFormatters[8]);
-    drawKnobLabel(knob1, k1);
-    drawKnobLabel(knob2, k2);
-    drawKnobLabel(knob3, k3);
-    drawKnobLabel(knob4, k4);
-    drawKnobLabel(knob5, k5);
-    drawKnobLabel(knob6, k6);
-    drawKnobLabel(knob7, k7);
-    drawKnobLabel(knob8, k8);
-    drawKnobLabel(knob9, k9);
+    if (!customArtwork)
+    {
+        drawKnobLabel(knob1, k1);
+        drawKnobLabel(knob2, k2);
+        drawKnobLabel(knob3, k3);
+        drawKnobLabel(knob4, k4);
+        drawKnobLabel(knob5, k5);
+        drawKnobLabel(knob6, k6);
+        drawKnobLabel(knob7, k7);
+        drawKnobLabel(knob8, k8);
+        drawKnobLabel(knob9, k9);
+    }
 
     if (infoMain.isNotEmpty() || infoSub.isNotEmpty())
     {
@@ -698,57 +1021,145 @@ void FXPedalComponent::paint(juce::Graphics& g)
     }
 
     bool on = onBtn.getToggleState();
-    float ledCX = (float)getWidth() * 0.5f - 27.0f;
-    float ledCY = (float)getHeight() - 16.0f;
-    float ledR = 5.5f;
-    float footCX = (float)getWidth() * 0.5f + 22.0f;
-    float footCY = (float)getHeight() - 17.0f;
-    float footR = 12.0f;
-
-    g.setColour(juce::Colours::black.withAlpha(0.62f));
-    g.fillEllipse(footCX - footR - 2.0f, footCY - footR + 1.5f, (footR + 2.0f) * 2.0f, (footR + 2.0f) * 2.0f);
-    juce::ColourGradient footGrad(
-        juce::Colour(0xffd8d8dc), footCX - footR * 0.45f, footCY - footR * 0.55f,
-        juce::Colour(0xff4a4d54), footCX + footR * 0.45f, footCY + footR * 0.55f, true);
-    g.setGradientFill(footGrad);
-    g.fillEllipse(footCX - footR, footCY - footR, footR * 2.0f, footR * 2.0f);
-    g.setColour(juce::Colours::black.withAlpha(0.55f));
-    g.drawEllipse(footCX - footR, footCY - footR, footR * 2.0f, footR * 2.0f, 1.0f);
-    g.setColour(juce::Colours::white.withAlpha(0.28f));
-    g.fillEllipse(footCX - footR * 0.45f, footCY - footR * 0.72f, footR * 0.9f, footR * 0.35f);
-
-    g.setColour(juce::Colours::black.withAlpha(0.45f));
-    g.fillRoundedRectangle(ledCX - ledR - 7.0f, ledCY - ledR - 3.0f, 40.0f, 18.0f, 5.0f);
-    g.setColour(juce::Colours::black.withAlpha(0.25f));
-    g.drawRoundedRectangle(ledCX - ledR - 7.0f, ledCY - ledR - 3.0f, 40.0f, 18.0f, 5.0f, 0.8f);
-
-    if (on)
+    if (beatBuddyArtwork)
     {
-        g.setColour(LnfC::PlayGreen.withAlpha(0.08f));
-        g.fillEllipse(ledCX - ledR - 7.0f, ledCY - ledR - 7.0f, (ledR + 7.0f) * 2, (ledR + 7.0f) * 2);
-        g.setColour(LnfC::PlayGreen.withAlpha(0.20f));
-        g.fillEllipse(ledCX - ledR - 3.5f, ledCY - ledR - 3.5f, (ledR + 3.5f) * 2, (ledR + 3.5f) * 2);
-        g.setColour(LnfC::PlayGreen.withAlpha(0.45f));
-        g.fillEllipse(ledCX - ledR - 1.0f, ledCY - ledR - 1.0f, (ledR + 1.0f) * 2, (ledR + 1.0f) * 2);
-        juce::ColourGradient ledGrad(
-            LnfC::PlayGreen.brighter(0.5f), ledCX - ledR * 0.3f, ledCY - ledR * 0.5f,
-            LnfC::PlayGreen.darker(0.2f),   ledCX + ledR * 0.2f, ledCY + ledR * 0.3f, true);
-        g.setGradientFill(ledGrad);
-        g.fillEllipse(ledCX - ledR, ledCY - ledR, ledR * 2, ledR * 2);
-        g.setColour(juce::Colours::white.withAlpha(0.45f));
-        g.fillEllipse(ledCX - ledR * 0.45f, ledCY - ledR * 0.72f, ledR * 0.6f, ledR * 0.38f);
+        const auto gold = juce::Colour(0xffd5a243);
+        const auto brightGold = juce::Colour(0xffffd77a);
+        auto drawGoldSwitch = [&](float cx, float cy, bool active)
+        {
+            const float outerR = 17.0f;
+            const float innerR = 11.8f;
+            g.setColour(juce::Colours::black.withAlpha(0.72f));
+            g.fillEllipse(cx - outerR - 2.0f, cy - outerR + 3.0f,
+                          (outerR + 2.0f) * 2.0f, (outerR + 2.0f) * 2.0f);
+            juce::ColourGradient ring(brightGold, cx - outerR * 0.58f, cy - outerR * 0.72f,
+                                      juce::Colour(0xff6f430b), cx + outerR * 0.62f, cy + outerR * 0.70f, true);
+            g.setGradientFill(ring);
+            g.fillEllipse(cx - outerR, cy - outerR, outerR * 2.0f, outerR * 2.0f);
+            g.setColour(juce::Colours::black.withAlpha(0.76f));
+            g.fillEllipse(cx - innerR - 1.0f, cy - innerR + 1.0f,
+                          (innerR + 1.0f) * 2.0f, (innerR + 1.0f) * 2.0f);
+            juce::ColourGradient cap(juce::Colour(0xfff2ede1), cx - innerR * 0.55f, cy - innerR * 0.70f,
+                                     juce::Colour(0xff5a584f), cx + innerR * 0.50f, cy + innerR * 0.62f, true);
+            g.setGradientFill(cap);
+            g.fillEllipse(cx - innerR, cy - innerR, innerR * 2.0f, innerR * 2.0f);
+            g.setColour(juce::Colours::white.withAlpha(0.30f));
+            g.fillEllipse(cx - innerR * 0.48f, cy - innerR * 0.68f,
+                          innerR * 0.92f, innerR * 0.30f);
+            if (active)
+            {
+                g.setColour(juce::Colour(0xff80ffb0).withAlpha(0.22f));
+                g.drawEllipse(cx - outerR - 3.0f, cy - outerR - 3.0f,
+                              (outerR + 3.0f) * 2.0f, (outerR + 3.0f) * 2.0f, 3.0f);
+            }
+        };
+
+        const float tapCX = b.getCentreX();
+        const float tapCY = b.getY() + b.getHeight() * 0.820f;
+        const float tapR = 15.0f;
+        g.setColour(juce::Colours::black.withAlpha(0.70f));
+        g.fillEllipse(tapCX - tapR - 2.0f, tapCY - tapR + 2.0f,
+                      (tapR + 2.0f) * 2.0f, (tapR + 2.0f) * 2.0f);
+        juce::ColourGradient tapRing(brightGold, tapCX - tapR * 0.65f, tapCY - tapR * 0.65f,
+                                     juce::Colour(0xff65400c), tapCX + tapR * 0.62f, tapCY + tapR * 0.65f, true);
+        g.setGradientFill(tapRing);
+        g.fillEllipse(tapCX - tapR, tapCY - tapR, tapR * 2.0f, tapR * 2.0f);
+        g.setColour(juce::Colour(0xff151719));
+        g.fillEllipse(tapCX - tapR + 4.0f, tapCY - tapR + 4.0f,
+                      (tapR - 4.0f) * 2.0f, (tapR - 4.0f) * 2.0f);
+        g.setColour(brightGold.withAlpha(0.95f));
+        g.setFont(juce::Font(juce::FontOptions(7.4f).withStyle("Bold")));
+        g.drawText("TAP", juce::roundToInt(tapCX - tapR), juce::roundToInt(tapCY - 5.0f),
+                   juce::roundToInt(tapR * 2.0f), 10, juce::Justification::centred);
+
+        const float footY = b.getY() + b.getHeight() * 0.885f;
+        drawGoldSwitch(b.getX() + b.getWidth() * 0.255f, footY, on);
+        drawGoldSwitch(b.getX() + b.getWidth() * 0.745f, footY, false);
+
+        drawLedLens(g, b.getCentreX(),
+                    b.getY() + b.getHeight() * 0.700f, 3.2f,
+                    juce::Colour(0xffff2bd6), on);
+    }
+
+    if (!beatBuddyArtwork)
+    {
+    float ledCX = customArtwork ? (dedaloJetArtwork ? b.getX() + b.getWidth() * 0.156f : (float)getWidth() * 0.5f)
+                                : (float)getWidth() * 0.5f - 27.0f;
+    float ledCY = customArtwork ? b.getY() + b.getHeight() * (wideFuzzArtwork ? 0.72f : (dedaloJetArtwork ? 0.672f : 0.74f))
+                                : (float)getHeight() - 16.0f;
+    float ledR = customArtwork ? (dedaloJetArtwork ? 3.4f : 6.5f) : 5.5f;
+    float footCX = customArtwork ? (dedaloJetArtwork ? b.getX() + b.getWidth() * 0.156f : (float)getWidth() * 0.5f)
+                                 : (float)getWidth() * 0.5f + 22.0f;
+    float footCY = customArtwork ? b.getY() + b.getHeight() * (wideFuzzArtwork ? 0.84f : (dedaloJetArtwork ? 0.871f : 0.88f))
+                                 : (float)getHeight() - 17.0f;
+    float footR = customArtwork ? 14.0f : 12.0f;
+
+    if (customArtwork)
+    {
+        const float nutR = footR + 4.5f;
+        juce::Path hexNut;
+        for (int i = 0; i < 6; ++i)
+        {
+            const float a = juce::MathConstants<float>::twoPi * (float) i / 6.0f - juce::MathConstants<float>::halfPi;
+            const auto p = juce::Point<float>(footCX + std::cos(a) * nutR, footCY + std::sin(a) * nutR);
+            if (i == 0) hexNut.startNewSubPath(p); else hexNut.lineTo(p);
+        }
+        hexNut.closeSubPath();
+        auto nutShadow = hexNut;
+        nutShadow.applyTransform(juce::AffineTransform::translation(1.8f, 3.0f));
+        g.setColour(juce::Colours::black.withAlpha(0.72f));
+        g.fillPath(nutShadow);
+        juce::ColourGradient nutMetal(juce::Colour(0xffeee8d9), footCX - nutR * 0.5f, footCY - nutR * 0.65f,
+                                      juce::Colour(0xff4a4945), footCX + nutR * 0.5f, footCY + nutR * 0.65f, true);
+        g.setGradientFill(nutMetal);
+        g.fillPath(hexNut);
+        g.setColour(juce::Colours::black.withAlpha(0.48f));
+        g.strokePath(hexNut, juce::PathStrokeType(1.2f));
+
+        g.setColour(juce::Colours::black.withAlpha(0.72f));
+        g.fillEllipse(footCX - footR - 1.2f, footCY - footR + 1.5f, footR * 2.0f + 2.4f, footR * 2.0f + 2.4f);
+        juce::ColourGradient switchMetal(juce::Colour(0xffd9d5c9), footCX - footR * 0.45f, footCY - footR * 0.60f,
+                                         juce::Colour(0xff5a5955), footCX + footR * 0.42f, footCY + footR * 0.55f, true);
+        g.setGradientFill(switchMetal);
+        g.fillEllipse(footCX - footR, footCY - footR, footR * 2.0f, footR * 2.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.34f));
+        g.fillEllipse(footCX - footR * 0.48f, footCY - footR * 0.70f, footR * 0.90f, footR * 0.30f);
+        g.setColour(juce::Colours::black.withAlpha(0.44f));
+        g.drawEllipse(footCX - footR, footCY - footR, footR * 2.0f, footR * 2.0f, 1.0f);
     }
     else
     {
-        g.setColour(juce::Colour(0xff112218));
-        g.fillEllipse(ledCX - ledR, ledCY - ledR, ledR * 2, ledR * 2);
-        g.setColour(juce::Colour(0xff1a3322));
-        g.drawEllipse(ledCX - ledR, ledCY - ledR, ledR * 2, ledR * 2, 0.8f);
+        g.setColour(juce::Colours::black.withAlpha(0.62f));
+        g.fillEllipse(footCX - footR - 2.0f, footCY - footR + 1.5f, (footR + 2.0f) * 2.0f, (footR + 2.0f) * 2.0f);
+        juce::ColourGradient footGrad(
+            juce::Colour(0xffd8d8dc), footCX - footR * 0.45f, footCY - footR * 0.55f,
+            juce::Colour(0xff4a4d54), footCX + footR * 0.45f, footCY + footR * 0.55f, true);
+        g.setGradientFill(footGrad);
+        g.fillEllipse(footCX - footR, footCY - footR, footR * 2.0f, footR * 2.0f);
+        g.setColour(juce::Colours::black.withAlpha(0.55f));
+        g.drawEllipse(footCX - footR, footCY - footR, footR * 2.0f, footR * 2.0f, 1.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.28f));
+        g.fillEllipse(footCX - footR * 0.45f, footCY - footR * 0.72f, footR * 0.9f, footR * 0.35f);
     }
 
-    g.setColour(on ? juce::Colours::white : LnfC::TextDim.withAlpha(0.60f));
-    g.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
-    g.drawText("ON", (int)(ledCX + ledR + 3.0f), (int)(ledCY - 6.0f), 22, 13, juce::Justification::centredLeft);
+    if (!customArtwork)
+    {
+        g.setColour(juce::Colours::black.withAlpha(0.45f));
+        g.fillRoundedRectangle(ledCX - ledR - 7.0f, ledCY - ledR - 3.0f, 40.0f, 18.0f, 5.0f);
+        g.setColour(juce::Colours::black.withAlpha(0.25f));
+        g.drawRoundedRectangle(ledCX - ledR - 7.0f, ledCY - ledR - 3.0f, 40.0f, 18.0f, 5.0f, 0.8f);
+    }
+
+    const auto ledColour = dedaloJetArtwork ? juce::Colour(0xfffff9e8) : LnfC::PlayGreen;
+    drawLedLens(g, ledCX, ledCY, ledR, ledColour, on);
+
+    if (!customArtwork)
+    {
+        g.setColour(on ? juce::Colours::white : LnfC::TextDim.withAlpha(0.60f));
+        g.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
+        g.drawText("ON", (int)(ledCX + ledR + 3.0f), (int)(ledCY - 6.0f), 22, 13, juce::Justification::centredLeft);
+    }
+    }
 
     auto drawJack = [&](float jx, float jy)
     {
@@ -766,9 +1177,15 @@ void FXPedalComponent::paint(juce::Graphics& g)
         g.setColour(juce::Colours::white.withAlpha(0.18f));
         g.fillEllipse(jx - 5.5f, jy - 7.0f, 4.5f, 2.5f);
     };
-    float jackY = (float)getHeight() * 0.38f;
-    drawJack(4.5f, jackY);
-    drawJack((float)getWidth() - 4.5f, jackY);
+    auto outJack = getJackCentre(JackSide::output);
+    auto inJack = getJackCentre(JackSide::input);
+    drawJack(outJack.x, outJack.y);
+    drawJack(inJack.x, inJack.y);
+
+    g.setColour(juce::Colours::white.withAlpha(0.46f));
+    g.setFont(juce::Font(juce::FontOptions(6.5f).withStyle("Bold")));
+    g.drawText("OUT", 7, (int)outJack.y - 15, 22, 9, juce::Justification::centredLeft);
+    g.drawText("IN", getWidth() - 29, (int)inJack.y - 15, 22, 9, juce::Justification::centredRight);
 }
 
 void FXPedalComponent::resized()
@@ -776,6 +1193,102 @@ void FXPedalComponent::resized()
     auto b = getLocalBounds().reduced(5);
     onBtn.setBounds(b.getX(), getHeight() - 24, b.getWidth(), 20);
     onBtn.setVisible(false);
+
+    if (pedalName == "RHYTHM BOX")
+    {
+        const float aspect = 0.88f;
+        const int bodyHeight = juce::jmin(getHeight() - 6, juce::roundToInt((float) getWidth() / aspect));
+        const int bodyTop = (getHeight() - bodyHeight) / 2;
+        const int bodyLeft = 3;
+        const int bodyWidth = getWidth() - 6;
+        const int knobSize = 45;
+        const int knobCY = bodyTop + juce::roundToInt(bodyHeight * 0.205f);
+        const float knobCentres[] = { 0.205f, 0.500f, 0.795f };
+        juce::Slider* topKnobs[] = { &knob1, &knob2, &knob3 };
+        for (int i = 0; i < 3; ++i)
+        {
+            const int cx = bodyLeft + juce::roundToInt(bodyWidth * knobCentres[i]);
+            topKnobs[i]->setBounds(cx - knobSize / 2, knobCY - knobSize / 2, knobSize, knobSize);
+        }
+
+        // Invisible layout anchors used by MainComponent for the interactive screen controls.
+        const int screenX = bodyLeft + juce::roundToInt(bodyWidth * 0.13f);
+        const int screenW = juce::roundToInt(bodyWidth * 0.74f);
+        const int screenY = bodyTop + juce::roundToInt(bodyHeight * 0.395f);
+        const int controlH = 23;
+        knob4.setBounds(screenX, screenY, screenW, controlH);
+        knob5.setBounds(screenX, screenY + 32, screenW / 2 - 3, controlH);
+        knob6.setBounds(screenX + screenW / 2 + 3, screenY + 32, screenW / 2 - 3, controlH);
+        knob7.setBounds(0, 0, 0, 0);
+        knob8.setBounds(0, 0, 0, 0);
+        knob9.setBounds(0, 0, 0, 0);
+        return;
+    }
+
+    if (pedalName == "FUZZ")
+    {
+        const int top = juce::roundToInt((float) getHeight() * 0.18f);
+        const int knobH = juce::roundToInt((float) getHeight() * 0.21f);
+        const int thirdW = (b.getWidth() - 18) / 3;
+        knob1.setBounds(b.getX() + 3, top, thirdW, knobH);
+        knob2.setBounds(b.getX() + thirdW + 9, top, thirdW, knobH);
+        knob3.setBounds(b.getX() + (thirdW + 6) * 2 + 3, top, thirdW, knobH);
+        knob4.setBounds(0, 0, 0, 0);
+        knob5.setBounds(0, 0, 0, 0);
+        knob6.setBounds(0, 0, 0, 0);
+        knob7.setBounds(0, 0, 0, 0);
+        knob8.setBounds(0, 0, 0, 0);
+        knob9.setBounds(0, 0, 0, 0);
+        return;
+    }
+
+    if (pedalName == "OVERDRIVE")
+    {
+        const int top = juce::roundToInt((float) getHeight() * 0.20f);
+        const int knobH = juce::roundToInt((float) getHeight() * 0.22f);
+        const int thirdW = (b.getWidth() - 18) / 3;
+        // Artwork order is VOLUME, TONE, GAIN; DSP order is DRIVE, TONE, LEVEL.
+        knob3.setBounds(b.getX() + 3, top, thirdW, knobH);
+        knob2.setBounds(b.getX() + thirdW + 9, top, thirdW, knobH);
+        knob1.setBounds(b.getX() + (thirdW + 6) * 2 + 3, top, thirdW, knobH);
+        knob4.setBounds(0, 0, 0, 0);
+        knob5.setBounds(0, 0, 0, 0);
+        knob6.setBounds(0, 0, 0, 0);
+        knob7.setBounds(0, 0, 0, 0);
+        knob8.setBounds(0, 0, 0, 0);
+        knob9.setBounds(0, 0, 0, 0);
+        return;
+    }
+
+    if (pedalName == "COMPRESSOR")
+    {
+        const float aspect = 1.23f;
+        const int bodyHeight = juce::jmin(getHeight() - 6, juce::roundToInt((float) getWidth() / aspect));
+        const int bodyTop = (getHeight() - bodyHeight) / 2;
+        const int bodyLeft = 3;
+        const int bodyWidth = getWidth() - 6;
+        // Keep the Jet knob size stable even when the enclosure width changes.
+        const int knobSize = 40;
+        const int topCY = bodyTop + juce::roundToInt(bodyHeight * 0.200f);
+        const int bottomCY = bodyTop + juce::roundToInt(bodyHeight * 0.486f);
+        const int leftCX = bodyLeft + juce::roundToInt(bodyWidth * 0.218f);
+        const int centreCX = bodyLeft + juce::roundToInt(bodyWidth * 0.502f);
+        const int rightCX = bodyLeft + juce::roundToInt(bodyWidth * 0.786f);
+        auto placeKnob = [knobSize](juce::Slider& knob, int cx, int cy)
+        {
+            knob.setBounds(cx - knobSize / 2, cy - knobSize / 2, knobSize, knobSize);
+        };
+        placeKnob(knob1, leftCX, topCY);
+        placeKnob(knob2, centreCX, topCY);
+        placeKnob(knob3, rightCX, topCY);
+        placeKnob(knob4, leftCX, bottomCY);
+        placeKnob(knob5, centreCX, bottomCY);
+        placeKnob(knob6, rightCX, bottomCY);
+        knob7.setBounds(0, 0, 0, 0);
+        knob8.setBounds(0, 0, 0, 0);
+        knob9.setBounds(0, 0, 0, 0);
+        return;
+    }
 
     if (extendedKnobs)
     {
