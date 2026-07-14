@@ -6,6 +6,31 @@ namespace
 {
     constexpr float kLoopTrimStepSeconds = 0.02f;
 
+    constexpr int kUiOuterInset = 10;
+    constexpr int kUiSectionGap = 4;
+    constexpr int kUiHeaderHeight = 86;
+    constexpr int kUiFooterHeight = 40;
+    constexpr int kUiFxSectionHeight = 260;
+    constexpr int kUiControlSectionHeight = 50;
+
+    constexpr int kControlLabelOffsetY = 6;
+    constexpr int kControlRowOffsetY = 19;
+
+    constexpr int kFxViewportTopInset = 8;
+    constexpr int kFxViewportBottomInset = 8;
+    constexpr int kTrackViewportTopInset = 30;
+    constexpr int kTrackViewportBottomInset = 4;
+
+    constexpr int kFooterInset = 18;
+    constexpr int kFooterOutputZoneWidth = 430;
+    constexpr int kMidiDeviceWidth = 190;
+    constexpr int kMidiActionWidth = 140;
+    constexpr int kMidiLearnWidth = 96;
+    constexpr int kMidiTypeWidth = 84;
+    constexpr int kMidiNumberWidth = 72;
+    constexpr int kMidiClearWidth = 64;
+    constexpr int kMidiControlGap = 8;
+
     class ExternalPluginEditorWindow final : public juce::DocumentWindow
     {
     public:
@@ -113,48 +138,43 @@ MainComponent::MainComponent()
     formatManager.registerBasicFormats();
 
     const auto workingDirectory = juce::File::getCurrentWorkingDirectory();
-    const juce::File textureCandidates[] = {
-        juce::File(__FILE__).getParentDirectory()
-            .getSiblingFile("Assets").getChildFile("Textures/dark-tolex-v1.png"),
-        workingDirectory.getChildFile("Assets/Textures/dark-tolex-v1.png"),
-        workingDirectory.getChildFile("Loopernico Refactorizado/Assets/Textures/dark-tolex-v1.png"),
-        juce::File::getSpecialLocation(juce::File::currentExecutableFile)
-            .getParentDirectory().getChildFile("Assets/Textures/dark-tolex-v1.png")
-    };
-    for (const auto& candidate : textureCandidates)
+    const auto loadUiImage = [&workingDirectory](const juce::String& relativePath)
     {
-        if (candidate.existsAsFile())
-        {
-            rackSurfaceTexture = juce::ImageFileFormat::loadFrom(candidate);
-            if (rackSurfaceTexture.isValid())
-                break;
-        }
-    }
+        juce::Array<juce::File> assetRoots;
+        assetRoots.addIfNotAlreadyThere(juce::File(__FILE__).getParentDirectory().getSiblingFile("Assets"));
+        assetRoots.addIfNotAlreadyThere(workingDirectory.getChildFile("Assets"));
+        assetRoots.addIfNotAlreadyThere(workingDirectory.getChildFile("Loopernico Refactorizado")
+                                                        .getChildFile("Assets"));
 
-    looperFxDivider.onDragBegin = [this]() { dividerStartFxHeight = fxSectionHeight; };
-    looperFxDivider.onDrag = [this](int delta)
-    {
-        const int available = getHeight() - 78 - 118 - 20;
-        const int maxFx = juce::jmax(180, available - controlSectionHeight - 180 - 24);
-        fxSectionHeight = juce::jlimit(180, maxFx, dividerStartFxHeight - delta);
-        resized();
-        repaint();
+        auto directory = juce::File::getSpecialLocation(juce::File::currentExecutableFile)
+                             .getParentDirectory();
+        for (int depth = 0; depth < 8; ++depth)
+        {
+            assetRoots.addIfNotAlreadyThere(directory.getChildFile("Assets"));
+            const auto parent = directory.getParentDirectory();
+            if (parent == directory)
+                break;
+            directory = parent;
+        }
+
+        for (const auto& root : assetRoots)
+        {
+            const auto candidate = root.getChildFile(relativePath);
+            if (candidate.existsAsFile())
+            {
+                auto image = juce::ImageFileFormat::loadFrom(candidate);
+                if (image.isValid())
+                    return image;
+            }
+        }
+
+        return juce::Image {};
     };
-    fxControlDivider.onDragBegin = [this]()
-    {
-        dividerStartFxHeight = fxSectionHeight;
-        dividerStartControlHeight = controlSectionHeight;
-    };
-    fxControlDivider.onDrag = [this](int delta)
-    {
-        const int combined = dividerStartFxHeight + dividerStartControlHeight;
-        fxSectionHeight = juce::jlimit(180, combined - 96, dividerStartFxHeight + delta);
-        controlSectionHeight = combined - fxSectionHeight;
-        resized();
-        repaint();
-    };
-    addAndMakeVisible(looperFxDivider);
-    addAndMakeVisible(fxControlDivider);
+
+    rackSurfaceTexture = loadUiImage("Textures/dark-tolex-v2.png");
+    brandWordmark = loadUiImage("Brand/loopernico-wordmark-mirror-v3.png");
+    if (!brandWordmark.isValid())
+        brandWordmark = loadUiImage("Brand/loopernico-wordmark-beveled-v2.png");
 
     trackViewport.setScrollBarsShown(true, false);
     trackViewport.setScrollBarThickness(7);
@@ -185,20 +205,31 @@ MainComponent::MainComponent()
     BDef tdefs[] = {
         { &btnRecConfirm, "REC / CONFIRM",   LnfC::RecRed                  },
         { &btnStopPlay,   "IR ARRIBA",       LnfC::PlayGreen               },
-        { &btnUndo,       "UNDO",            LnfC::Accent                  },
-        { &btnRedo,       "REDO",            LnfC::Accent                  },
-        { &btnCancel,     "CANCEL",          juce::Colour(0xffcc8800)      },
+        { &btnUndo,       "UNDO",            juce::Colour(0xff28c7e8)      },
+        { &btnRedo,       "REDO",            juce::Colour(0xff4d82ff)      },
+        { &btnCancel,     "CANCEL",          juce::Colour(0xffffb21a)      },
         { &btnMuteAll,    "MUTE ALL",        LnfC::RecRed                  },
-        { &btnPauseAll,   "PAUSE",           juce::Colour(0xff8844cc)      },
-        { &btnReset,      "CLEAR ALL",       juce::Colour(0xffcc4422)      },
+        { &btnPauseAll,   "PAUSE",           juce::Colour(0xffb965ff)      },
+        { &btnReset,      "CLEAR ALL",       juce::Colour(0xffff5a36)      },
     };
     for (auto& d : tdefs) {
         d.b->setButtonText(d.txt);
-        d.b->setColour(juce::TextButton::buttonOnColourId, d.on.withAlpha(0.25f));
+        d.b->setColour(juce::TextButton::buttonOnColourId, d.on);
         addAndMakeVisible(*d.b);
     }
-    btnRecConfirm.setColour(juce::TextButton::textColourOffId, LnfC::RecRed);
-    btnRecConfirm.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff3a0808));
+
+    auto styleHeaderButton = [](juce::TextButton& button, juce::Colour led)
+    {
+        button.setComponentID("headerConsoleButton");
+        button.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff111419));
+        button.setColour(juce::TextButton::buttonOnColourId, led);
+        button.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffe2e5e9));
+        button.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+        button.setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    };
+    for (auto& d : tdefs)
+        if (d.b != &btnMuteAll)
+            styleHeaderButton(*d.b, d.on);
 
     btnRecConfirm.onClick = [this]() {
         auto prev = looper.getState();
@@ -237,10 +268,10 @@ MainComponent::MainComponent()
         repaint();
     };
 
-    styleVstButton(btnSaveSession, LnfC::Accent);
-    styleVstButton(btnLoadSession, LnfC::PlayGreen);
-    styleVstButton(btnExportMix, LnfC::OvdAmber);
-    styleVstButton(btnExportTracks, LnfC::OvdAmber);
+    styleHeaderButton(btnSaveSession,  juce::Colour(0xff42df83));
+    styleHeaderButton(btnLoadSession,  juce::Colour(0xff33c3ee));
+    styleHeaderButton(btnExportMix,    juce::Colour(0xffff9f2f));
+    styleHeaderButton(btnExportTracks, juce::Colour(0xffec62d5));
     btnSaveSession.onClick = [this]() { saveSessionToFile(); };
     btnLoadSession.onClick = [this]() { loadSessionFromFile(); };
     btnExportMix.onClick = [this]() { exportMixToFile(); };
@@ -254,6 +285,8 @@ MainComponent::MainComponent()
     fxContainer.onPaint = [this](juce::Graphics& g)
     {
         juce::Array<FXPedalComponent*> chain;
+        if (vst3Pedal != nullptr)
+            chain.add(vst3Pedal.get());
         for (int slot = 0; slot < kNumFxPedals; ++slot)
         {
             const int pedalIndex = fxOrder[(size_t) slot];
@@ -324,11 +357,9 @@ MainComponent::MainComponent()
     lblMidiStatus.setText("MIDI Input Ready.", juce::dontSendNotification);
     lblMidiStatus.setFont(juce::Font(juce::FontOptions(10.0f)));
     lblMidiStatus.setColour(juce::Label::textColourId, LnfC::TextDim);
-    addAndMakeVisible(lblMidiStatus);
 
     lblMidiMapping.setFont(juce::Font(juce::FontOptions(10.0f)));
     lblMidiMapping.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.88f));
-    addAndMakeVisible(lblMidiMapping);
     changeMidiInput(0);
     loadMidiConfiguration();
     updateMidiMappingLabel();
@@ -385,14 +416,20 @@ MainComponent::MainComponent()
         effectsChain.setExternalPluginEnabled(btnBypassVst3.getToggleState());
         updateExternalVstUi();
     };
-    lblVst3Status.setFont(juce::Font(juce::FontOptions(10.0f)));
+    lblVst3Status.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
     lblVst3Status.setColour(juce::Label::textColourId, LnfC::TextDim);
-    lblVst3Status.setJustificationType(juce::Justification::centredLeft);
-    addAndMakeVisible(btnLoadVst3);
-    addAndMakeVisible(btnUnloadVst3);
-    addAndMakeVisible(btnEditVst3);
-    addAndMakeVisible(btnBypassVst3);
-    addAndMakeVisible(lblVst3Status);
+    lblVst3Status.setColour(juce::Label::backgroundColourId, juce::Colour(0xff070a0d).withAlpha(0.92f));
+    lblVst3Status.setColour(juce::Label::outlineColourId, LnfC::Accent.withAlpha(0.20f));
+    lblVst3Status.setJustificationType(juce::Justification::centred);
+    lblVst3Status.setMinimumHorizontalScale(0.62f);
+    if (vst3Pedal != nullptr)
+    {
+        vst3Pedal->addAndMakeVisible(btnLoadVst3);
+        vst3Pedal->addAndMakeVisible(btnUnloadVst3);
+        vst3Pedal->addAndMakeVisible(btnEditVst3);
+        vst3Pedal->addAndMakeVisible(btnBypassVst3);
+        vst3Pedal->addAndMakeVisible(lblVst3Status);
+    }
     updateExternalVstUi();
 
     lblLoopEdit.setText("ARREMANGAR", juce::dontSendNotification);
@@ -595,6 +632,29 @@ void MainComponent::setupFXPedals()
     fxViewport.setScrollBarThickness(7);
     fxViewport.setViewedComponent(&fxContainer, false);
     addAndMakeVisible(fxViewport);
+
+    vst3Pedal = std::make_unique<FXPedalComponent>(
+        "VST3 HOST", juce::Colour(0xff42536c), "", "", "");
+    juce::Slider* vst3HiddenControls[] = {
+        &vst3Pedal->knob1, &vst3Pedal->knob2, &vst3Pedal->knob3,
+        &vst3Pedal->knob4, &vst3Pedal->knob5, &vst3Pedal->knob6,
+        &vst3Pedal->knob7, &vst3Pedal->knob8, &vst3Pedal->knob9
+    };
+    for (auto* control : vst3HiddenControls)
+        control->setVisible(false);
+    vst3Pedal->onBtn.onClick = [this]()
+    {
+        if (!effectsChain.hasExternalPlugin())
+        {
+            vst3Pedal->onBtn.setToggleState(false, juce::dontSendNotification);
+            updateExternalVstUi();
+            return;
+        }
+
+        effectsChain.setExternalPluginEnabled(vst3Pedal->onBtn.getToggleState());
+        updateExternalVstUi();
+    };
+    fxContainer.addAndMakeVisible(vst3Pedal.get());
 
     for (int i = 0; i < kNumFxPedals; ++i)
     {
@@ -894,7 +954,7 @@ int MainComponent::fxPedalPitch(int pedalIndex) const
 
 int MainComponent::fxSlotStartX(int slot) const
 {
-    int x = 0;
+    int x = kVst3PedalPitch;
     for (int i = 0; i < juce::jlimit(0, kNumFxPedals, slot); ++i)
         x += fxPedalPitch(fxOrder[(size_t) i]);
     return x;
@@ -966,7 +1026,10 @@ void MainComponent::updateFxPedalDrag(FXPedalComponent& pedal, const juce::Mouse
 
     auto bounds = pedal.getBounds();
     bounds.setCentre((int) relativeEvent.position.x, bounds.getCentreY());
-    bounds.setX(juce::jlimit(5, juce::jmax(5, fxContainer.getWidth() - bounds.getWidth() - 5), bounds.getX()));
+    bounds.setX(juce::jlimit(kVst3PedalPitch + 5,
+                             juce::jmax(kVst3PedalPitch + 5,
+                                        fxContainer.getWidth() - bounds.getWidth() - 5),
+                             bounds.getX()));
     pedal.setBounds(bounds);
 }
 
@@ -1085,13 +1148,18 @@ void MainComponent::updateExternalVstUi()
     btnBypassVst3.setEnabled(hasPlugin);
     btnBypassVst3.setToggleState(pluginEnabled, juce::dontSendNotification);
     btnBypassVst3.setButtonText(pluginEnabled ? "VST3 ON" : "VST3 OFF");
+    if (vst3Pedal != nullptr)
+    {
+        vst3Pedal->onBtn.setToggleState(hasPlugin && pluginEnabled, juce::dontSendNotification);
+        vst3Pedal->repaint();
+    }
 
     if (!hasPlugin)
-        lblVst3Status.setText("VST3 al inicio de la cadena: sin plugin cargado.", juce::dontSendNotification);
+        lblVst3Status.setText("SIN PLUGIN CARGADO", juce::dontSendNotification);
     else if (pluginEnabled)
-        lblVst3Status.setText("Inicio de cadena: " + pluginName, juce::dontSendNotification);
+        lblVst3Status.setText(pluginName, juce::dontSendNotification);
     else
-        lblVst3Status.setText("Inicio de cadena en bypass: " + pluginName, juce::dontSendNotification);
+        lblVst3Status.setText("BYPASS - " + pluginName, juce::dontSendNotification);
 }
 
 bool MainComponent::captureLooperSnapshotIncrementally(LooperEngine::SessionSnapshot& snapshot,
@@ -1707,8 +1775,6 @@ void MainComponent::saveMidiConfiguration() const
 {
     juce::ValueTree root("LOOPERNICO_MIDI_CONFIG");
     root.setProperty("listenAllInputs", midiListenAllInputs, nullptr);
-    root.setProperty("uiFxSectionHeight", fxSectionHeight, nullptr);
-    root.setProperty("uiControlSectionHeight", controlSectionHeight, nullptr);
     root.setProperty("inputIdentifier", (!midiListenAllInputs && lastMidiInputIndex >= 0
         && lastMidiInputIndex < juce::MidiInput::getAvailableDevices().size())
         ? juce::MidiInput::getAvailableDevices().getReference(lastMidiInputIndex).identifier : juce::String(), nullptr);
@@ -1745,9 +1811,6 @@ void MainComponent::loadMidiConfiguration()
     const auto root = juce::ValueTree::fromXml(*xml);
     if (!root.isValid() || !root.hasType("LOOPERNICO_MIDI_CONFIG"))
         return;
-
-    fxSectionHeight = juce::jlimit(180, 720, (int) root.getProperty("uiFxSectionHeight", 332));
-    controlSectionHeight = juce::jlimit(96, 420, (int) root.getProperty("uiControlSectionHeight", 110));
 
     for (int i = 0; i < root.getNumChildren(); ++i)
     {
@@ -2006,6 +2069,9 @@ void MainComponent::timerCallback()
     bool gOvd  = (state == LooperEngine::State::RecordingLayer);
     bool gPlay = (state == LooperEngine::State::Playing);
 
+    btnRecConfirm.setToggleState(gArm || gRec || gOvd, juce::dontSendNotification);
+    btnPauseAll.setToggleState(looper.isGlobalPaused(), juce::dontSendNotification);
+
     if (gRec)
     {
         currentSecs = (sr > 0.0f) ? (float)writePos / sr : 0.0f;
@@ -2135,12 +2201,13 @@ void MainComponent::paint(juce::Graphics& g)
 {
     const int W = getWidth();
     const int H = getHeight();
-    const int outer = 10;
-    const int gap = 12;
-    const int hH = 78;
-    const int sH = 118;
-    const int fxH = fxSectionHeight;
-    const int controlH = controlSectionHeight;
+    const int outer = kUiOuterInset;
+    const int gap = kUiSectionGap;
+    const int hH = kUiHeaderHeight;
+    const int sH = kUiFooterHeight;
+    const int fxH = kUiFxSectionHeight;
+    const int controlH = kUiControlSectionHeight;
+    const int bottomPanelH = controlH + sH;
     const int fullX = outer;
     const int fullW = W - outer * 2;
     const int mY = hH + outer;
@@ -2149,17 +2216,30 @@ void MainComponent::paint(juce::Graphics& g)
     const int fxY = mY + trackH + gap;
     const int controlY = fxY + fxH + gap;
 
+    const auto drawTolexLayer = [this, &g](juce::Rectangle<float> area,
+                                           float opacity,
+                                           float cornerRadius = 0.0f)
+    {
+        if (!rackSurfaceTexture.isValid() || area.isEmpty())
+            return;
+
+        juce::Graphics::ScopedSaveState state(g);
+        g.setTiledImageFill(rackSurfaceTexture, 0, 0, opacity);
+        if (cornerRadius > 0.0f)
+            g.fillRoundedRectangle(area, cornerRadius);
+        else
+            g.fillRect(area);
+    };
+
     juce::ColourGradient bgGrad(
         juce::Colour(0xff13161a), 0.0f, 0.0f,
         LnfC::BG.darker(0.12f),   0.0f, (float)getHeight(), false);
     g.setGradientFill(bgGrad);
     g.fillRect(0, 0, W, getHeight());
     if (rackSurfaceTexture.isValid())
-    {
-        g.setTiledImageFill(rackSurfaceTexture, 0, 0, 0.22f);
-        g.fillRect(0, 0, W, getHeight());
-    }
-    drawFineRackTexture(g, juce::Rectangle<float>(0.0f, 0.0f, (float)W, (float)getHeight()), 0.45f);
+        drawTolexLayer({ 0.0f, 0.0f, (float)W, (float)getHeight() }, 0.40f);
+    else
+        drawFineRackTexture(g, { 0.0f, 0.0f, (float)W, (float)getHeight() }, 0.45f);
 
     g.setColour(juce::Colours::black.withAlpha(0.62f));
     g.drawRoundedRectangle(7.0f, 7.0f, (float)W - 14.0f, (float)getHeight() - 14.0f, 18.0f, 3.0f);
@@ -2171,7 +2251,13 @@ void MainComponent::paint(juce::Graphics& g)
         juce::Colour(0xff060708), 0.0f, (float)hH, false);
     g.setGradientFill(hGrad);
     g.fillRect(0, 0, W, hH);
-    drawBrushedMetalHeader(g, juce::Rectangle<float>(0.0f, 0.0f, (float)W, (float)hH));
+    if (rackSurfaceTexture.isValid())
+        drawTolexLayer({ 0.0f, 0.0f, (float)W, (float)hH }, 0.16f);
+    else
+        drawBrushedMetalHeader(g, { 0.0f, 0.0f, (float)W, (float)hH });
+
+    constexpr int brandWidth = 252;
+    const int brandX = (W - brandWidth) / 2;
 
     g.setColour(juce::Colours::black.withAlpha(0.82f));
     g.drawHorizontalLine(hH + 1, 0.0f, (float)W);
@@ -2183,77 +2269,39 @@ void MainComponent::paint(juce::Graphics& g)
     drawScrew(g, 22.0f, (float)hH * 0.5f, 6.0f);
     drawScrew(g, (float)W - 22.0f, (float)hH * 0.5f, 6.0f);
 
-    constexpr int titleAreaLeft = 28;
-    constexpr int titleAreaRight = 244;
-    const int titleAreaWidth = titleAreaRight - titleAreaLeft;
-    g.setFont(juce::Font(juce::FontOptions(20.0f).withStyle("Bold")));
-    g.setColour(juce::Colours::black.withAlpha(0.75f));
-    g.drawText("LOOPERNICO", titleAreaLeft + 1, 12, 145, 26, juce::Justification::centredLeft);
-    g.setColour(LnfC::TextHi);
-    g.drawText("LOOPERNICO", titleAreaLeft, 11, 145, 26, juce::Justification::centredLeft);
-    g.setColour(LnfC::RecRed);
-    g.drawText("PRO", titleAreaLeft + 142, 11, 48, 26, juce::Justification::centredLeft);
-    g.setColour(LnfC::TextDim.withAlpha(0.72f));
-    g.setFont(juce::Font(juce::FontOptions(9.5f).withStyle("Bold")));
-    g.drawText("MULTI-TRACK LOOPER", titleAreaLeft, 37, titleAreaWidth, 16,
-               juce::Justification::centredLeft);
-
-    LoopernicoUi::drawPanel(g, { fullX, mY,       fullW, trackH },   "LOOPER",            LnfC::Accent);
-    LoopernicoUi::drawPanel(g, { fullX, fxY,      fullW, fxH },      "CADENA DE EFECTOS", LnfC::OvdAmber);
-    LoopernicoUi::drawPanel(g, { fullX, controlY, fullW, controlH }, "CONTROL GLOBAL",    LnfC::Accent);
-
-    const float rulerLeft = (float) fullX + 190.0f;
-    const float rulerRight = (float) fullX + (float) fullW - 16.0f;
-    const float rulerY = (float) mY + 37.0f;
-    g.setColour(juce::Colours::black.withAlpha(0.78f));
-    g.fillRect(rulerLeft, (float) mY + 27.0f, rulerRight - rulerLeft, 20.0f);
-    g.setColour(juce::Colours::white.withAlpha(0.14f));
-    g.drawHorizontalLine((int) rulerY, rulerLeft, rulerRight);
-    for (int beat = 0; beat <= 32; ++beat)
+    if (brandWordmark.isValid())
     {
-        const float x = rulerLeft + (rulerRight - rulerLeft) * (float) beat / 32.0f;
-        const bool bar = beat % 8 == 0;
-        const bool half = beat % 4 == 0;
-        g.setColour(juce::Colours::white.withAlpha(bar ? 0.55f : half ? 0.25f : 0.12f));
-        g.drawVerticalLine((int) x, rulerY - (bar ? 8.0f : half ? 5.0f : 3.0f), rulerY + 1.0f);
-        if (bar && beat < 32)
-        {
-            g.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
-            g.setColour(LnfC::TextHi.withAlpha(0.85f));
-            g.drawText(juce::String(beat / 8 + 1), (int) x + 3, mY + 26, 24, 11,
-                       juce::Justification::centredLeft);
-        }
+        constexpr int brandHeight = 55;
+        g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+        g.drawImage(brandWordmark,
+                    brandX, (hH - brandHeight) / 2, brandWidth, brandHeight,
+                    0, 0, brandWordmark.getWidth(), brandWordmark.getHeight());
+    }
+    else
+    {
+        g.setFont(juce::Font(juce::FontOptions(19.0f).withStyle("Bold Italic")));
+        g.setColour(LnfC::TextHi);
+        g.drawText("LOOPERNICO", brandX, 20, brandWidth, 30, juce::Justification::centred);
     }
 
-    const int loopGroupW = 270;
-    const int loopGroupX = fullX + fullW - 18 - loopGroupW;
-    g.setColour(LnfC::TextDim);
-    g.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
-    g.drawText("ARREMANGAR", loopGroupX, controlY + 30, 120, 12, juce::Justification::centredLeft);
+    LoopernicoUi::drawPanel(g, { fullX, mY,       fullW, trackH },   {},                  LnfC::Accent);
+    LoopernicoUi::drawPanel(g, { fullX, fxY,      fullW, fxH },      {},                  LnfC::OvdAmber, false);
+    LoopernicoUi::drawPanel(g, { fullX, controlY, fullW, bottomPanelH }, {},               LnfC::Accent, false);
+    drawTolexLayer(juce::Rectangle<float>((float)fullX + 2.0f, (float)mY + 2.0f,
+                                          (float)fullW - 4.0f, (float)trackH - 4.0f),
+                   0.07f, 6.0f);
+    drawTolexLayer(juce::Rectangle<float>((float)fullX + 2.0f, (float)fxY + 2.0f,
+                                          (float)fullW - 4.0f, (float)fxH - 4.0f),
+                   0.11f, 6.0f);
+    drawTolexLayer(juce::Rectangle<float>((float)fullX + 2.0f, (float)controlY + 2.0f,
+                                          (float)fullW - 4.0f, (float)bottomPanelH - 4.0f),
+                   0.08f, 6.0f);
 
-    int stripY = H - sH;
-    juce::ColourGradient sGrad(
-        LnfC::BG.darker(0.15f), 0.0f, (float)stripY,
-        LnfC::BG.darker(0.05f), 0.0f, (float)(stripY + sH), false);
-    g.setGradientFill(sGrad);
-    g.fillRect(0, stripY, W, sH);
-    drawFineRackTexture(g, juce::Rectangle<float>(0.0f, (float)stripY, (float)W, (float)sH), 0.25f);
-    g.setColour(LnfC::Border.withAlpha(0.50f));
-    g.drawHorizontalLine(stripY, 0.0f, (float)W);
+    const int footerY = H - outer - sH;
+    const int outputZoneX = W - kFooterInset - kFooterOutputZoneWidth;
 
-    const int footerInset = 18;
-    const int midiZoneW = 470;
-    const int outputZoneW = 430;
-    const int midiZoneX = footerInset;
-    const int outputZoneX = W - footerInset - outputZoneW;
-
-    g.setColour(LnfC::TextDim.withAlpha(0.88f));
-    g.setFont(juce::Font(juce::FontOptions(10.0f)));
-    g.drawText("ENTRADA MIDI", midiZoneX, stripY + 8, midiZoneW, 14, juce::Justification::centredLeft);
-    g.drawText("DISPOSITIVO", midiZoneX, stripY + 26, 205, 14, juce::Justification::centredLeft);
-    g.drawText("ACCION", midiZoneX + 215, stripY + 26, 145, 14, juce::Justification::centredLeft);
-
-    auto outputCluster = juce::Rectangle<float>((float) outputZoneX + 146.0f, (float) stripY + 22.0f, 256.0f, 82.0f);
+    auto outputCluster = juce::Rectangle<float>((float) outputZoneX + 210.0f,
+                                                 (float) footerY + 4.0f, 192.0f, (float) sH - 8.0f);
     g.setColour(juce::Colours::black.withAlpha(0.28f));
     g.fillRoundedRectangle(outputCluster.translated(0.0f, 3.0f), 12.0f);
     juce::ColourGradient outputClusterGrad(
@@ -2263,25 +2311,18 @@ void MainComponent::paint(juce::Graphics& g)
     g.fillRoundedRectangle(outputCluster, 12.0f);
     g.setColour(LnfC::OvdAmber.withAlpha(0.12f));
     g.drawRoundedRectangle(outputCluster.reduced(0.8f), 12.0f, 1.0f);
-
-    g.drawText("SALIDA", outputZoneX, stripY + 8, outputZoneW, 14, juce::Justification::centredLeft);
-    g.drawText("VOLUMEN", outputZoneX + 172, stripY + 26, 88, 14, juce::Justification::centred);
-    g.drawText("MEDIDOR", outputZoneX + 328, stripY + 26, 72, 14, juce::Justification::centred);
 }
 
 void MainComponent::resized()
 {
     const int W = getWidth();
     const int H = getHeight();
-    const int outer = 10;
-    const int gap = 12;
-    const int hH = 78;
-    const int sH = 118;
-    const int maxCombined = juce::jmax(276, H - hH - sH - outer * 2 - 180 - gap * 2);
-    if (fxSectionHeight + controlSectionHeight > maxCombined)
-        fxSectionHeight = juce::jmax(180, maxCombined - controlSectionHeight);
-    const int fxH = fxSectionHeight;
-    const int controlH = controlSectionHeight;
+    const int outer = kUiOuterInset;
+    const int gap = kUiSectionGap;
+    const int hH = kUiHeaderHeight;
+    const int sH = kUiFooterHeight;
+    const int fxH = kUiFxSectionHeight;
+    const int controlH = kUiControlSectionHeight;
     const int fullX = outer;
     const int fullW = W - outer * 2;
     const int mY = hH + outer;
@@ -2290,29 +2331,50 @@ void MainComponent::resized()
     const int fxY = mY + trackH + gap;
     const int controlY = fxY + fxH + gap;
 
-    looperFxDivider.setBounds(fullX + 8, mY + trackH, fullW - 16, gap);
-    fxControlDivider.setBounds(fullX + 8, fxY + fxH, fullW - 16, gap);
-    looperFxDivider.toFront(false);
-    fxControlDivider.toFront(false);
+    constexpr int brandWidth = 252;
+    constexpr int headerSideGap = 30;
+    constexpr int headerOuterInset = 52;
+    constexpr int headerButtonGap = 16;
+    constexpr int headerButtonHeight = 24;
+    const int brandX = (W - brandWidth) / 2;
+    const auto leftHeaderZone = juce::Rectangle<int>(headerOuterInset, 0,
+                                                      juce::jmax(0, brandX - headerSideGap - headerOuterInset), hH);
+    const auto rightHeaderZone = juce::Rectangle<int>(brandX + brandWidth + headerSideGap, 0,
+                                                       juce::jmax(0, W - headerOuterInset - brandX - brandWidth - headerSideGap), hH);
 
-    struct BtnLayout { juce::TextButton* btn; int w; };
-    BtnLayout btns[] = {
-        { &btnRecConfirm, 150 },
-        { &btnStopPlay,   122 },
-        { &btnPauseAll,    92 },
-        { &btnCancel,      92 },
-        { &btnUndo,        82 },
-        { &btnRedo,        82 },
-        { &btnReset,      108 },
+    auto layoutHeaderRow = [headerButtonGap, headerButtonHeight]
+                           (juce::Rectangle<int> zone, int y, int maxButtonWidth,
+                            std::initializer_list<juce::TextButton*> buttons)
+    {
+        const int count = (int) buttons.size();
+        if (count == 0 || zone.isEmpty())
+            return;
+
+        const int gap = headerButtonGap;
+        const int height = headerButtonHeight;
+        const int availablePerButton = juce::jmax(40, (zone.getWidth() - gap * (count - 1)) / count);
+        const int buttonWidth = juce::jmin(maxButtonWidth, availablePerButton);
+        const int rowWidth = buttonWidth * count + gap * (count - 1);
+        int x = zone.getCentreX() - rowWidth / 2;
+
+        for (auto* button : buttons)
+        {
+            button->setBounds(x, y, buttonWidth, height);
+            x += buttonWidth + gap;
+        }
     };
-    int bx = 252, by = 16, bh = 40;
-    for (auto& bl : btns) { bl.btn->setBounds(bx, by, bl.w, bh); bx += bl.w + 8; }
-    btnSaveSession.setBounds(W - 498, 16, 112, 24);
-    btnLoadSession.setBounds(W - 378, 16, 112, 24);
-    btnExportMix.setBounds(W - 258, 16, 112, 24);
-    btnExportTracks.setBounds(W - 138, 16, 112, 24);
 
-    auto vpRect = juce::Rectangle<int>(fullX + 4, mY + 48, fullW - 8, trackH - 52);
+    layoutHeaderRow(leftHeaderZone, 13, 106,
+                    { &btnRecConfirm, &btnStopPlay, &btnPauseAll, &btnCancel });
+    layoutHeaderRow(leftHeaderZone, 49, 106,
+                    { &btnUndo, &btnRedo, &btnReset });
+    layoutHeaderRow(rightHeaderZone, 13, 128,
+                    { &btnSaveSession, &btnLoadSession });
+    layoutHeaderRow(rightHeaderZone, 49, 128,
+                    { &btnExportMix, &btnExportTracks });
+
+    auto vpRect = juce::Rectangle<int>(fullX + 4, mY + kTrackViewportTopInset, fullW - 8,
+                                       trackH - kTrackViewportTopInset - kTrackViewportBottomInset);
     trackViewport.setBounds(vpRect);
 
     const int kTH = 116;
@@ -2325,22 +2387,31 @@ void MainComponent::resized()
         ty += kTH;
     }
 
-    int fxPanY = fxY + 34;
-    int fxPanH = fxH - 50;
+    int fxPanY = fxY + kFxViewportTopInset;
     int fxPanW = fullW - 12;
-    const int vstHeaderY = fxY + 6;
-    const int vstButtonsRight = fullX + fullW - 18;
-    btnBypassVst3.setBounds(vstButtonsRight - 84, vstHeaderY, 84, 22);
-    btnEditVst3.setBounds(vstButtonsRight - 152, vstHeaderY, 62, 22);
-    btnUnloadVst3.setBounds(vstButtonsRight - 224, vstHeaderY, 66, 22);
-    btnLoadVst3.setBounds(vstButtonsRight - 344, vstHeaderY, 114, 22);
-    lblVst3Status.setBounds(fullX + 190, vstHeaderY + 2, fullW - 550, 18);
-    fxViewport.setBounds(fullX + 8, fxPanY, fxPanW - 4, fxPanH - 16);
+    fxViewport.setBounds(fullX + 8, fxPanY, fxPanW - 4,
+                         juce::jmax(0, fxH - kFxViewportTopInset - kFxViewportBottomInset));
 
-    int totalPedalWidth = 10;
+    int totalPedalWidth = 10 + kVst3PedalPitch;
     for (int slot = 0; slot < kNumFxPedals; ++slot)
         totalPedalWidth += fxPedalPitch(fxOrder[(size_t) slot]);
     fxContainer.setSize(totalPedalWidth, fxViewport.getHeight());
+
+    if (vst3Pedal != nullptr)
+    {
+        vst3Pedal->setBounds(14, 4, kVst3PedalBodyWidth, fxContainer.getHeight() - 8);
+        const int contentX = 14;
+        const int contentW = vst3Pedal->getWidth() - contentX * 2;
+        const int pairGap = 6;
+        const int pairW = (contentW - pairGap) / 2;
+
+        lblVst3Status.setBounds(contentX, 38, contentW, 36);
+        btnLoadVst3.setBounds(contentX, 82, contentW, 27);
+        btnEditVst3.setBounds(contentX, 115, pairW, 25);
+        btnUnloadVst3.setBounds(contentX + pairW + pairGap, 115, pairW, 25);
+        btnBypassVst3.setBounds(contentX, 147, contentW, 27);
+    }
+
     for (int slot = 0; slot < kNumFxPedals; ++slot)
     {
         const int pedalIndex = fxOrder[(size_t) slot];
@@ -2367,61 +2438,52 @@ void MainComponent::resized()
     rhythmPatternSelector.setBounds(patternBox);
     rhythmModeSelector.setBounds(modeBox);
 
-    lblRhythmVerseBars.setBounds(fullX + 490, controlY + 40, 66, 14);
-    rhythmVerseBarsSelector.setBounds(fullX + 490, controlY + 58, 92, 24);
-    lblRhythmChorusBars.setBounds(fullX + 594, controlY + 40, 88, 14);
-    rhythmChorusBarsSelector.setBounds(fullX + 594, controlY + 58, 108, 24);
-    lblRhythmCountIn.setBounds(fullX + 716, controlY + 40, 88, 14);
-    rhythmCountInBarsSelector.setBounds(fullX + 716, controlY + 58, 104, 24);
-    lblRhythmCountSound.setBounds(fullX + 832, controlY + 40, 78, 14);
-    rhythmCountInSoundSelector.setBounds(fullX + 832, controlY + 58, 108, 24);
-    btnRhythmCountInToggle.setBounds(fullX + 952, controlY + 56, 118, 28);
-    btnRhythmNextSection.setBounds(fullX + 1082, controlY + 56, 180, 28);
-    lblRhythmSectionState.setBounds(fullX + 952, controlY + 38, 310, 16);
+    lblRhythmVerseBars.setBounds(fullX + 490, controlY + kControlLabelOffsetY, 66, 12);
+    rhythmVerseBarsSelector.setBounds(fullX + 490, controlY + kControlRowOffsetY, 92, 24);
+    lblRhythmChorusBars.setBounds(fullX + 594, controlY + kControlLabelOffsetY, 88, 12);
+    rhythmChorusBarsSelector.setBounds(fullX + 594, controlY + kControlRowOffsetY, 108, 24);
+    lblRhythmCountIn.setBounds(fullX + 716, controlY + kControlLabelOffsetY, 88, 12);
+    rhythmCountInBarsSelector.setBounds(fullX + 716, controlY + kControlRowOffsetY, 104, 24);
+    lblRhythmCountSound.setBounds(fullX + 832, controlY + kControlLabelOffsetY, 78, 12);
+    rhythmCountInSoundSelector.setBounds(fullX + 832, controlY + kControlRowOffsetY, 108, 24);
+    btnRhythmCountInToggle.setBounds(fullX + 952, controlY + kControlRowOffsetY, 118, 24);
+    btnRhythmNextSection.setBounds(fullX + 1082, controlY + kControlRowOffsetY, 180, 24);
+    lblRhythmSectionState.setBounds(fullX + 952, controlY + kControlLabelOffsetY - 1, 310, 12);
 
     const int loopGroupW = 270;
     const int loopGroupX = fullX + fullW - 18 - loopGroupW;
-    lblLoopEdit.setBounds(loopGroupX, controlY + 40, 110, 14);
-    btnLoopInEarlier.setBounds(loopGroupX, controlY + 58, 58, 24);
-    btnLoopInLater.setBounds(loopGroupX + 64, controlY + 58, 58, 24);
-    btnLoopOutShorter.setBounds(loopGroupX + 132, controlY + 58, 66, 24);
-    btnLoopOutLonger.setBounds(loopGroupX + 204, controlY + 58, 66, 24);
+    lblLoopEdit.setBounds(loopGroupX, controlY + kControlLabelOffsetY, 110, 12);
+    btnLoopInEarlier.setBounds(loopGroupX, controlY + kControlRowOffsetY, 58, 24);
+    btnLoopInLater.setBounds(loopGroupX + 64, controlY + kControlRowOffsetY, 58, 24);
+    btnLoopOutShorter.setBounds(loopGroupX + 132, controlY + kControlRowOffsetY, 66, 24);
+    btnLoopOutLonger.setBounds(loopGroupX + 204, controlY + kControlRowOffsetY, 66, 24);
 
-    lblSilenceThreshold.setBounds(fullX + 18, controlY + 86, 110, 14);
-    sldSilenceThreshold.setBounds(fullX + 132, controlY + 84, fullW - 150, 18);
+    lblSilenceThreshold.setBounds(fullX + 24, mY + 5, 100, 18);
+    sldSilenceThreshold.setBounds(fullX + 126, mY + 5, 420, 18);
 
-    int stripY = H - sH;
-    const int footerInset = 18;
-    const int midiZoneX = footerInset;
-    const int midiStatusY = stripY + 76;
-    const int midiMappingY = stripY + 92;
-    const int midiControlsY = stripY + 48;
-    const int midiDeviceWidth = 205;
-    const int midiActionWidth = 145;
-    const int midiLearnWidth = 108;
-    const int midiTypeWidth = 90;
-    const int midiNumberWidth = 74;
-    const int midiClearWidth = 70;
-    const int midiGap = 10;
-    const int midiBlockWidth = midiDeviceWidth + midiGap + midiActionWidth + midiGap + midiLearnWidth
-                             + midiGap + midiTypeWidth + midiGap + midiNumberWidth + midiGap + midiClearWidth;
-    const int outputZoneW = 430;
-    const int outputZoneX = W - footerInset - outputZoneW;
+    const int footerY = H - outer - sH;
+    const int midiZoneX = kFooterInset;
+    const int midiControlsY = footerY + (sH - 24) / 2;
+    const int outputZoneX = W - kFooterInset - kFooterOutputZoneWidth;
 
-    btnOutputMode.setBounds(outputZoneX, stripY + 28, 118, 28);
-    btnMuteAll.setBounds(outputZoneX, stripY + 60, 118, 28);
-    masterKnob.setBounds(outputZoneX + 186, stripY + 44, 34, 52);
-    masterVUMeter.setBounds(outputZoneX + 356, stripY + 38, 30, 58);
+    btnOutputMode.setBounds(outputZoneX, midiControlsY, 96, 24);
+    btnMuteAll.setBounds(outputZoneX + 104, midiControlsY, 96, 24);
+    masterKnob.setBounds(outputZoneX + 225, footerY + 3, 34, 34);
+    masterVUMeter.setBounds(outputZoneX + 282, midiControlsY, 116, 24);
 
-    lblMidiStatus.setBounds(midiZoneX, midiStatusY, midiBlockWidth, 16);
-    lblMidiStatus.setJustificationType(juce::Justification::centredLeft);
-    lblMidiMapping.setBounds(midiZoneX, midiMappingY, midiBlockWidth + 40, 16);
-    lblMidiMapping.setJustificationType(juce::Justification::centredLeft);
-    midiDeviceSelector.setBounds(midiZoneX, midiControlsY, midiDeviceWidth, 24);
-    midiActionSelector.setBounds(midiZoneX + midiDeviceWidth + midiGap, midiControlsY, midiActionWidth, 24);
-    btnMidiLearn.setBounds(midiZoneX + midiDeviceWidth + midiGap + midiActionWidth + midiGap, midiControlsY, midiLearnWidth, 24);
-    const int midiManualX = midiZoneX + midiDeviceWidth + midiGap + midiActionWidth + midiGap + midiLearnWidth + midiGap;
-    midiMessageTypeSelector.setBounds(midiManualX, midiControlsY, midiTypeWidth, 24);
-    midiNumberSelector.setBounds(midiManualX + midiTypeWidth + midiGap, midiControlsY, midiNumberWidth, 24);
-    btnMidiClear.setBounds(midiManualX + midiTypeWidth + midiGap + midiNumberWidth + midiGap, midiControlsY, midiClearWidth, 24);
+    midiDeviceSelector.setBounds(midiZoneX, midiControlsY, kMidiDeviceWidth, 24);
+    midiActionSelector.setBounds(midiZoneX + kMidiDeviceWidth + kMidiControlGap,
+                                 midiControlsY, kMidiActionWidth, 24);
+    btnMidiLearn.setBounds(midiZoneX + kMidiDeviceWidth + kMidiControlGap
+                                    + kMidiActionWidth + kMidiControlGap,
+                           midiControlsY, kMidiLearnWidth, 24);
+    const int midiManualX = midiZoneX + kMidiDeviceWidth + kMidiControlGap
+                                      + kMidiActionWidth + kMidiControlGap
+                                      + kMidiLearnWidth + kMidiControlGap;
+    midiMessageTypeSelector.setBounds(midiManualX, midiControlsY, kMidiTypeWidth, 24);
+    midiNumberSelector.setBounds(midiManualX + kMidiTypeWidth + kMidiControlGap,
+                                 midiControlsY, kMidiNumberWidth, 24);
+    btnMidiClear.setBounds(midiManualX + kMidiTypeWidth + kMidiControlGap
+                                      + kMidiNumberWidth + kMidiControlGap,
+                           midiControlsY, kMidiClearWidth, 24);
 }

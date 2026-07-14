@@ -28,46 +28,8 @@ public:
 
 private:
     static constexpr int kNumFxPedals = 13;
-
-    class SectionDragHandle final : public juce::Component
-    {
-    public:
-        SectionDragHandle()
-        {
-            setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
-            setRepaintsOnMouseActivity(true);
-        }
-
-        std::function<void(int)> onDrag;
-        std::function<void()> onDragBegin;
-
-        void mouseDown(const juce::MouseEvent& e) override
-        {
-            dragOriginY = e.getScreenY();
-            if (onDragBegin != nullptr)
-                onDragBegin();
-        }
-        void mouseDrag(const juce::MouseEvent& e) override
-        {
-            if (onDrag != nullptr)
-                onDrag(e.getScreenY() - dragOriginY);
-        }
-
-        void paint(juce::Graphics& g) override
-        {
-            auto b = getLocalBounds().toFloat();
-            const bool hot = isMouseOverOrDragging();
-            g.setColour(juce::Colours::black.withAlpha(0.72f));
-            g.fillRoundedRectangle(b.reduced(3.0f, 2.0f), 3.0f);
-            g.setColour((hot ? LnfC::Accent : LnfC::Border).withAlpha(hot ? 0.92f : 0.48f));
-            g.drawHorizontalLine(getHeight() / 2, 18.0f, (float) getWidth() - 18.0f);
-            g.setColour(juce::Colours::white.withAlpha(hot ? 0.32f : 0.10f));
-            g.drawHorizontalLine(getHeight() / 2 - 1, 18.0f, (float) getWidth() - 18.0f);
-        }
-
-    private:
-        int dragOriginY = 0;
-    };
+    static constexpr int kVst3PedalBodyWidth = 200;
+    static constexpr int kVst3PedalPitch = kVst3PedalBodyWidth + 28;
 
     class FXChainCanvas final : public juce::Component
     {
@@ -88,6 +50,7 @@ private:
 
     LoopernicoLAF lnf;
     juce::Image rackSurfaceTexture;
+    juce::Image brandWordmark;
 
     LooperEngine             looper;
     MidiController           midiController;
@@ -106,6 +69,7 @@ private:
 
     juce::Viewport    fxViewport;
     FXChainCanvas     fxContainer;
+    std::unique_ptr<FXPedalComponent> vst3Pedal;
     std::unique_ptr<FXPedalComponent> fxPedals[kNumFxPedals];
     std::array<int, kNumFxPedals> fxOrder{};
     int draggingFxPedal = -1;
@@ -159,13 +123,6 @@ private:
     std::atomic<juce::int64> lastMidiMs { 0 };
     std::atomic<float> masterVolume { 0.85f };
     std::atomic<bool> outputMono { true };
-
-    SectionDragHandle looperFxDivider;
-    SectionDragHandle fxControlDivider;
-    int fxSectionHeight = 332;
-    int controlSectionHeight = 110;
-    int dividerStartFxHeight = 332;
-    int dividerStartControlHeight = 110;
 
     std::atomic<float> inputVU   { 0.0f };
     std::atomic<float> outputVUL { 0.0f };

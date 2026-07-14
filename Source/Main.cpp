@@ -9,6 +9,38 @@
 #include <JuceHeader.h>
 #include "MainComponent.h"
 
+namespace
+{
+    struct SnapshotLaunchRequest
+    {
+        bool enabled = false;
+        juce::String outputPath;
+    };
+
+    SnapshotLaunchRequest parseSnapshotLaunchRequest(const juce::String& commandLine)
+    {
+        SnapshotLaunchRequest request;
+        juce::StringArray arguments;
+        arguments.addTokens(commandLine, true);
+
+        for (const auto& rawArgument : arguments)
+        {
+            const auto argument = rawArgument.unquoted();
+            if (argument.equalsIgnoreCase("--snapshot-ui"))
+            {
+                request.enabled = true;
+            }
+            else if (argument.startsWithIgnoreCase("--snapshot-ui="))
+            {
+                request.enabled = true;
+                request.outputPath = argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            }
+        }
+
+        return request;
+    }
+}
+
 //==============================================================================
 class LoopernicoRefactorizadoApplication  : public juce::JUCEApplication
 {
@@ -23,10 +55,10 @@ public:
     //==============================================================================
     void initialise (const juce::String& commandLine) override
     {
-        juce::ignoreUnused(commandLine);
         // This method is where you should put your application's initialisation code..
 
-        mainWindow.reset (new MainWindow (getApplicationName()));
+        const auto snapshotRequest = parseSnapshotLaunchRequest(commandLine);
+        mainWindow.reset (new MainWindow (getApplicationName(), snapshotRequest));
     }
 
     void shutdown() override
@@ -60,7 +92,7 @@ public:
     class MainWindow    : public juce::DocumentWindow
     {
     public:
-        MainWindow (juce::String name)
+        MainWindow (juce::String name, const SnapshotLaunchRequest& snapshotRequest)
             : DocumentWindow (name,
                               juce::Desktop::getInstance().getDefaultLookAndFeel()
                                                           .findColour (juce::ResizableWindow::backgroundColourId),
@@ -77,6 +109,17 @@ public:
            #endif
 
             setVisible (true);
+
+           #if ! JUCE_IOS && ! JUCE_ANDROID
+            // With JUCE's native Windows peer this maps to SW_SHOWMAXIMIZED: it uses
+            // the desktop work area while retaining the title bar, taskbar and normal
+            // window controls. Snapshot mode keeps its fixed visual-reference size.
+            if (! snapshotRequest.enabled)
+                setFullScreen (true);
+           #endif
+
+            if (snapshotRequest.enabled)
+                scheduleUiSnapshot(snapshotRequest.outputPath, true, 1500);
         }
 
         void closeButtonPressed() override
@@ -87,6 +130,17 @@ public:
             JUCEApplication::getInstance()->systemRequestedQuit();
         }
 
+        bool keyPressed(const juce::KeyPress& key) override
+        {
+            if (key.getKeyCode() == juce::KeyPress::F12Key)
+            {
+                scheduleUiSnapshot({}, false, 100);
+                return true;
+            }
+
+            return DocumentWindow::keyPressed(key);
+        }
+
         /* Note: Be careful if you override any DocumentWindow methods - the base
            class uses a lot of them, so by overriding you might break its functionality.
            It's best to do all your work in your content component instead, but if
@@ -95,6 +149,75 @@ public:
         */
 
     private:
+        static juce::String snapshotFileName()
+        {
+            const auto now = juce::Time::getCurrentTime();
+            return "loopernico-ui-" + now.formatted("%Y%m%d-%H%M%S")
+                 + "-" + juce::String(now.toMilliseconds()) + ".png";
+        }
+
+        static juce::File resolveSnapshotFile(juce::String requestedPath)
+        {
+            requestedPath = requestedPath.trim().unquoted();
+            if (requestedPath.isEmpty())
+            {
+                return juce::File::getSpecialLocation(juce::File::userPicturesDirectory)
+                    .getChildFile("Loopernico")
+                    .getChildFile(snapshotFileName());
+            }
+
+            auto output = juce::File::isAbsolutePath(requestedPath)
+                ? juce::File(requestedPath)
+                : juce::File::getCurrentWorkingDirectory().getChildFile(requestedPath);
+
+            if (output.isDirectory())
+                output = output.getChildFile(snapshotFileName());
+            else if (!output.hasFileExtension("png"))
+                output = output.withFileExtension("png");
+
+            return output;
+        }
+
+        bool writeUiSnapshot(const juce::String& requestedPath)
+        {
+            auto* content = getContentComponent();
+            if (content == nullptr)
+                return false;
+
+            const auto output = resolveSnapshotFile(requestedPath);
+            if (output.getParentDirectory().createDirectory().failed())
+                return false;
+
+            output.deleteFile();
+            juce::FileOutputStream stream(output);
+            if (!stream.openedOk())
+                return false;
+
+            const auto image = content->createComponentSnapshot(content->getLocalBounds());
+            juce::PNGImageFormat png;
+            const bool written = png.writeImageToStream(image, stream);
+            stream.flush();
+
+            if (written)
+                juce::Logger::writeToLog("Captura de interfaz guardada en: " + output.getFullPathName());
+
+            return written;
+        }
+
+        void scheduleUiSnapshot(const juce::String& requestedPath, bool quitAfterCapture, int delayMs)
+        {
+            juce::Timer::callAfterDelay(delayMs,
+                [safeWindow = juce::Component::SafePointer<MainWindow>(this), requestedPath, quitAfterCapture]
+                {
+                    if (auto* window = safeWindow.getComponent())
+                        window->writeUiSnapshot(requestedPath);
+
+                    if (quitAfterCapture)
+                        if (auto* app = juce::JUCEApplication::getInstance())
+                            app->systemRequestedQuit();
+                });
+        }
+
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainWindow)
     };
 

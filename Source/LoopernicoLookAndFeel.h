@@ -288,6 +288,12 @@ public:
     void drawButtonBackground(juce::Graphics& g, juce::Button& btn,
                               const juce::Colour& bgCol, bool hl, bool dn) override
     {
+        if (btn.getComponentID() == "headerConsoleButton")
+        {
+            drawHeaderConsoleButton(g, btn, hl, dn);
+            return;
+        }
+
         auto b = btn.getLocalBounds().toFloat().reduced(0.5f);
         bool on = btn.getToggleState();
         auto col = on ? bgCol.brighter(0.12f) : dn ? bgCol.darker(0.08f)
@@ -365,6 +371,33 @@ public:
             g.setColour(juce::Colours::white.withAlpha(0.75f));
             g.fillEllipse(lx - lr * 0.45f, ly - lr * 0.65f, lr * 0.65f, lr * 0.65f);
         }
+    }
+
+    void drawButtonText(juce::Graphics& g, juce::TextButton& btn,
+                        bool isMouseOverButton, bool isButtonDown) override
+    {
+        if (btn.getComponentID() != "headerConsoleButton")
+        {
+            juce::LookAndFeel_V4::drawButtonText(g, btn, isMouseOverButton, isButtonDown);
+            return;
+        }
+
+        const bool illuminated = btn.getToggleState() || isButtonDown;
+        const auto led = btn.findColour(juce::TextButton::buttonOnColourId);
+        auto textArea = btn.getLocalBounds().reduced(7, 1);
+        if (isButtonDown)
+            textArea.translate(0, 1);
+
+        g.setFont(juce::Font(juce::FontOptions(9.6f).withStyle("Bold"))
+                      .withExtraKerningFactor(0.045f));
+        g.setColour(juce::Colours::black.withAlpha(illuminated ? 0.48f : 0.78f));
+        g.drawFittedText(btn.getButtonText(), textArea.translated(0, 1),
+                         juce::Justification::centred, 1, 0.82f);
+        g.setColour(illuminated ? juce::Colours::white
+                                : isMouseOverButton ? led.brighter(0.75f)
+                                                    : juce::Colour(0xffe2e5e9));
+        g.drawFittedText(btn.getButtonText(), textArea,
+                         juce::Justification::centred, 1, 0.82f);
     }
 
     void drawComboBox(juce::Graphics& g, int w, int h, bool,
@@ -508,6 +541,74 @@ public:
 
         juce::ignoreUnused(slider);
     }
+
+private:
+    static void drawHeaderConsoleButton(juce::Graphics& g, juce::Button& btn,
+                                        bool isMouseOverButton, bool isButtonDown)
+    {
+        auto bounds = btn.getLocalBounds().toFloat().reduced(1.0f, 0.8f);
+        const bool illuminated = btn.getToggleState() || isButtonDown;
+        const auto led = btn.findColour(juce::TextButton::buttonOnColourId);
+        const float glowStrength = illuminated ? 1.0f : isMouseOverButton ? 0.52f : 0.22f;
+
+        // Recessed socket first: everything that follows is seen through the clear cap.
+        g.setColour(juce::Colours::black.withAlpha(0.78f));
+        g.fillRoundedRectangle(bounds.translated(0.0f, 1.6f), 3.4f);
+        juce::ColourGradient socket(juce::Colour(0xff111419), bounds.getX(), bounds.getY(),
+                                    juce::Colour(0xff010203), bounds.getX(), bounds.getBottom(), false);
+        g.setGradientFill(socket);
+        g.fillRoundedRectangle(bounds, 3.4f);
+        g.setColour(juce::Colours::black.withAlpha(0.82f));
+        g.drawRoundedRectangle(bounds.reduced(0.4f), 3.2f, 0.8f);
+
+        auto cap = bounds.reduced(2.1f, 1.8f);
+        if (isButtonDown)
+            cap.translate(0.0f, 1.0f);
+
+        // A small emitter and its bloom are painted underneath, not mixed into the plastic.
+        const float emitterWidth = juce::jlimit(22.0f, 48.0f, cap.getWidth() * 0.34f);
+        auto emitter = juce::Rectangle<float>(cap.getCentreX() - emitterWidth * 0.5f,
+                                               cap.getBottom() - 4.2f,
+                                               emitterWidth, 2.3f);
+        g.setColour(led.withAlpha(0.055f * glowStrength));
+        g.fillRoundedRectangle(cap.expanded(1.4f, 0.9f), 3.5f);
+        juce::ColourGradient bloom(led.withAlpha(0.015f), cap.getCentreX(), cap.getY(),
+                                   led.withAlpha(0.62f * glowStrength), cap.getCentreX(), cap.getBottom(), false);
+        bloom.addColour(0.58, led.withAlpha(0.11f * glowStrength));
+        bloom.addColour(0.82, led.withAlpha(0.32f * glowStrength));
+        g.setGradientFill(bloom);
+        g.fillRoundedRectangle(cap.reduced(0.5f), 2.7f);
+        g.setColour(led.withAlpha(illuminated ? 0.94f : isMouseOverButton ? 0.58f : 0.30f));
+        g.fillRoundedRectangle(emitter, 1.1f);
+        g.setColour(led.brighter(0.85f).withAlpha(illuminated ? 0.76f : 0.20f));
+        g.fillRoundedRectangle(emitter.reduced(5.0f, 0.5f), 0.6f);
+
+        // Neutral, genuinely translucent acrylic: the colour visible here comes from the LED below.
+        juce::ColourGradient acrylic(juce::Colours::white.withAlpha(isButtonDown ? 0.10f : 0.22f),
+                                     cap.getX(), cap.getY(),
+                                     juce::Colour(0xff9aa2ac).withAlpha(0.035f),
+                                     cap.getX(), cap.getBottom(), false);
+        acrylic.addColour(0.30, juce::Colour(0xffe8edf2).withAlpha(isMouseOverButton ? 0.13f : 0.085f));
+        acrylic.addColour(0.68, juce::Colour(0xff48505a).withAlpha(0.055f));
+        acrylic.addColour(0.88, juce::Colours::white.withAlpha(0.025f));
+        g.setGradientFill(acrylic);
+        g.fillRoundedRectangle(cap, 2.6f);
+
+        // Bevel and refraction cues define the clear shell without making it opaque.
+        g.setColour(juce::Colours::white.withAlpha(isButtonDown ? 0.16f : 0.48f));
+        g.drawRoundedRectangle(cap.reduced(0.35f), 2.45f, 0.75f);
+        g.setColour(juce::Colours::white.withAlpha(isButtonDown ? 0.04f : 0.19f));
+        g.fillRoundedRectangle(cap.reduced(1.3f).withHeight(2.7f), 1.3f);
+        g.setColour(juce::Colours::white.withAlpha(0.10f));
+        g.drawVerticalLine(juce::roundToInt(cap.getX() + 1.2f),
+                           cap.getY() + 3.0f, cap.getBottom() - 3.0f);
+        g.setColour(juce::Colours::black.withAlpha(0.30f));
+        g.drawHorizontalLine(juce::roundToInt(cap.getBottom() - 0.9f),
+                             cap.getX() + 2.0f, cap.getRight() - 2.0f);
+        g.setColour(led.withAlpha(0.13f + 0.16f * glowStrength));
+        g.drawHorizontalLine(juce::roundToInt(cap.getBottom() - 1.8f),
+                             cap.getX() + 5.0f, cap.getRight() - 5.0f);
+    }
 };
 
 namespace LoopernicoUi
@@ -633,7 +734,8 @@ namespace LoopernicoUi
     }
 
     static inline void drawPanel(juce::Graphics& g, juce::Rectangle<int> r,
-                                 const juce::String& title, juce::Colour accent)
+                                 const juce::String& title, juce::Colour accent,
+                                 bool showHeader = true)
     {
         auto rf = r.toFloat();
 
@@ -788,7 +890,8 @@ namespace LoopernicoUi
         drawFineRackTexture(g, rf.reduced(2.0f), 0.38f);
 
         juce::Rectangle<float> grain = rf.reduced(1.5f);
-        grain.removeFromTop(28.0f);
+        if (showHeader)
+            grain.removeFromTop(28.0f);
         for (int i = 0; i < (int)grain.getHeight(); i += 5)
         {
             float alpha = (i % 10 == 0) ? 0.010f : 0.003f;
@@ -806,6 +909,9 @@ namespace LoopernicoUi
         g.drawRoundedRectangle(rf.reduced(0.5f), 8.0f, 1.0f);
         g.setColour(juce::Colours::black.withAlpha(0.75f));
         g.drawRoundedRectangle(rf.reduced(2.0f), 7.0f, 0.8f);
+
+        if (!showHeader)
+            return;
 
         auto hdr = r.removeFromTop(28);
         auto hdrf = hdr.toFloat();
@@ -825,11 +931,14 @@ namespace LoopernicoUi
         drawScrew(g, (float)hdr.getX() + 12.0f, (float)hdr.getCentreY(), 5.5f);
         drawScrew(g, (float)hdr.getRight() - 12.0f, (float)hdr.getCentreY(), 5.5f);
 
-        g.setColour(LnfC::TextHi.withAlpha(0.95f));
-        g.setFont(juce::Font(juce::FontOptions(11.5f).withStyle("Bold")));
-        g.drawText(title,
-                   hdr.getX() + 26, hdr.getY() + 2,
-                   hdr.getWidth() - 52, hdr.getHeight() - 4,
-                   juce::Justification::centredLeft);
+        if (title.isNotEmpty())
+        {
+            g.setColour(LnfC::TextHi.withAlpha(0.95f));
+            g.setFont(juce::Font(juce::FontOptions(11.5f).withStyle("Bold")));
+            g.drawText(title,
+                       hdr.getX() + 26, hdr.getY() + 2,
+                       hdr.getWidth() - 52, hdr.getHeight() - 4,
+                       juce::Justification::centredLeft);
+        }
     }
 }

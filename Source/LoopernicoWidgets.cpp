@@ -7,19 +7,17 @@ void MasterVUMeter::drawBar(juce::Graphics& g, juce::Rectangle<float> bar, float
     g.setColour(LnfC::BG.darker(0.3f));
     g.fillRoundedRectangle(bar, 2.0f);
 
-    float db = (level > 0.00001f) ? 20.0f * std::log10(level) : -96.0f;
-    float mapped = juce::jlimit(0.0f, 1.0f, (db + 48.0f) / 54.0f);
+    const float db = (level > 0.00001f) ? 20.0f * std::log10(level) : -96.0f;
+    const float mapped = juce::jlimit(0.0f, 1.0f, (db + 48.0f) / 54.0f);
 
     const int N = 18;
-    float segH = bar.getHeight() / (float)N;
-    int topSeg = (int)(mapped * N);
+    const float segW = bar.getWidth() / (float)N;
+    const int litSegments = juce::jlimit(0, N, juce::roundToInt(mapped * (float)N));
 
     for (int i = 0; i < N; ++i)
     {
-        float bot = bar.getBottom() - (float)i * segH;
-        float top = bot - segH + 1.5f;
-        float thr = (float)i / (float)N;
-        bool lit = (1.0f - thr) <= mapped;
+        const float left = bar.getX() + (float)i * segW;
+        const bool lit = i < litSegments;
 
         juce::Colour col = (i < 10) ? LnfC::PlayGreen
                          : (i < 14) ? juce::Colour(0xffbbcc00)
@@ -28,68 +26,54 @@ void MasterVUMeter::drawBar(juce::Graphics& g, juce::Rectangle<float> bar, float
 
         if (lit)
         {
-            bool isTop = (i == topSeg);
-            g.setColour(col.withAlpha(isTop ? 0.22f : 0.07f));
-            g.fillRoundedRectangle(bar.getX() - 1.0f, top - 0.8f,
-                                   bar.getWidth() + 2.0f, segH + 0.5f, 2.0f);
-            g.setColour(isTop ? col.brighter(0.5f) : col);
-            g.fillRoundedRectangle(bar.getX() + 1.5f, top,
-                                   bar.getWidth() - 3.0f, segH - 1.5f, 1.2f);
+            const bool isHead = i == litSegments - 1;
+            g.setColour(col.withAlpha(isHead ? 0.22f : 0.07f));
+            g.fillRoundedRectangle(left - 0.6f, bar.getY() - 0.6f,
+                                   segW + 0.5f, bar.getHeight() + 1.2f, 1.8f);
+            g.setColour(isHead ? col.brighter(0.5f) : col);
+            g.fillRoundedRectangle(left + 0.7f, bar.getY() + 1.0f,
+                                   juce::jmax(1.0f, segW - 1.5f), bar.getHeight() - 2.0f, 1.0f);
 
-            if (isTop)
+            if (isHead)
             {
                 g.setColour(col.withAlpha(0.30f));
-                g.fillRoundedRectangle(bar.getX() - 1.0f, top - 1.0f,
-                                       bar.getWidth() + 2.0f, segH + 1.0f, 2.0f);
+                g.fillRoundedRectangle(left - 0.7f, bar.getY() - 0.8f,
+                                       segW + 0.7f, bar.getHeight() + 1.6f, 1.8f);
             }
         }
         else
         {
             g.setColour(col.withAlpha(0.08f));
-            g.fillRoundedRectangle(bar.getX() + 1.5f, top,
-                                   bar.getWidth() - 3.0f, segH - 1.5f, 1.2f);
+            g.fillRoundedRectangle(left + 0.7f, bar.getY() + 1.0f,
+                                   juce::jmax(1.0f, segW - 1.5f), bar.getHeight() - 2.0f, 1.0f);
         }
     }
+
+    const float zeroDbX = bar.getX() + bar.getWidth() * (48.0f / 54.0f);
+    g.setColour(juce::Colours::white.withAlpha(0.22f));
+    g.drawVerticalLine(juce::roundToInt(zeroDbX), bar.getY(), bar.getBottom());
 }
 
 void MasterVUMeter::paint(juce::Graphics& g)
 {
-    auto b = getLocalBounds();
-    const bool compact = b.getWidth() < 52;
-    const int scaleW = compact ? 0 : 26;
-    const int barGap = compact ? 2 : 3;
-    const int barW = juce::jmax(8, (b.getWidth() - scaleW - barGap - (compact ? 0 : 4)) / 2);
-    const int barH = juce::jmax(18, b.getHeight() - 16);
-    int barY = 0;
+    auto b = getLocalBounds().toFloat().reduced(1.0f);
+    constexpr float labelW = 12.0f;
+    constexpr float rowGap = 3.0f;
+    const float rowH = juce::jmax(6.0f, (b.getHeight() - rowGap) * 0.5f);
+    const auto barL = juce::Rectangle<float>(b.getX() + labelW, b.getY(),
+                                             b.getWidth() - labelW, rowH);
+    const auto barR = juce::Rectangle<float>(b.getX() + labelW, b.getY() + rowH + rowGap,
+                                             b.getWidth() - labelW, rowH);
 
-    juce::Rectangle<float> barL((float)(0), (float)barY, (float)barW, (float)barH);
-    juce::Rectangle<float> barR((float)(barW + barGap), (float)barY, (float)barW, (float)barH);
     drawBar(g, barL, levelL);
     drawBar(g, barR, levelR);
-
     g.setColour(LnfC::TextDim);
-    g.setFont(juce::Font(juce::FontOptions(8.5f).withStyle("Bold")));
-    g.drawText("L", 0, barH + 2, barW, 12, juce::Justification::centred);
-    g.drawText("R", barW + barGap, barH + 2, barW, 12, juce::Justification::centred);
-
-    if (compact)
-        return;
-
-    int scaleX = barW * 2 + barGap + 3;
-    struct { const char* lbl; float db; } marks[] = {
-        { "+6", 6.0f }, { "0", 0.0f }, { "-6", -6.0f },
-        { "-12", -12.0f }, { "-24", -24.0f }, { "-48", -48.0f },
-    };
-    g.setFont(juce::Font(juce::FontOptions(7.5f)));
-    for (auto& m : marks)
-    {
-        float frac = 1.0f - (m.db + 48.0f) / 54.0f;
-        int y = barY + (int)(frac * (float)barH);
-        g.setColour(LnfC::Border.withAlpha(0.6f));
-        g.drawHorizontalLine(y, (float)scaleX, (float)(scaleX + 4));
-        g.setColour(m.db >= 0 ? LnfC::RecRed.withAlpha(0.8f) : LnfC::TextDim.withAlpha(0.7f));
-        g.drawText(m.lbl, scaleX + 5, y - 4, scaleW - 6, 9, juce::Justification::centredLeft);
-    }
+    g.setFont(juce::Font(juce::FontOptions(7.5f).withStyle("Bold")));
+    g.drawText("L", juce::Rectangle<float>(b.getX(), b.getY(), labelW - 2.0f, rowH).toNearestInt(),
+               juce::Justification::centred);
+    g.drawText("R", juce::Rectangle<float>(b.getX(), b.getY() + rowH + rowGap,
+                                            labelW - 2.0f, rowH).toNearestInt(),
+               juce::Justification::centred);
 }
 
 void VUMeter::paint(juce::Graphics& g)
@@ -347,11 +331,6 @@ void TrackComponent::paint(juce::Graphics& g)
                           : (lenSecs > 0.0f) ? "STOP"
                                              : "EMPTY";
 
-    juce::Colour tint = isRec ? LnfC::RecRed.withAlpha(0.05f)
-                      : isOvd ? LnfC::OvdAmber.withAlpha(0.04f)
-                      : isPlay ? tColor.withAlpha(0.035f)
-                               : juce::Colours::transparentBlack;
-
     const bool hasWaveform = thumbnail != nullptr
         && thumbnail->getNumChannels() > 0
         && thumbnail->getTotalLength() > 0.0;
@@ -366,26 +345,8 @@ void TrackComponent::paint(juce::Graphics& g)
     g.drawRoundedRectangle(leftArea.reduced(3.5f, 4.5f), 5.0f, 1.0f);
 
     auto wavePanel = waveArea.reduced(3.0f, 5.0f);
-    juce::ColourGradient waveWell(juce::Colour(0xff080a0b), wavePanel.getX(), wavePanel.getY(),
-                                  juce::Colour(0xff020304), wavePanel.getX(), wavePanel.getBottom(), false);
-    g.setGradientFill(waveWell);
+    g.setColour(juce::Colour(0xff020304));
     g.fillRoundedRectangle(wavePanel, 4.0f);
-    g.setColour(tColor.withAlpha(hasWaveform ? 0.22f : 0.11f));
-    g.drawRoundedRectangle(wavePanel.reduced(0.5f), 4.0f, 1.0f);
-    g.setColour(juce::Colours::white.withAlpha(0.035f));
-    g.drawHorizontalLine((int) wavePanel.getCentreY(), wavePanel.getX() + 6.0f, wavePanel.getRight() - 6.0f);
-    for (int tick = 1; tick < 8; ++tick)
-    {
-        const float x = wavePanel.getX() + wavePanel.getWidth() * (float) tick / 8.0f;
-        g.setColour(juce::Colours::white.withAlpha(tick % 2 == 0 ? 0.055f : 0.028f));
-        g.drawVerticalLine((int) x, wavePanel.getY() + 5.0f, wavePanel.getBottom() - 5.0f);
-    }
-    if (hasWaveform)
-    {
-        g.setColour(tint);
-        g.fillRoundedRectangle(wavePanel, 4.0f);
-        drawFineRackTexture(g, wavePanel, 0.16f);
-    }
 
     juce::Colour stripC = isRec ? LnfC::RecRed : isOvd ? LnfC::OvdAmber : tColor;
     float stripAlpha = (isRec || isOvd || isPlay || lenSecs > 0.0f) ? 0.90f : 0.25f;

@@ -22,6 +22,8 @@
       <FILE id="vXpXSs" name="MainComponent.cpp" compile="1" resource="0"
             file="Source/MainComponent.cpp"/>
       <FILE id="hqgCR6" name="MainComponent.h" compile="0" resource="0" file="Source/MainComponent.h"/>
+      <FILE id="SmgrHp" name="SessionManager.h" compile="0" resource="0" file="Source/SessionManager.h"/>
+      <FILE id="SmgrCp" name="SessionManager.cpp" compile="1" resource="0" file="Source/SessionManager.cpp"/>
       <FILE id="MgZ8w2" name="MidiController.cpp" compile="1" resource="0"
             file="Source/MidiController.cpp"/>
       <FILE id="jAbDJx" name="MidiController.h" compile="0" resource="0"
