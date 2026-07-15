@@ -680,6 +680,12 @@ MainComponent::MainComponent()
     setSize(1600, 960);
     setAudioChannels(2, 2);
     optimiseAudioDeviceForLowLatency();
+    midiDeviceListConnection = juce::MidiDeviceListConnection::make(
+        [safeThis = juce::Component::SafePointer<MainComponent>(this)]()
+        {
+            if (safeThis != nullptr)
+                safeThis->handleMidiDeviceListChanged();
+        });
     startTimerHz(24);
 }
 
@@ -1008,11 +1014,50 @@ void MainComponent::setupFXPedals()
     fxPedals[10]->knob2.onValueChange=[this](){ effectsChain.setDelayTimeMs((float)fxPedals[10]->knob2.getValue()); };
     fxPedals[10]->knob3.onValueChange=[this](){ effectsChain.setDelayFeedback((float)fxPedals[10]->knob3.getValue()); };
 
-    cfg(fxPedals[11]->knob1,0,1,0.22); cfg(fxPedals[11]->knob2,0.05,1.0,0.45); cfg(fxPedals[11]->knob3,0.05,0.95,0.3);
+    fxPedals[11]->configureNineKnobs("DECAY", "PRE-DELAY", "MIX", "TONE", "PARAM 1",
+                                        "PARAM 2", "MOD", "TYPE", "VALUE");
+    for (auto* knob : { &fxPedals[11]->knob1, &fxPedals[11]->knob2, &fxPedals[11]->knob3,
+                        &fxPedals[11]->knob4, &fxPedals[11]->knob5, &fxPedals[11]->knob6,
+                        &fxPedals[11]->knob7, &fxPedals[11]->knob8, &fxPedals[11]->knob9 })
+        knob->setComponentID("bigSkyKnob");
+    cfg(fxPedals[11]->knob1, 0.05, 1.0, 0.55);       // DECAY
+    cfg(fxPedals[11]->knob2, 0.0, 1500.0, 80.0);    // PRE-DELAY
+    cfg(fxPedals[11]->knob3, 0.0, 1.0, 0.28);       // MIX
+    cfg(fxPedals[11]->knob4, 0.0, 1.0, 0.58);       // TONE
+    cfg(fxPedals[11]->knob5, 0.0, 1.0, 0.85);       // PARAM 1 / WIDTH
+    cfg(fxPedals[11]->knob6, 0.0, 1.0, 0.65);       // PARAM 2 / DIFFUSION
+    cfg(fxPedals[11]->knob7, 0.0, 1.0, 0.18);       // MOD
+    fxPedals[11]->knob8.setRange(0.0, 11.0, 1.0); fxPedals[11]->knob8.setValue(1.0); // TYPE
+    cfg(fxPedals[11]->knob9, 0.0, 1.0, 0.5);        // VALUE
     fxPedals[11]->onBtn.onClick=[this](){ effectsChain.setReverbEnabled(fxPedals[11]->onBtn.getToggleState()); };
-    fxPedals[11]->knob1.onValueChange=[this](){ effectsChain.setReverbMix((float)fxPedals[11]->knob1.getValue()); };
-    fxPedals[11]->knob2.onValueChange=[this](){ effectsChain.setReverbRoomSize((float)fxPedals[11]->knob2.getValue()); };
-    fxPedals[11]->knob3.onValueChange=[this](){ effectsChain.setReverbDamping((float)fxPedals[11]->knob3.getValue()); };
+    fxPedals[11]->knob1.onValueChange=[this](){ effectsChain.setReverbRoomSize((float)fxPedals[11]->knob1.getValue()); fxPedals[11]->repaint(); };
+    fxPedals[11]->knob2.onValueChange=[this](){ effectsChain.setReverbPreDelayMs((float)fxPedals[11]->knob2.getValue()); fxPedals[11]->repaint(); };
+    fxPedals[11]->knob3.onValueChange=[this](){ effectsChain.setReverbMix((float)fxPedals[11]->knob3.getValue()); fxPedals[11]->repaint(); };
+    fxPedals[11]->knob4.onValueChange=[this](){ const float tone=(float)fxPedals[11]->knob4.getValue(); effectsChain.setReverbTone(tone); effectsChain.setReverbDamping(1.0f-tone); fxPedals[11]->repaint(); };
+    fxPedals[11]->knob5.onValueChange=[this](){ effectsChain.setReverbWidth((float)fxPedals[11]->knob5.getValue()); fxPedals[11]->repaint(); };
+    fxPedals[11]->knob6.onValueChange=[this](){ effectsChain.setReverbDiffusion((float)fxPedals[11]->knob6.getValue()); fxPedals[11]->repaint(); };
+    fxPedals[11]->knob7.onValueChange=[this](){ effectsChain.setReverbMod((float)fxPedals[11]->knob7.getValue()); fxPedals[11]->repaint(); };
+    fxPedals[11]->knob8.onValueChange=[this](){ effectsChain.setReverbType(juce::roundToInt(fxPedals[11]->knob8.getValue())); fxPedals[11]->repaint(); };
+    fxPedals[11]->knob9.onValueChange=[this](){ effectsChain.setReverbValue((float)fxPedals[11]->knob9.getValue()); fxPedals[11]->repaint(); };
+    fxPedals[11]->onSecondaryFootswitch=[this]()
+    {
+        const int type = juce::roundToInt(fxPedals[11]->knob8.getValue());
+        fxPedals[11]->knob8.setValue((type + 11) % 12, juce::sendNotificationSync);
+    };
+    fxPedals[11]->onTertiaryFootswitch=[this]()
+    {
+        effectsChain.setReverbInfinite(fxPedals[11]->isTertiaryFootswitchLatched());
+    };
+    effectsChain.setReverbRoomSize((float)fxPedals[11]->knob1.getValue());
+    effectsChain.setReverbPreDelayMs((float)fxPedals[11]->knob2.getValue());
+    effectsChain.setReverbMix((float)fxPedals[11]->knob3.getValue());
+    effectsChain.setReverbTone((float)fxPedals[11]->knob4.getValue());
+    effectsChain.setReverbDamping(1.0f - (float)fxPedals[11]->knob4.getValue());
+    effectsChain.setReverbWidth((float)fxPedals[11]->knob5.getValue());
+    effectsChain.setReverbDiffusion((float)fxPedals[11]->knob6.getValue());
+    effectsChain.setReverbMod((float)fxPedals[11]->knob7.getValue());
+    effectsChain.setReverbType(juce::roundToInt(fxPedals[11]->knob8.getValue()));
+    effectsChain.setReverbValue((float)fxPedals[11]->knob9.getValue());
 
     fxPedals[12]->configureTenBandGraphicEq();
     cfg(fxPedals[12]->eqVolumeSlider, -12.0, 12.0, 0.0);
@@ -1071,6 +1116,7 @@ int MainComponent::fxPedalBodyWidth(int pedalIndex) const
     if (pedalIndex == 6) return 270;
     if (pedalIndex == 7) return 225;
     if (pedalIndex == 12) return 270;
+    if (pedalIndex == 11) return 320;
     return 156;
 }
 
@@ -1613,6 +1659,9 @@ juce::ValueTree MainComponent::createSessionTree(const LooperEngine::SessionSnap
         pedal.setProperty("knob4", fxPedals[i]->knob4.getValue(), nullptr);
         pedal.setProperty("knob5", fxPedals[i]->knob5.getValue(), nullptr);
         pedal.setProperty("knob6", fxPedals[i]->knob6.getValue(), nullptr);
+        pedal.setProperty("knob7", fxPedals[i]->knob7.getValue(), nullptr);
+        pedal.setProperty("knob8", fxPedals[i]->knob8.getValue(), nullptr);
+        pedal.setProperty("knob9", fxPedals[i]->knob9.getValue(), nullptr);
         if (i == 12)
         {
             pedal.setProperty("eqVolume", fxPedals[i]->eqVolumeSlider.getValue(), nullptr);
@@ -1729,6 +1778,9 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
         setSlider(pedalUi->knob4, (double) pedal.getProperty("knob4", pedalUi->knob4.getValue()));
         setSlider(pedalUi->knob5, (double) pedal.getProperty("knob5", pedalUi->knob5.getValue()));
         setSlider(pedalUi->knob6, (double) pedal.getProperty("knob6", pedalUi->knob6.getValue()));
+        setSlider(pedalUi->knob7, (double) pedal.getProperty("knob7", pedalUi->knob7.getValue()));
+        setSlider(pedalUi->knob8, (double) pedal.getProperty("knob8", pedalUi->knob8.getValue()));
+        setSlider(pedalUi->knob9, (double) pedal.getProperty("knob9", pedalUi->knob9.getValue()));
         if (pedalIndex == 12)
         {
             setSlider(pedalUi->eqVolumeSlider,
@@ -1917,9 +1969,9 @@ bool MainComponent::saveMidiConfiguration() const
     juce::ValueTree root("LOOPERNICO_MIDI_CONFIG");
     root.setProperty("version", 3, nullptr);
     root.setProperty("listenAllInputs", midiListenAllInputs, nullptr);
-    root.setProperty("inputIdentifier", (!midiListenAllInputs && lastMidiInputIndex >= 0
-        && lastMidiInputIndex < juce::MidiInput::getAvailableDevices().size())
-        ? juce::MidiInput::getAvailableDevices().getReference(lastMidiInputIndex).identifier : juce::String(), nullptr);
+    root.setProperty("inputIdentifier",
+                     midiListenAllInputs ? juce::String() : selectedMidiInputIdentifier,
+                     nullptr);
     root.setProperty("selectedAction", midiActionSelector.getSelectedId(), nullptr);
 
     for (int i = 0; i < MidiController::kNumActions; ++i)
@@ -2005,9 +2057,27 @@ void MainComponent::loadMidiConfiguration()
     const auto identifier = root.getProperty("inputIdentifier").toString();
     const bool listenAll = (bool) root.getProperty("listenAllInputs", true);
     const int device = identifier.isNotEmpty() ? findMidiDeviceIndexByIdentifier(identifier) : -1;
-    changeMidiInput(listenAll || device < 0 ? 0 : device + 1);
-    lblMidiStatus.setText("Configuracion MIDI cargada.", juce::dontSendNotification);
-    lblMidiStatus.setColour(juce::Label::textColourId, LnfC::PlayGreen);
+    if (listenAll || identifier.isEmpty())
+    {
+        changeMidiInput(0);
+        lblMidiStatus.setText("Configuracion MIDI cargada.", juce::dontSendNotification);
+        lblMidiStatus.setColour(juce::Label::textColourId, LnfC::PlayGreen);
+    }
+    else if (device >= 0)
+    {
+        changeMidiInput(device + 1);
+        lblMidiStatus.setText("Configuracion MIDI cargada.", juce::dontSendNotification);
+        lblMidiStatus.setColour(juce::Label::textColourId, LnfC::PlayGreen);
+    }
+    else
+    {
+        lastMidiInputIndex = -1;
+        midiListenAllInputs = false;
+        selectedMidiInputIdentifier = identifier;
+        midiDeviceSelector.setSelectedItemIndex(-1, juce::dontSendNotification);
+        lblMidiStatus.setText("Esperando el dispositivo MIDI guardado...", juce::dontSendNotification);
+        lblMidiStatus.setColour(juce::Label::textColourId, LnfC::OvdAmber);
+    }
 }
 
 void MainComponent::markMidiConfigurationDirty()
@@ -2022,6 +2092,7 @@ void MainComponent::markMidiConfigurationDirty()
 MainComponent::~MainComponent()
 {
     stopTimer();
+    midiDeviceListConnection.reset();
     closeExternalVst3Editor();
     setLookAndFeel(nullptr);
     auto devices = juce::MidiInput::getAvailableDevices();
@@ -2168,6 +2239,7 @@ void MainComponent::changeMidiInput(int index)
     {
         lastMidiInputIndex = -1;
         midiListenAllInputs = true;
+        selectedMidiInputIdentifier.clear();
 
         for (const auto& dev : devices)
         {
@@ -2189,14 +2261,52 @@ void MainComponent::changeMidiInput(int index)
         deviceManager.addMidiInputDeviceCallback(dev.identifier, this);
         lastMidiInputIndex = deviceIndex;
         midiListenAllInputs = false;
+        selectedMidiInputIdentifier = dev.identifier;
         midiDeviceSelector.setSelectedItemIndex(index, juce::dontSendNotification);
     }
     else
     {
         lastMidiInputIndex = -1;
         midiListenAllInputs = true;
+        selectedMidiInputIdentifier.clear();
         midiDeviceSelector.setSelectedItemIndex(devices.isEmpty() ? -1 : 0, juce::dontSendNotification);
     }
+}
+
+void MainComponent::handleMidiDeviceListChanged()
+{
+    const auto wantedIdentifier = selectedMidiInputIdentifier;
+    const bool wasListeningToAllInputs = midiListenAllInputs;
+
+    refreshMidiInputSelector();
+
+    if (wasListeningToAllInputs)
+    {
+        changeMidiInput(0);
+        return;
+    }
+
+    const int deviceIndex = findMidiDeviceIndexByIdentifier(wantedIdentifier);
+    if (deviceIndex >= 0)
+    {
+        changeMidiInput(deviceIndex + 1);
+        lblMidiStatus.setText("MIDI conectado: "
+                                  + juce::MidiInput::getAvailableDevices().getReference(deviceIndex).name,
+                              juce::dontSendNotification);
+        lblMidiStatus.setColour(juce::Label::textColourId, LnfC::PlayGreen);
+        return;
+    }
+
+    const auto devices = juce::MidiInput::getAvailableDevices();
+    for (const auto& device : devices)
+        deviceManager.removeMidiInputDeviceCallback(device.identifier, this);
+
+    lastMidiInputIndex = -1;
+    midiListenAllInputs = false;
+    selectedMidiInputIdentifier = wantedIdentifier;
+    midiDeviceSelector.setSelectedItemIndex(-1, juce::dontSendNotification);
+    lblMidiStatus.setText("Esperando el dispositivo MIDI guardado...", juce::dontSendNotification);
+    lblMidiStatus.setColour(juce::Label::textColourId, LnfC::OvdAmber);
 }
 
 void MainComponent::handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage& msg)

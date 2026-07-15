@@ -164,6 +164,7 @@ private:
     juce::TextButton btnOutputMode{"MONO"};
 
     void changeMidiInput(int index);
+    void handleMidiDeviceListChanged();
     void refreshMidiInputSelector();
     void updateMidiMappingLabel();
     void updateMidiManualControls();
@@ -175,6 +176,8 @@ private:
     juce::File getMidiConfigurationFile() const;
     int  lastMidiInputIndex = -1;
     bool midiListenAllInputs = true;
+    juce::String selectedMidiInputIdentifier;
+    juce::MidiDeviceListConnection midiDeviceListConnection;
     std::atomic<juce::int64> lastMidiMs { 0 };
     std::atomic<float> masterVolume { 0.85f };
     std::atomic<bool> outputMono { true };

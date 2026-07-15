@@ -75,6 +75,38 @@ public:
         float radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.46f;
         auto centre = bounds.getCentre();
 
+        if (slider.getComponentID() == "bigSkyKnob")
+        {
+            const float angle = startAngle + pos * (endAngle - startAngle);
+            const float r = radius * 0.94f;
+            g.setColour(juce::Colours::black.withAlpha(0.62f));
+            g.fillEllipse(centre.x - r - 1.5f, centre.y - r + 2.0f,
+                          r * 2.0f + 3.0f, r * 2.0f + 3.0f);
+            for (int i = 0; i < 32; ++i)
+            {
+                const float a = juce::MathConstants<float>::twoPi * (float)i / 32.0f;
+                const auto p1 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * (r * 0.86f);
+                const auto p2 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * r;
+                g.setColour((i % 2 == 0 ? juce::Colours::white : juce::Colours::black)
+                                .withAlpha(i % 2 == 0 ? 0.10f : 0.72f));
+                g.drawLine({ p1, p2 }, 0.8f);
+            }
+            juce::ColourGradient cap(juce::Colour(0xff55575a), centre.x - r * 0.52f, centre.y - r * 0.65f,
+                                      juce::Colour(0xff060708), centre.x + r * 0.48f, centre.y + r * 0.58f, true);
+            cap.addColour(0.44, juce::Colour(0xff242629));
+            g.setGradientFill(cap);
+            g.fillEllipse(centre.x - r * 0.85f, centre.y - r * 0.85f, r * 1.70f, r * 1.70f);
+            g.setColour(juce::Colours::white.withAlpha(0.13f));
+            g.fillEllipse(centre.x - r * 0.48f, centre.y - r * 0.60f, r * 0.72f, r * 0.22f);
+            const auto markerStart = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.20f);
+            const auto markerEnd = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.70f);
+            g.setColour(juce::Colours::black.withAlpha(0.72f));
+            g.drawLine({ markerStart.translated(0.9f, 1.0f), markerEnd.translated(0.9f, 1.0f) }, 2.8f);
+            g.setColour(juce::Colour(0xffe8e8e4));
+            g.drawLine({ markerStart, markerEnd }, 2.0f);
+            return;
+        }
+
         if (slider.getComponentID() == "beatBuddyKnob")
         {
             const float angle = startAngle + pos * (endAngle - startAngle);

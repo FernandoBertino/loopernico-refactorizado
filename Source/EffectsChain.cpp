@@ -1043,6 +1043,8 @@ void EffectsChain::prepare(double sampleRate, int maxBlockSize)
     pitchBuffer.setSize(2, kPitchBufLen);
     freezeBuffer.setSize(2, kFreezeBufLen);
     chordBodyBuffer.setSize(2, juce::jmax(4096, (int) (sampleRate_ * 0.070)));
+    reverbPreDelayBuffer.setSize(2, juce::jmax(2, (int) (sampleRate_ * 1.5) + 2));
+    reverbScratchBuffer.setSize(2, maxBlockSize_);
     for (auto& layer : sustainLayers)
         layer.buffer.setSize(2, kFreezeBufLen);
     chordSustainLayer.buffer.setSize(2, kFreezeBufLen);
@@ -1071,6 +1073,8 @@ void EffectsChain::reset()
     pitchBuffer.clear();
     freezeBuffer.clear();
     chordBodyBuffer.clear();
+    reverbPreDelayBuffer.clear();
+    reverbScratchBuffer.clear();
     externalPluginMidiBuffer.clear();
     for (auto& layer : sustainLayers)
     {
@@ -1109,6 +1113,9 @@ void EffectsChain::reset()
     pitchWritePos   = 0;
     freezeWritePos  = 0;
     chordBodyWritePos = 0;
+    reverbPreDelayWritePos = 0;
+    reverbToneState[0] = reverbToneState[1] = 0.0f;
+    reverbModPhase = 0.0;
     freezeHoldActive = false;
     freezeLayerWriteIndex = 0;
     chordFreezeHoldActive = false;
@@ -1267,6 +1274,14 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
     const float revM    = reverbMix.load();
     const float revRoom = reverbRoomSize.load();
     const float revDamp = reverbDamping.load();
+    const float revPreDelay = reverbPreDelayMs.load();
+    const float revTone = reverbTone.load();
+    const float revWidth = reverbWidth.load();
+    const float revDiffusion = reverbDiffusion.load();
+    const float revMod = reverbMod.load();
+    const int revType = reverbType.load();
+    const float revValue = reverbValue.load();
+    const bool revInfinite = reverbInfinite.load();
     const float frzMix  = freezeMix.load();
     const float frzWindowMs = freezeWindowMs.load();
     const float frzRiseMs = freezeRiseMs.load();
@@ -2755,21 +2770,71 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
 
     if (revOn && channels > 0)
     {
+        const int wetChannels = juce::jmin(2, channels);
+        const int scratchSamples = juce::jmin(numSamples, reverbScratchBuffer.getNumSamples());
+        const int preDelaySize = reverbPreDelayBuffer.getNumSamples();
+        const int preDelaySamples = juce::jlimit(0, preDelaySize - 1,
+                                                 juce::roundToInt(revPreDelay * 0.001f * (float) sampleRate_));
+
+        for (int ch = 0; ch < wetChannels; ++ch)
+        {
+            const float* dry = buffer.getReadPointer(ch, startSample);
+            float* wet = reverbScratchBuffer.getWritePointer(ch);
+            float* history = reverbPreDelayBuffer.getWritePointer(ch);
+            for (int s = 0; s < scratchSamples; ++s)
+            {
+                const int write = (reverbPreDelayWritePos + s) % preDelaySize;
+                int read = write - preDelaySamples;
+                if (read < 0) read += preDelaySize;
+                history[write] = dry[s];
+                wet[s] = history[read];
+            }
+        }
+        reverbPreDelayWritePos = (reverbPreDelayWritePos + scratchSamples) % preDelaySize;
+
+        static constexpr float typeRoomBias[12] = { -0.24f, 0.12f, -0.05f, 0.04f, 0.18f, 0.25f,
+                                                     0.34f, 0.22f, 0.10f, 0.05f, 0.16f, -0.12f };
+        static constexpr float typeDampBias[12] = { 0.12f, -0.08f, 0.18f, 0.02f, -0.12f, -0.18f,
+                                                    -0.26f, -0.14f, 0.08f, 0.15f, -0.10f, 0.20f };
+        const float fineValue = (revValue - 0.5f) * 0.18f;
         juce::Reverb::Parameters params;
-        params.roomSize   = juce::jlimit(0.0f, 1.0f, revRoom);
-        params.damping    = juce::jlimit(0.0f, 1.0f, revDamp);
-        params.wetLevel   = juce::jlimit(0.0f, 0.45f, revM * 0.32f);
-        params.dryLevel   = juce::jlimit(0.0f, 1.0f, 1.0f - revM * 0.18f);
-        params.width      = 0.85f;
-        params.freezeMode = 0.0f;
+        params.roomSize   = juce::jlimit(0.0f, 1.0f, revRoom + typeRoomBias[revType] + fineValue
+                                                     + (revDiffusion - 0.5f) * 0.12f);
+        params.damping    = juce::jlimit(0.0f, 1.0f, revDamp + typeDampBias[revType]
+                                                     + (0.5f - revDiffusion) * 0.14f);
+        params.wetLevel   = 1.0f;
+        params.dryLevel   = 0.0f;
+        params.width      = revWidth;
+        params.freezeMode = revInfinite ? 1.0f : 0.0f;
         roomReverb.setParameters(params);
 
-        if (channels >= 2)
-            roomReverb.processStereo(buffer.getWritePointer(0, startSample),
-                                     buffer.getWritePointer(1, startSample),
-                                     numSamples);
+        if (wetChannels >= 2)
+            roomReverb.processStereo(reverbScratchBuffer.getWritePointer(0),
+                                     reverbScratchBuffer.getWritePointer(1),
+                                     scratchSamples);
         else
-            roomReverb.processMono(buffer.getWritePointer(0, startSample), numSamples);
+            roomReverb.processMono(reverbScratchBuffer.getWritePointer(0), scratchSamples);
+
+        const float cutoff = juce::jmap(revTone, 900.0f, 17000.0f);
+        const float toneCoeff = 1.0f - std::exp(-juce::MathConstants<float>::twoPi * cutoff / (float) sampleRate_);
+        const float mix = juce::jlimit(0.0f, 1.0f, revM);
+        const float modDepth = revMod * 0.10f;
+        const double modStep = juce::MathConstants<double>::twoPi * (0.18 + revMod * 1.15) / sampleRate_;
+        for (int s = 0; s < scratchSamples; ++s)
+        {
+            const float lfo = (float) std::sin(reverbModPhase);
+            reverbModPhase += modStep;
+            if (reverbModPhase >= juce::MathConstants<double>::twoPi)
+                reverbModPhase -= juce::MathConstants<double>::twoPi;
+            for (int ch = 0; ch < wetChannels; ++ch)
+            {
+                float wet = reverbScratchBuffer.getSample(ch, s);
+                reverbToneState[ch] += toneCoeff * (wet - reverbToneState[ch]);
+                wet = reverbToneState[ch] * (1.0f + modDepth * (ch == 0 ? lfo : -lfo));
+                float* out = buffer.getWritePointer(ch, startSample);
+                out[s] = out[s] * (1.0f - mix) + wet * mix;
+            }
+        }
     }
 
     if (eqOn && channels > 0)

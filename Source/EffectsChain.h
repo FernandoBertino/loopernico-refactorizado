@@ -199,6 +199,14 @@ public:
     void setReverbRoomSize(float s) { reverbRoomSize.store(s); }
     void setReverbSpace(float s) { setReverbRoomSize(s); }
     void setReverbDamping(float d) { reverbDamping.store(d); }
+    void setReverbPreDelayMs(float ms) { reverbPreDelayMs.store(juce::jlimit(0.0f, 1500.0f, ms)); }
+    void setReverbTone(float t) { reverbTone.store(juce::jlimit(0.0f, 1.0f, t)); }
+    void setReverbWidth(float w) { reverbWidth.store(juce::jlimit(0.0f, 1.0f, w)); }
+    void setReverbDiffusion(float d) { reverbDiffusion.store(juce::jlimit(0.0f, 1.0f, d)); }
+    void setReverbMod(float m) { reverbMod.store(juce::jlimit(0.0f, 1.0f, m)); }
+    void setReverbType(int t) { reverbType.store(juce::jlimit(0, 11, t)); }
+    void setReverbValue(float v) { reverbValue.store(juce::jlimit(0.0f, 1.0f, v)); }
+    void setReverbInfinite(bool enabled) { reverbInfinite.store(enabled); }
 
     void setEqEnabled(bool b)
     {
@@ -429,6 +437,14 @@ private:
     std::atomic<float> reverbMix{ 0.22f };
     std::atomic<float> reverbRoomSize{ 0.45f };
     std::atomic<float> reverbDamping{ 0.3f };
+    std::atomic<float> reverbPreDelayMs{ 80.0f };
+    std::atomic<float> reverbTone{ 0.58f };
+    std::atomic<float> reverbWidth{ 0.85f };
+    std::atomic<float> reverbDiffusion{ 0.65f };
+    std::atomic<float> reverbMod{ 0.18f };
+    std::atomic<int> reverbType{ 1 };
+    std::atomic<float> reverbValue{ 0.5f };
+    std::atomic<bool> reverbInfinite{ false };
     std::atomic<bool> eqEnabled{ false };
 
     std::atomic<bool> freezeEnabled{ false };
@@ -470,6 +486,8 @@ private:
     juce::AudioBuffer<float> pitchBuffer;
     juce::AudioBuffer<float> freezeBuffer;
     juce::AudioBuffer<float> chordBodyBuffer;
+    juce::AudioBuffer<float> reverbPreDelayBuffer;
+    juce::AudioBuffer<float> reverbScratchBuffer;
     juce::Reverb            roomReverb;
     EQProcessor             outputEq;
     std::atomic<float>      outputEqInputGainDb { 0.0f };
@@ -480,6 +498,9 @@ private:
     int pitchWritePos{ 0 };
     int freezeWritePos{ 0 };
     int chordBodyWritePos{ 0 };
+    int reverbPreDelayWritePos{ 0 };
+    float reverbToneState[2]{};
+    double reverbModPhase{ 0.0 };
     bool freezeHoldActive{ false };
     int freezeLayerWriteIndex{ 0 };
     std::array<SustainLayer, kFreezeMaxLayers> sustainLayers;

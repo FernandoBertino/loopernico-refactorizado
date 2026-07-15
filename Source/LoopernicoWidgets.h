@@ -206,7 +206,9 @@ public:
     std::array<juce::Slider, 10> eqBandSliders;
     std::function<void()> onSecondaryFootswitch;
     std::function<void()> onSecondaryFootswitchRelease;
+    std::function<void()> onTertiaryFootswitch;
     std::function<void()> onTap;
+    bool isTertiaryFootswitchLatched() const noexcept { return tertiaryFootswitchLatched; }
     std::function<void(FXPedalComponent&, const juce::MouseEvent&)> onDragStart;
     std::function<void(FXPedalComponent&, const juce::MouseEvent&)> onDragMove;
     std::function<void(FXPedalComponent&, const juce::MouseEvent&)> onDragEnd;
@@ -310,6 +312,37 @@ public:
             }
         }
 
+        if (pedalName == "ROOM REVERB")
+        {
+            auto body = getLocalBounds().toFloat().reduced(3.0f);
+            const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / 1.455f);
+            body = { body.getX(), body.getCentreY() - bodyHeight * 0.5f,
+                     body.getWidth(), bodyHeight };
+            const auto mouse = e.position;
+            const float footY = body.getY() + body.getHeight() * 0.830f;
+            const float xs[] = { 0.118f, 0.500f, 0.878f };
+            for (int i = 0; i < 3; ++i)
+            {
+                const float dx = mouse.x - (body.getX() + body.getWidth() * xs[i]);
+                const float dy = mouse.y - footY;
+                if (dx * dx + dy * dy <= 24.0f * 24.0f)
+                {
+                    if (i == 0)
+                        onBtn.setToggleState(!onBtn.getToggleState(), juce::sendNotification);
+                    else if (i == 1 && onSecondaryFootswitch)
+                        onSecondaryFootswitch();
+                    else if (i == 2)
+                    {
+                        tertiaryFootswitchLatched = !tertiaryFootswitchLatched;
+                        if (onTertiaryFootswitch)
+                            onTertiaryFootswitch();
+                    }
+                    repaint();
+                    return;
+                }
+            }
+        }
+
         const bool customWideFootswitch = ((pedalName == "FUZZ" || pedalName == "OVERDRIVE" || pedalName == "COMPRESSOR"
                                               || pedalName == "HARMONIZER" || pedalName == "SUSTAIN GRAN"
                                               || pedalName == "SUSTAIN CHORDS" || pedalName == "OUTPUT EQ")
@@ -358,6 +391,7 @@ private:
     bool tenBandGraphicEq = false;
     bool dragHintVisible = false;
     bool secondaryFootswitchDown = false;
+    bool tertiaryFootswitchLatched = false;
     juce::String infoMain, infoSub;
     std::function<juce::String(double)> knobValueFormatters[9];
 

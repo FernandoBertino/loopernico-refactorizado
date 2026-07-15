@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
 <JUCERPROJECT id="amtsha" name="Loopernico Refactorizado" projectType="guiapp"
-              useAppConfig="0" addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1">
+              useAppConfig="0" addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1"
+              defines="JUCE_USE_WINRT_MIDI=1">
   <MAINGROUP id="CSrseB" name="Loopernico Refactorizado">
     <GROUP id="{B4492284-EF41-335B-4E61-153588395F2A}" name="Source">
       <FILE id="yBbiNl" name="LoopernicoWidgets.h" compile="0" resource="0"

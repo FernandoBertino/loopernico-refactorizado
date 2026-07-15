@@ -622,6 +622,7 @@ const juce::Image& getPedalEnamelTexture(const juce::String& name)
     static const auto sustainGran = loadPedalTexture("Pedals/sustain-gran-piano-face-v1.png");
     static const auto modelHost = loadPedalTexture("Pedals/model-host-face-v2.png");
     static const auto tenBandEq = loadPedalTexture("Pedals/ten-band-eq-aluminum-face-v1.png");
+    static const auto bigSky = loadPedalTexture("Pedals/strymon-bigsky-mx-face-v2.png");
     static const auto neutral = loadPedalTexture("Textures/pedal-enamel-neutral-v1.png");
     static const auto silver  = loadPedalTexture("Textures/pedal-brushed-silver-v1.png");
     static const auto black   = loadPedalTexture("Textures/pedal-black-powder-v1.png");
@@ -647,6 +648,8 @@ const juce::Image& getPedalEnamelTexture(const juce::String& name)
         return modelHost;
     if (name == "OUTPUT EQ")
         return tenBandEq;
+    if (name == "ROOM REVERB")
+        return bigSky;
     if (name.containsIgnoreCase("COMPRESSOR") || name.containsIgnoreCase("OUTPUT EQ"))
         return silver;
     if (name.containsIgnoreCase("FUZZ") || name.containsIgnoreCase("DELAY"))
@@ -691,6 +694,9 @@ juce::Rectangle<int> getPedalTextureCrop(const juce::String& name, const juce::I
     if (name == "OUTPUT EQ")
         return { juce::roundToInt(w * 0.09f), juce::roundToInt(h * 0.09f),
                  juce::roundToInt(w * 0.82f), juce::roundToInt(h * 0.82f) };
+    if (name == "ROOM REVERB")
+        return { juce::roundToInt(w * 0.067f), juce::roundToInt(h * 0.055f),
+                 juce::roundToInt(w * 0.866f), juce::roundToInt(h * 0.895f) };
     if (name.containsIgnoreCase("COMPRESSOR") || name.containsIgnoreCase("OUTPUT EQ"))
         return { juce::roundToInt(w * 0.22f), juce::roundToInt(h * 0.045f),
                  juce::roundToInt(w * 0.56f), juce::roundToInt(h * 0.91f) };
@@ -722,6 +728,8 @@ float getPedalTextureOpacity(const juce::String& name)
         return 0.99f;
     if (name == "OUTPUT EQ")
         return 0.96f;
+    if (name == "ROOM REVERB")
+        return 0.99f;
     if (name == "RHYTHM BOX")
         return 0.82f;
     return name.containsIgnoreCase("NOISE GATE") ? 1.0f : 0.24f;
@@ -789,20 +797,22 @@ void FXPedalComponent::paint(juce::Graphics& g)
     const bool beatBuddyArtwork = pedalName == "RHYTHM BOX";
     const bool modelHostArtwork = pedalName == "VST3 HOST";
     const bool tenBandEqArtwork = pedalName == "OUTPUT EQ";
+    const bool bigSkyArtwork = pedalName == "ROOM REVERB";
     const bool bossNoiseArtwork = pedalName.containsIgnoreCase("NOISE GATE");
     const bool customArtwork = wideFuzzArtwork || mirrorDriveArtwork || dedaloJetArtwork || dedaloTresArtwork || harmonizerArtwork
                             || sustainGranArtwork || bossNoiseArtwork
-                            || beatBuddyArtwork || modelHostArtwork || tenBandEqArtwork;
+                            || beatBuddyArtwork || modelHostArtwork || tenBandEqArtwork || bigSkyArtwork;
     if (customArtwork)
     {
         const float aspect = wideFuzzArtwork ? 1.30f
+                           : (bigSkyArtwork ? 1.455f
                            : (dedaloJetArtwork ? 1.23f
                            : (dedaloTresArtwork ? (4.0f / 3.0f)
                            : (harmonizerArtwork ? 0.667f
                            : (sustainGranArtwork ? 0.667f
                            : (beatBuddyArtwork ? 0.88f
                            : (bossNoiseArtwork ? 0.64f
-                           : (modelHostArtwork ? 1.20f : (tenBandEqArtwork ? (124.0f / 92.0f) : 1.08f))))))));
+                           : (modelHostArtwork ? 1.20f : (tenBandEqArtwork ? (124.0f / 92.0f) : 1.08f)))))))));
         const float bodyHeight = juce::jmin(b.getHeight(), b.getWidth() / aspect);
         b = juce::Rectangle<float>(b.getX(), b.getCentreY() - bodyHeight * 0.5f,
                                    b.getWidth(), bodyHeight);
@@ -1074,6 +1084,44 @@ void FXPedalComponent::paint(juce::Graphics& g)
         }
     }
 
+    if (bigSkyArtwork)
+    {
+        static const juce::StringArray typeNames {
+            "IMPULSE", "CLOUD", "SHIMMER", "BLOOM", "CHORALE", "MAGNETO",
+            "NONLINEAR", "ROOM", "HALL", "CHAMBER", "PLATE", "SPRING"
+        };
+        const int type = juce::jlimit(0, typeNames.size() - 1, juce::roundToInt(knob8.getValue()));
+        auto screen = juce::Rectangle<float>(b.getX() + b.getWidth() * 0.390f,
+                                              b.getY() + b.getHeight() * 0.082f,
+                                              b.getWidth() * 0.380f,
+                                              b.getHeight() * 0.185f);
+        g.setColour(juce::Colour(0xff02090d).withAlpha(0.97f));
+        g.fillRoundedRectangle(screen, 2.0f);
+        g.setColour(juce::Colour(0xff244321));
+        g.drawRoundedRectangle(screen.reduced(0.5f), 2.0f, 0.8f);
+        g.setColour(juce::Colour(0xff70f147));
+        g.setFont(juce::Font(juce::FontOptions(7.2f).withStyle("Bold")));
+        g.drawFittedText(typeNames[type], screen.reduced(5.0f, 3.0f).toNearestInt(),
+                         juce::Justification::centred, 1, 0.72f);
+
+        const float ledY = b.getY() + b.getHeight() * 0.704f;
+        const float footY = b.getY() + b.getHeight() * 0.830f;
+        const float xs[] = { 0.118f, 0.500f, 0.878f };
+        for (int i = 0; i < 3; ++i)
+        {
+            const bool active = (i == 0 && onBtn.getToggleState())
+                             || (i == 2 && tertiaryFootswitchLatched);
+            drawLedLens(g, b.getX() + b.getWidth() * xs[i], ledY, 3.0f,
+                        juce::Colour(0xff7be1ff), active);
+            if (active)
+            {
+                g.setColour(juce::Colour(0xff6bd6ff).withAlpha(0.15f));
+                g.drawEllipse(b.getX() + b.getWidth() * xs[i] - 20.0f, footY - 20.0f,
+                              40.0f, 40.0f, 2.0f);
+            }
+        }
+    }
+
     if (tenBandEqArtwork)
     {
         const auto ink = juce::Colour(0xff17191c);
@@ -1324,7 +1372,7 @@ void FXPedalComponent::paint(juce::Graphics& g)
         drawTresSwitch(rightX, footY, secondaryFootswitchDown);
     }
 
-    if (!beatBuddyArtwork && !bossNoiseArtwork && !dedaloTresArtwork)
+    if (!beatBuddyArtwork && !bossNoiseArtwork && !dedaloTresArtwork && !bigSkyArtwork)
     {
     float ledCX = customArtwork ? (dedaloJetArtwork ? b.getX() + b.getWidth() * 0.156f
                                                      : ((harmonizerArtwork || sustainGranArtwork) ? b.getCentreX() - 31.0f
@@ -1487,6 +1535,32 @@ void FXPedalComponent::resized()
         knob7.setBounds(0, 0, 0, 0);
         knob8.setBounds(0, 0, 0, 0);
         knob9.setBounds(0, 0, 0, 0);
+        return;
+    }
+
+    if (pedalName == "ROOM REVERB")
+    {
+        const float aspect = 1.455f;
+        const int bodyHeight = juce::jmin(getHeight() - 6, juce::roundToInt((float) getWidth() / aspect));
+        const int bodyTop = (getHeight() - bodyHeight) / 2;
+        const int bodyLeft = 3;
+        const int bodyWidth = getWidth() - 6;
+        auto place = [bodyLeft, bodyTop, bodyWidth, bodyHeight](juce::Slider& knob,
+                                                               float nx, float ny, int size)
+        {
+            const int cx = bodyLeft + juce::roundToInt((float) bodyWidth * nx);
+            const int cy = bodyTop + juce::roundToInt((float) bodyHeight * ny);
+            knob.setBounds(cx - size / 2, cy - size / 2, size, size);
+        };
+        place(knob8, 0.140f, 0.172f, 36); // TYPE
+        place(knob9, 0.927f, 0.172f, 34); // VALUE
+        place(knob1, 0.069f, 0.424f, 32); // DECAY
+        place(knob2, 0.214f, 0.424f, 32); // PRE-DELAY
+        place(knob4, 0.356f, 0.424f, 32); // TONE
+        place(knob7, 0.500f, 0.424f, 32); // MOD
+        place(knob5, 0.644f, 0.424f, 32); // PARAM 1
+        place(knob6, 0.786f, 0.424f, 32); // PARAM 2
+        place(knob3, 0.929f, 0.424f, 32); // MIX
         return;
     }
 
