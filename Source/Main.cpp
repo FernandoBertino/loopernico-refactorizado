@@ -15,6 +15,7 @@ namespace
     {
         bool enabled = false;
         juce::String outputPath;
+        int focusPedal = -1;
     };
 
     SnapshotLaunchRequest parseSnapshotLaunchRequest(const juce::String& commandLine)
@@ -34,6 +35,10 @@ namespace
             {
                 request.enabled = true;
                 request.outputPath = argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            }
+            else if (argument.startsWithIgnoreCase("--snapshot-fx="))
+            {
+                request.focusPedal = argument.fromFirstOccurrenceOf("=", false, false).getIntValue();
             }
         }
 
@@ -109,6 +114,10 @@ public:
            #endif
 
             setVisible (true);
+
+            if (snapshotRequest.enabled && snapshotRequest.focusPedal >= 0)
+                if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
+                    main->revealFxPedal(snapshotRequest.focusPedal);
 
            #if ! JUCE_IOS && ! JUCE_ANDROID
             // With JUCE's native Windows peer this maps to SW_SHOWMAXIMIZED: it uses

@@ -4,18 +4,6 @@ MidiController::MidiController()
 {
     for (int i = 0; i < kNumActions; ++i)
         callbacks[i] = nullptr;
-
-    // Configuracion util desde el primer arranque. Los CC se reciben desde
-    // cualquier dispositivo MIDI que este conectado.
-    const int defaultControllers[] = { 0, 1, 2, 3 };
-    const Action defaultActions[] = { RecConfirm, Undo, Redo, FreezeToggle };
-    for (int i = 0; i < 4; ++i)
-    {
-        MappingData mapping;
-        mapping.isMapped = true;
-        mapping.number = defaultControllers[i];
-        setMapping(defaultActions[i], mapping);
-    }
 }
 
 void MidiController::setActionCallback(int idx, std::function<void()> cb)
@@ -70,6 +58,28 @@ void MidiController::setMapping(int actionIndex, const MappingData& mapping)
     if (actionIndex < 0 || actionIndex >= kNumActions)
         return;
 
+    // Un mensaje solo puede pertenecer a una accion. Reasignarlo elimina el
+    // mapping anterior y evita que el orden interno decida que boton responde.
+    if (mapping.isMapped && mapping.number >= 0)
+    {
+        for (int i = 0; i < kNumActions; ++i)
+        {
+            if (i == actionIndex || !mappings[i].isMapped.load()
+                || mappings[i].number.load() != mapping.number)
+                continue;
+
+            const bool sameType = mappings[i].isProgramChange.load() == mapping.isProgramChange
+                               && mappings[i].isNote.load() == mapping.isNote;
+            if (sameType)
+            {
+                mappings[i].isMapped.store(false);
+                mappings[i].isProgramChange.store(false);
+                mappings[i].isNote.store(false);
+                mappings[i].number.store(-1);
+            }
+        }
+    }
+
     mappings[actionIndex].isMapped.store(mapping.isMapped);
     mappings[actionIndex].isProgramChange.store(mapping.isProgramChange);
     mappings[actionIndex].isNote.store(mapping.isNote);
@@ -96,6 +106,23 @@ bool MidiController::handleMessage(const juce::MidiMessage& msg)
             : isController ? msg.getControllerNumber()
                                    : msg.getNoteNumber();
 
+    // Algunos foot controllers envian el mismo Program Change al presionar y
+    // al soltar. Para acciones toggle eso producia ON seguido inmediatamente
+    // de OFF y parecia que el pedal nunca respondia.
+    if (isProgram)
+    {
+        constexpr juce::int64 kProgramChangeDebounceMs = 180;
+        const auto now = juce::Time::currentTimeMillis();
+        const auto previousTime = lastProgramTimeMs.load();
+        const auto previousNumber = lastProgramNumber.load();
+        lastProgramNumber.store(num);
+        lastProgramTimeMs.store(now);
+
+        if (previousNumber == num && now >= previousTime
+            && now - previousTime < kProgramChangeDebounceMs)
+            return true;
+    }
+
     // --- Modo learn activo ---
     if (learnMode.load())
     {
@@ -106,10 +133,12 @@ bool MidiController::handleMessage(const juce::MidiMessage& msg)
         int action = actionBeingLearned.load();
         if (action >= 0 && action < kNumActions)
         {
-            mappings[action].isMapped        = true;
-            mappings[action].isProgramChange = isProgram;
-            mappings[action].isNote          = isNoteOn;
-            mappings[action].number          = num;
+            MappingData learnedMapping;
+            learnedMapping.isMapped = true;
+            learnedMapping.isProgramChange = isProgram;
+            learnedMapping.isNote = isNoteOn;
+            learnedMapping.number = num;
+            setMapping(action, learnedMapping);
             learnMode.store(false);
             actionBeingLearned.store(-1);
             return true;
@@ -129,6 +158,16 @@ bool MidiController::handleMessage(const juce::MidiMessage& msg)
 
         if (!typeMatch)
             continue;
+
+        // Program Change no tiene evento de release: se trata como una accion
+        // toggle normal. CC y notas conservan press/release para un sustain
+        // momentaneo.
+        if (isProgram && callbacks[i])
+        {
+            auto cb = callbacks[i];
+            juce::MessageManager::callAsync([cb]() { cb(); });
+            return true;
+        }
 
         if (stateCallbacks[i])
         {
@@ -158,7 +197,13 @@ bool MidiController::handleMessage(const juce::MidiMessage& msg)
 const char* MidiController::actionName(int index)
 {
     static const char* names[kNumActions] = {
-        "REC/CONFIRM", "CANCEL", "UNDO", "REDO", "IR ARRIBA", "MUTE ALL", "RESET ALL", "PAUSA/RESUME", "RHYTHM NEXT", "SUSTAIN"
+        "REC/CONFIRM", "CANCEL", "UNDO", "REDO", "IR ARRIBA", "MUTE ALL",
+        "RESET ALL", "PAUSA/RESUME", "RHYTHM NEXT", "SUSTAIN GRAN",
+        "PEDAL NOISE GATE", "PEDAL RHYTHM BOX", "PEDAL COMPRESSOR",
+        "PEDAL HARMONIZER", "PEDAL SUSTAIN CHORDS", "PEDAL FUZZ",
+        "PEDAL OVERDRIVE", "PEDAL CHORUS", "PEDAL TREMOLO",
+        "PEDAL TAPE DELAY", "PEDAL ROOM REVERB", "PEDAL OUTPUT EQ",
+        "PEDAL VST3"
     };
     if (index < 0 || index >= kNumActions) return "???";
     return names[index];

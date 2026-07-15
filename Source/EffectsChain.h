@@ -183,6 +183,11 @@ public:
     void setTremoloMix(float m) { tremoloMix.store(m); }
     void setTremoloRate(float r) { tremoloRate.store(r); }
     void setTremoloDepth(float d) { tremoloDepth.store(d); }
+    void setTremoloMode(int mode) { tremoloMode.store(juce::jlimit(0, 4, mode)); }
+    void setTremoloBeats(int beats) { tremoloBeats.store(juce::jlimit(0, 6, beats)); }
+    void setTremoloSymmetry(float symmetry) { tremoloSymmetry.store(juce::jlimit(0.0f, 1.0f, symmetry)); }
+    void setTremoloControlPressed(bool pressed) { tremoloControlPressed.store(pressed); }
+    void syncTremolo() { tremoloSyncRequested.store(true); }
 
     void setDelayEnabled(bool b) { delayEnabled.store(b); }
     void setDelayMix(float m) { delayMix.store(m); }
@@ -201,6 +206,8 @@ public:
         outputEq.setEnabled(b);
     }
     void setEqBandGain(int band, float gainDb) { outputEq.setGain(band, gainDb); }
+    void setEqInputGain(float gainDb) { outputEqInputGainDb.store(juce::jlimit(-12.0f, 12.0f, gainDb)); }
+    void setEqOutputVolume(float gainDb) { outputEqVolumeDb.store(juce::jlimit(-12.0f, 12.0f, gainDb)); }
 
     void setFreezeEnabled(bool b) { freezeEnabled.store(b); }
     void setFreezeMix(float m) { freezeMix.store(m); }
@@ -406,7 +413,12 @@ private:
     std::atomic<bool> tremoloEnabled{ false };
     std::atomic<float> tremoloMix{ 0.75f };
     std::atomic<float> tremoloRate{ 3.2f };
-    std::atomic<float> tremoloDepth{ 0.55f };
+    std::atomic<float> tremoloDepth{ 0.72f };
+    std::atomic<int> tremoloMode{ 3 };
+    std::atomic<int> tremoloBeats{ 2 };
+    std::atomic<float> tremoloSymmetry{ 0.5f };
+    std::atomic<bool> tremoloControlPressed{ false };
+    std::atomic<bool> tremoloSyncRequested{ false };
 
     std::atomic<bool> delayEnabled{ false };
     std::atomic<float> delayMix{ 0.3f };
@@ -460,6 +472,8 @@ private:
     juce::AudioBuffer<float> chordBodyBuffer;
     juce::Reverb            roomReverb;
     EQProcessor             outputEq;
+    std::atomic<float>      outputEqInputGainDb { 0.0f };
+    std::atomic<float>      outputEqVolumeDb { 0.0f };
 
     int delayWritePos{ 0 };
     int chorusWritePos{ 0 };
@@ -549,5 +563,7 @@ private:
     double pitchPhaseHarm{ 0.0 };
     double chorusPhase{ 0.0 };
     double tremoloPhase{ 0.0 };
+    float tremoloFootSpeedAmount{ 0.0f };
+    float tremoloFadeGain{ 1.0f };
 
 };

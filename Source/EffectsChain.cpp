@@ -1138,6 +1138,8 @@ void EffectsChain::reset()
     pitchPhaseHarm = 0.0;
     chorusPhase    = 0.0;
     tremoloPhase   = 0.0;
+    tremoloFootSpeedAmount = 0.0f;
+    tremoloFadeGain = 1.0f;
     roomReverb.reset();
     outputEq.reset();
 
@@ -1280,9 +1282,14 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
     const float choM    = chorusMix.load();
     const float choRate = chorusRate.load();
     const float choDepth= chorusDepth.load();
-    const float trM     = tremoloMix.load();
     const float trRate  = tremoloRate.load();
     const float trDepth = tremoloDepth.load();
+    const int trMode = tremoloMode.load();
+    const int trBeatsIndex = tremoloBeats.load();
+    const float trSymmetry = tremoloSymmetry.load();
+    const bool trControlPressed = tremoloControlPressed.load();
+    if (tremoloSyncRequested.exchange(false))
+        tremoloPhase = 0.0;
     const bool metronomeMode = rhythmModeIndex == (int) RhythmMode::Metronome;
     const bool rhythmSoloMode = rhythmModeIndex == (int) RhythmMode::Solo;
 
@@ -1439,7 +1446,6 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
 
     // Chorus: incremento de fase constante por bloque
     const double deltaChorusPhase = (2.0 * juce::MathConstants<double>::pi * (double)choRate) / sampleRate_;
-    const double deltaTremoloPhase = (2.0 * juce::MathConstants<double>::pi * (double)trRate) / sampleRate_;
 
     // Pitch: valores de ventana como floats, calculados una vez
     const int   winSize  = juce::jmax(256, (int)(0.04 * sampleRate_));
@@ -2528,11 +2534,42 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
             {
                 if (trOn)
                 {
-                    const float dry = sample;
-                    const float lfo = 0.5f * (std::sin((float)tremoloPhase) + 1.0f);
-                    const float gain = (1.0f - trDepth) + (trDepth * lfo);
-                    const float wet = dry * gain;
-                    sample = dry * (1.0f - trM) + wet * trM;
+                    if (trMode == 4)
+                    {
+                        // FADE: RATE controls fade-in and SYM controls fade-out.
+                        sample *= tremoloFadeGain;
+                        return;
+                    }
+
+                    const float phase = (float)(tremoloPhase / juce::MathConstants<double>::twoPi);
+                    const float symmetry = juce::jmap(juce::jlimit(0.0f, 1.0f, trSymmetry),
+                                                      0.10f, 0.90f);
+                    const float warpedPhase = phase < symmetry
+                        ? 0.5f * phase / symmetry
+                        : 0.5f + 0.5f * (phase - symmetry) / (1.0f - symmetry);
+                    float lfo = 1.0f;
+                    switch (trMode)
+                    {
+                        case 0: // PULSE with the seven bar subdivisions printed on the pedal.
+                        {
+                            static constexpr float beatDivisions[] = { 6.0f, 3.0f, 4.0f, 12.0f, 6.0f, 8.0f, 12.0f };
+                            const float pulsePhase = std::fmod(phase * beatDivisions[juce::jlimit(0, 6, trBeatsIndex)], 1.0f);
+                            lfo = pulsePhase < juce::jmap(trSymmetry, 0.12f, 0.72f) ? 1.0f : 0.0f;
+                            break;
+                        }
+                        case 1: lfo = 1.0f - std::abs(2.0f * warpedPhase - 1.0f); break; // TRIANGLE
+                        case 2: lfo = phase < symmetry ? 1.0f : 0.0f; break;              // SQUARE
+                        case 3: lfo = 0.5f * (std::sin(warpedPhase * juce::MathConstants<float>::twoPi
+                                                       - juce::MathConstants<float>::halfPi) + 1.0f); break; // SINE
+                        default: break;
+                    }
+
+                    // At the fully counter-clockwise K position the real TRES switches
+                    // to its FET kill circuit (>50 dB) instead of reducing the effect.
+                    const bool killMode = trDepth <= 0.025f;
+                    const float gain = killMode ? (lfo >= 0.5f ? 1.0f : 0.001f)
+                                                : (1.0f - trDepth) + trDepth * lfo;
+                    sample *= gain;
                 }
             };
 
@@ -2686,9 +2723,34 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
         if (chorusPhase >= 2.0 * juce::MathConstants<double>::pi)
             chorusPhase -= 2.0 * juce::MathConstants<double>::pi;
 
-        tremoloPhase += deltaTremoloPhase;
+        const float footSpeedTarget = (trControlPressed && trMode != 4) ? 1.0f : 0.0f;
+        const float footSpeedCoeff = 1.0f - std::exp(-1.0f / (0.30f * (float)sampleRate_));
+        tremoloFootSpeedAmount += (footSpeedTarget - tremoloFootSpeedAmount) * footSpeedCoeff;
+        const float effectiveTremoloRate = trRate + (14.0f - trRate) * tremoloFootSpeedAmount;
+        tremoloPhase += (juce::MathConstants<double>::twoPi * (double)effectiveTremoloRate) / sampleRate_;
         if (tremoloPhase >= 2.0 * juce::MathConstants<double>::pi)
             tremoloPhase -= 2.0 * juce::MathConstants<double>::pi;
+
+        if (trMode == 4)
+        {
+            const bool killMode = trDepth <= 0.025f;
+            const float fadeTarget = trControlPressed ? 0.0f : 1.0f;
+            if (killMode)
+                tremoloFadeGain = fadeTarget;
+            else
+            {
+                const float rateNorm = juce::jlimit(0.0f, 1.0f, (trRate - 0.4f) / 13.6f);
+                const float seconds = fadeTarget > tremoloFadeGain
+                    ? juce::jmap(rateNorm, 2.5f, 0.025f)
+                    : juce::jmap(juce::jlimit(0.0f, 1.0f, trSymmetry), 2.5f, 0.025f);
+                const float coeff = 1.0f - std::exp(-1.0f / (seconds * (float)sampleRate_));
+                tremoloFadeGain += (fadeTarget - tremoloFadeGain) * coeff;
+            }
+        }
+        else
+        {
+            tremoloFadeGain = 1.0f;
+        }
     }
 
     if (revOn && channels > 0)
@@ -2712,11 +2774,13 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
 
     if (eqOn && channels > 0)
     {
+        const float inputGain = juce::Decibels::decibelsToGain(outputEqInputGainDb.load());
+        const float outputGain = juce::Decibels::decibelsToGain(outputEqVolumeDb.load());
         for (int ch = 0; ch < channels; ++ch)
         {
             float* channelData = buffer.getWritePointer(ch, startSample);
             for (int s = 0; s < numSamples; ++s)
-                channelData[s] = outputEq.processSample(ch, channelData[s]);
+                channelData[s] = outputEq.processSample(ch, channelData[s] * inputGain) * outputGain;
         }
     }
 }

@@ -121,6 +121,47 @@ public:
             return;
         }
 
+        if (slider.getComponentID() == "bossNoiseKnob")
+        {
+            const float angle = startAngle + pos * (endAngle - startAngle);
+            const float r = radius * 0.88f;
+
+            g.setColour(juce::Colours::black.withAlpha(0.30f));
+            g.fillEllipse(centre.x - r - 1.8f, centre.y - r + 2.3f,
+                          r * 2.0f + 3.6f, r * 2.0f + 3.6f);
+            g.setColour(juce::Colour(0xff242424));
+            g.fillEllipse(centre.x - r - 1.2f, centre.y - r - 1.2f,
+                          r * 2.0f + 2.4f, r * 2.0f + 2.4f);
+
+            for (int i = 0; i < 24; ++i)
+            {
+                const float a = juce::MathConstants<float>::twoPi * (float) i / 24.0f;
+                const auto p1 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * (r * 0.82f);
+                const auto p2 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * r;
+                g.setColour(juce::Colours::white.withAlpha(i % 2 == 0 ? 0.22f : 0.10f));
+                g.drawLine({ p1, p2 }, 0.8f);
+            }
+
+            juce::ColourGradient ivory(juce::Colour(0xffffffff), centre.x - r * 0.50f, centre.y - r * 0.62f,
+                                       juce::Colour(0xffbbb8ae), centre.x + r * 0.50f, centre.y + r * 0.58f, true);
+            ivory.addColour(0.46, juce::Colour(0xffeeeae0));
+            g.setGradientFill(ivory);
+            g.fillEllipse(centre.x - r * 0.72f, centre.y - r * 0.72f,
+                          r * 1.44f, r * 1.44f);
+            g.setColour(juce::Colours::black.withAlpha(0.28f));
+            g.drawEllipse(centre.x - r * 0.72f, centre.y - r * 0.72f,
+                          r * 1.44f, r * 1.44f, 0.9f);
+
+            const auto markerStart = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.16f);
+            const auto markerEnd = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.62f);
+            g.setColour(juce::Colour(0xff181818));
+            g.drawLine({ markerStart, markerEnd }, 2.0f);
+            g.setColour(juce::Colours::white.withAlpha(0.38f));
+            g.fillEllipse(centre.x - r * 0.42f, centre.y - r * 0.54f,
+                          r * 0.65f, r * 0.18f);
+            return;
+        }
+
         if (slider.getComponentID() == "dedaloJetKnob")
         {
             const float angle = startAngle + pos * (endAngle - startAngle);
@@ -505,6 +546,32 @@ public:
     {
         bool horiz = (style == juce::Slider::LinearHorizontal);
         auto b = juce::Rectangle<int>(x, y, w, h).toFloat();
+
+        if (slider.getComponentID() == "mxrTenBandSlider")
+        {
+            const float cx = b.getCentreX();
+            const float trackTop = b.getY() + 4.0f;
+            const float trackBottom = b.getBottom() - 4.0f;
+            g.setColour(juce::Colours::black.withAlpha(0.86f));
+            g.fillRoundedRectangle(cx - 2.3f, trackTop, 4.6f, trackBottom - trackTop, 1.4f);
+            g.setColour(juce::Colours::white.withAlpha(0.12f));
+            g.drawVerticalLine(juce::roundToInt(cx - 0.5f), trackTop + 1.0f, trackBottom - 1.0f);
+
+            const auto blue = slider.findColour(juce::Slider::trackColourId);
+            g.setColour(blue.withAlpha(0.20f));
+            g.fillEllipse(cx - 8.5f, pos - 8.5f, 17.0f, 17.0f);
+            g.setColour(juce::Colours::black.withAlpha(0.58f));
+            g.fillRoundedRectangle(cx - 7.2f, pos - 4.6f, 14.4f, 10.8f, 2.5f);
+            juce::ColourGradient cap(juce::Colour(0xfff5f6f6), cx - 5.5f, pos - 4.0f,
+                                     juce::Colour(0xff6e7478), cx + 5.0f, pos + 5.0f, true);
+            g.setGradientFill(cap);
+            g.fillRoundedRectangle(cx - 6.2f, pos - 5.0f, 12.4f, 10.0f, 2.0f);
+            g.setColour(blue.withAlpha(0.96f));
+            g.fillRoundedRectangle(cx - 2.2f, pos - 3.6f, 4.4f, 7.2f, 1.2f);
+            g.setColour(juce::Colours::white.withAlpha(0.72f));
+            g.drawHorizontalLine(juce::roundToInt(pos - 3.0f), cx - 1.5f, cx + 1.5f);
+            return;
+        }
 
         float trackThick = 3.0f;
         juce::Rectangle<float> track;

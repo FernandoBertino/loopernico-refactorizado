@@ -194,6 +194,7 @@ public:
     void configureNineKnobs(const juce::String& l1, const juce::String& l2, const juce::String& l3,
                             const juce::String& l4, const juce::String& l5, const juce::String& l6,
                             const juce::String& l7, const juce::String& l8, const juce::String& l9);
+    void configureTenBandGraphicEq();
     void setKnobValueFormatter(int knobIndex, std::function<juce::String(double)> formatter);
     void setInfoText(const juce::String& mainText, const juce::String& subText = {});
     void setDragHintVisible(bool visible);
@@ -201,7 +202,10 @@ public:
     juce::Point<float> getJackCentre(JackSide side) const noexcept;
     juce::ToggleButton onBtn{"ON"};
     juce::Slider knob1, knob2, knob3, knob4, knob5, knob6, knob7, knob8, knob9;
+    juce::Slider eqVolumeSlider, eqGainSlider;
+    std::array<juce::Slider, 10> eqBandSliders;
     std::function<void()> onSecondaryFootswitch;
+    std::function<void()> onSecondaryFootswitchRelease;
     std::function<void()> onTap;
     std::function<void(FXPedalComponent&, const juce::MouseEvent&)> onDragStart;
     std::function<void(FXPedalComponent&, const juce::MouseEvent&)> onDragMove;
@@ -209,6 +213,57 @@ public:
 
     void mouseDown(const juce::MouseEvent& e) override
     {
+        if (pedalName == "TREMOLO")
+        {
+            auto body = getLocalBounds().toFloat().reduced(3.0f);
+            const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / (4.0f / 3.0f));
+            body = { body.getX(), body.getCentreY() - bodyHeight * 0.5f,
+                     body.getWidth(), bodyHeight };
+            const auto mouse = e.position;
+            const auto inside = [mouse](juce::Point<float> centre, float radius)
+            {
+                const float dx = mouse.x - centre.x;
+                const float dy = mouse.y - centre.y;
+                return dx * dx + dy * dy <= radius * radius;
+            };
+            const float footY = body.getY() + body.getHeight() * 0.835f;
+            const auto bypass = juce::Point<float>(body.getX() + body.getWidth() * 0.147f, footY);
+            const auto control = juce::Point<float>(body.getX() + body.getWidth() * 0.843f, footY);
+
+            if (inside(bypass, 27.0f))
+            {
+                onBtn.setToggleState(!onBtn.getToggleState(), juce::sendNotification);
+                repaint();
+                return;
+            }
+            if (inside(control, 27.0f))
+            {
+                secondaryFootswitchDown = true;
+                if (onSecondaryFootswitch)
+                    onSecondaryFootswitch();
+                repaint();
+                return;
+            }
+        }
+
+        if (pedalName == "VST3 HOST")
+        {
+            auto body = getLocalBounds().toFloat().reduced(3.0f);
+            const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / 1.20f);
+            body = { body.getX(), body.getCentreY() - bodyHeight * 0.5f,
+                     body.getWidth(), bodyHeight };
+            const auto foot = juce::Point<float>(body.getCentreX(),
+                                                  body.getY() + body.getHeight() * 0.90f);
+            const float dx = e.position.x - foot.x;
+            const float dy = e.position.y - foot.y;
+            if (dx * dx + dy * dy <= 26.0f * 26.0f)
+            {
+                onBtn.setToggleState(!onBtn.getToggleState(), juce::sendNotification);
+                repaint();
+                return;
+            }
+        }
+
         if (pedalName == "RHYTHM BOX")
         {
             auto body = getLocalBounds().toFloat().reduced(3.0f);
@@ -255,8 +310,12 @@ public:
             }
         }
 
-        const bool customWideFootswitch = (pedalName == "FUZZ" || pedalName == "OVERDRIVE" || pedalName == "COMPRESSOR")
-            && e.y > juce::roundToInt(getHeight() * 0.66f);
+        const bool customWideFootswitch = ((pedalName == "FUZZ" || pedalName == "OVERDRIVE" || pedalName == "COMPRESSOR"
+                                              || pedalName == "HARMONIZER" || pedalName == "SUSTAIN GRAN"
+                                              || pedalName == "SUSTAIN CHORDS" || pedalName == "OUTPUT EQ")
+                                               && e.y > juce::roundToInt(getHeight() * 0.66f))
+                                          || (pedalName.containsIgnoreCase("NOISE GATE")
+                                               && e.y > juce::roundToInt(getHeight() * 0.55f));
         if (e.y > getHeight() - 30 || customWideFootswitch)
         {
             onBtn.setToggleState(!onBtn.getToggleState(), juce::sendNotification);
@@ -276,6 +335,14 @@ public:
 
     void mouseUp(const juce::MouseEvent& e) override
     {
+        if (secondaryFootswitchDown)
+        {
+            secondaryFootswitchDown = false;
+            if (onSecondaryFootswitchRelease)
+                onSecondaryFootswitchRelease();
+            repaint();
+            return;
+        }
         if (onDragEnd)
             onDragEnd(*this, e);
     }
@@ -288,7 +355,9 @@ private:
     juce::Colour pedalCol;
     bool extendedKnobs = false;
     bool nineKnobs = false;
+    bool tenBandGraphicEq = false;
     bool dragHintVisible = false;
+    bool secondaryFootswitchDown = false;
     juce::String infoMain, infoSub;
     std::function<juce::String(double)> knobValueFormatters[9];
 

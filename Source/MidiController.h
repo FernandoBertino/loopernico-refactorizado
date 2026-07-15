@@ -18,7 +18,6 @@
 class MidiController
 {
 public:
-    static constexpr int kNumActions = 10;
     using ActionStateCallback = std::function<void(bool pressed, bool hasRelease)>;
 
     struct MappingData
@@ -29,7 +28,17 @@ public:
         int number{ -1 };
     };
 
-    enum Action { RecConfirm = 0, Cancel, Undo, Redo, StopPlay, MuteAll, ResetAll, PauseAll, RhythmNextSection, FreezeToggle };
+    enum Action
+    {
+        RecConfirm = 0, Cancel, Undo, Redo, StopPlay, MuteAll, ResetAll,
+        PauseAll, RhythmNextSection, SustainGranToggle,
+        NoiseGateToggle, RhythmBoxToggle, CompressorToggle, HarmonizerToggle,
+        SustainChordsToggle, FuzzToggle, OverdriveToggle, ChorusToggle,
+        TremoloToggle, TapeDelayToggle, RoomReverbToggle, OutputEqToggle,
+        Vst3Toggle,
+        NumActions
+    };
+    static constexpr int kNumActions = (int) NumActions;
 
     MidiController();
 
@@ -75,4 +84,6 @@ private:
 
     std::atomic<bool> learnMode          { false };
     std::atomic<int>  actionBeingLearned { -1    };
+    std::atomic<int>  lastProgramNumber  { -1    };
+    std::atomic<juce::int64> lastProgramTimeMs { 0 };
 };
