@@ -76,6 +76,8 @@ public:
     void updateMuteSoloMatrix();
     void handleIncomingMidiMessage(juce::MidiInput* source, const juce::MidiMessage& message) override;
     void revealFxPedal(int pedalIndex);
+    void focusFxPedalForSnapshot(int pedalIndex);
+    bool openSessionFile(const juce::File& sessionFile);
 
 private:
     static constexpr int kNumFxPedals = 13;
@@ -97,6 +99,29 @@ private:
             if (onPaint != nullptr)
                 onPaint(g);
         }
+    };
+
+    class FXPedalFocusOverlay final : public juce::Component
+    {
+    public:
+        FXPedalFocusOverlay();
+        void showPedal(FXPedalComponent& pedalToShow, int compactWidth, int compactHeight);
+        void clearPedal();
+        FXPedalComponent* getPedal() const noexcept { return pedal; }
+
+        void paint(juce::Graphics& g) override;
+        void resized() override;
+        void mouseDown(const juce::MouseEvent& e) override;
+        bool keyPressed(const juce::KeyPress& key) override;
+
+        std::function<void()> onDismiss;
+
+    private:
+        FXPedalComponent* pedal = nullptr;
+        juce::TextButton closeButton { "CERRAR   ESC" };
+        juce::Rectangle<int> cardBounds;
+        int baseWidth = 1;
+        int baseHeight = 1;
     };
 
     LoopernicoLAF lnf;
@@ -125,6 +150,8 @@ private:
     std::array<int, kNumFxPedals> fxOrder{};
     int draggingFxPedal = -1;
     int dragInsertSlot = -1;
+    FXPedalFocusOverlay fxPedalFocusOverlay;
+    int focusedFxPedalIndex = -2; // -2: ninguno, -1: VST3, 0..12: pedal interno
     juce::ComboBox    rhythmStyleSelector;
     juce::ComboBox    rhythmPatternSelector;
     juce::ComboBox    rhythmModeSelector;
@@ -146,6 +173,7 @@ private:
     juce::TextButton  btnRhythmCountInToggle{"PRECONTEO"};
     juce::int64 lastRhythmTapMs = 0;
     juce::int64 lastTremoloTapMs = 0;
+    juce::int64 lastDelayTapMs = 0;
 
     juce::ComboBox   midiDeviceSelector, midiActionSelector, midiMessageTypeSelector;
     juce::Slider     midiNumberSelector;
@@ -202,6 +230,8 @@ private:
     int fxSlotStartX(int slot) const;
     int fxSlotForX(int x) const;
     void moveFxPedalToSlot(int pedalIndex, int targetSlot);
+    void toggleFxPedalFocus(FXPedalComponent& pedal);
+    void closeFxPedalFocus();
     void updateOutputModeButton();
     void updateLoopEditButtons();
     void updateRhythmBoxReadouts();

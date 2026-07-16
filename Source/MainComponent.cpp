@@ -163,6 +163,118 @@ namespace
 
 }
 
+MainComponent::FXPedalFocusOverlay::FXPedalFocusOverlay()
+{
+    setVisible(false);
+    setWantsKeyboardFocus(true);
+    closeButton.setTooltip("Cerrar vista ampliada");
+    closeButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff171a1f));
+    closeButton.setColour(juce::TextButton::buttonOnColourId, LnfC::RecRed.darker(0.2f));
+    closeButton.setColour(juce::TextButton::textColourOffId, juce::Colours::white.withAlpha(0.9f));
+    closeButton.onClick = [this]()
+    {
+        if (onDismiss)
+            onDismiss();
+    };
+    addAndMakeVisible(closeButton);
+}
+
+void MainComponent::FXPedalFocusOverlay::showPedal(FXPedalComponent& pedalToShow,
+                                                    int compactWidth, int compactHeight)
+{
+    pedal = &pedalToShow;
+    baseWidth = juce::jmax(1, compactWidth);
+    baseHeight = juce::jmax(1, compactHeight);
+    addAndMakeVisible(pedal);
+    setVisible(true);
+    resized();
+    repaint();
+    toFront(true);
+    grabKeyboardFocus();
+}
+
+void MainComponent::FXPedalFocusOverlay::clearPedal()
+{
+    pedal = nullptr;
+    cardBounds = {};
+    setVisible(false);
+}
+
+void MainComponent::FXPedalFocusOverlay::paint(juce::Graphics& g)
+{
+    g.fillAll(juce::Colours::black.withAlpha(0.82f));
+
+    if (pedal == nullptr || cardBounds.isEmpty())
+        return;
+
+    auto card = cardBounds.toFloat();
+    g.setColour(juce::Colours::black.withAlpha(0.72f));
+    g.fillRoundedRectangle(card.translated(0.0f, 10.0f).expanded(5.0f), 22.0f);
+
+    juce::ColourGradient stage(juce::Colour(0xff22262c), card.getX(), card.getY(),
+                               juce::Colour(0xff08090b), card.getX(), card.getBottom(), false);
+    g.setGradientFill(stage);
+    g.fillRoundedRectangle(card, 18.0f);
+    LoopernicoUi::drawFineRackTexture(g, card, 0.48f);
+    g.setColour(LnfC::OvdAmber.withAlpha(0.48f));
+    g.drawRoundedRectangle(card.reduced(0.8f), 18.0f, 1.4f);
+
+    const auto titleArea = juce::Rectangle<int>(cardBounds.getX() + 24, cardBounds.getY() + 12,
+                                                 cardBounds.getWidth() - 48, 34);
+    g.setColour(juce::Colours::white.withAlpha(0.95f));
+    g.setFont(juce::Font(juce::FontOptions(20.0f).withStyle("Bold")));
+    g.drawText(pedal->getDisplayName() + "  /  VISTA HD", titleArea,
+               juce::Justification::centredLeft, false);
+
+    g.setColour(juce::Colours::white.withAlpha(0.48f));
+    g.setFont(juce::Font(juce::FontOptions(11.5f)));
+    g.drawText("Parametros activos en tiempo real  |  Clic fuera del pedal o ESC para volver",
+               titleArea.translated(0, 29), juce::Justification::centredLeft, false);
+}
+
+void MainComponent::FXPedalFocusOverlay::resized()
+{
+    closeButton.setBounds(getWidth() - 152, 24, 124, 30);
+    if (pedal == nullptr)
+        return;
+
+    auto available = getLocalBounds().reduced(56, 34);
+    available.removeFromTop(64);
+    available.removeFromBottom(24);
+
+    const float fitScale = juce::jmin((float)available.getWidth() / (float)baseWidth,
+                                      (float)available.getHeight() / (float)baseHeight);
+    const float scale = juce::jmin(2.75f, fitScale);
+    const int targetWidth = juce::jmax(1, juce::roundToInt((float)baseWidth * scale));
+    const int targetHeight = juce::jmax(1, juce::roundToInt((float)baseHeight * scale));
+    const int pedalX = available.getCentreX() - targetWidth / 2;
+    const int pedalY = available.getCentreY() - targetHeight / 2 + 12;
+    pedal->setBounds(pedalX, pedalY, targetWidth, targetHeight);
+    pedal->toFront(false);
+
+    cardBounds = pedal->getBounds().expanded(30, 26);
+    cardBounds.setTop(cardBounds.getY() - 58);
+    cardBounds = cardBounds.getIntersection(getLocalBounds().reduced(18));
+    closeButton.toFront(false);
+}
+
+void MainComponent::FXPedalFocusOverlay::mouseDown(const juce::MouseEvent& e)
+{
+    if (!cardBounds.contains(e.getPosition()) && onDismiss)
+        onDismiss();
+}
+
+bool MainComponent::FXPedalFocusOverlay::keyPressed(const juce::KeyPress& key)
+{
+    if (key == juce::KeyPress::escapeKey)
+    {
+        if (onDismiss)
+            onDismiss();
+        return true;
+    }
+    return false;
+}
+
 MainComponent::MainComponent()
 {
     setLookAndFeel(&lnf);
@@ -313,15 +425,18 @@ MainComponent::MainComponent()
     addAndMakeVisible(btnExportTracks);
 
     setupFXPedals();
+    fxPedalFocusOverlay.onDismiss = [this]() { closeFxPedalFocus(); };
+    addChildComponent(fxPedalFocusOverlay);
     fxContainer.onPaint = [this](juce::Graphics& g)
     {
         juce::Array<FXPedalComponent*> chain;
-        if (vst3Pedal != nullptr)
+        if (vst3Pedal != nullptr && focusedFxPedalIndex != -1)
             chain.add(vst3Pedal.get());
         for (int slot = 0; slot < kNumFxPedals; ++slot)
         {
             const int pedalIndex = fxOrder[(size_t) slot];
-            if (pedalIndex != draggingFxPedal && fxPedals[pedalIndex] != nullptr)
+            if (pedalIndex != draggingFxPedal && pedalIndex != focusedFxPedalIndex
+                && fxPedals[pedalIndex] != nullptr)
                 chain.add(fxPedals[pedalIndex].get());
         }
         FXPedalboardWiring::CableStyle style;
@@ -699,11 +814,11 @@ void MainComponent::setupFXPedals()
         { "NOISE GATE",     0xffd8d7d1, "THRESH",  "ATTACK",  "REL"   },
         { "RHYTHM BOX",     0xff9a2b1f, "BPM",     "LEVEL",   "SWING" },
         { "COMPRESSOR",     0xffb8880a, "THRESH",  "RATIO",   "LEVEL" },
-        { "HARMONIZER",     0xff0f6e28, "INTERV",  "MIX",     "LEVEL" },
+        { "HARMONIZER",     0xfff1f1f1, "SHIFT A", "SHIFT B", "MIX"   },
         { "SUSTAIN GRAN",   0xff2d5c7d, "MIX",     "SIZE",    "FADE"  },
         { "SUSTAIN CHORDS", 0xff486d89, "MIX",     "SIZE",    "FADE"  },
         { "FUZZ",           0xff0f3a88, "FUZZ",    "TONE",    "LEVEL" },
-        { "OVERDRIVE",      0xff1a7a28, "DRIVE",   "TONE",    "LEVEL" },
+        { "SUNSET",         0xffc91522, "LEVEL A", "DRIVE A", "TONE A" },
         { "CHORUS",         0xff0f4e88, "MIX",     "RATE",    "DEPTH" },
         { "TREMOLO",        0xff0b7f73, "MIX",     "RATE",    "DEPTH" },
         { "TAPE DELAY",     0xffaa5a08, "MIX",     "TIME",    "FEEDB" },
@@ -737,6 +852,10 @@ void MainComponent::setupFXPedals()
         effectsChain.setExternalPluginEnabled(vst3Pedal->onBtn.getToggleState());
         updateExternalVstUi();
     };
+    vst3Pedal->onZoomRequest = [this](FXPedalComponent& pedal)
+    {
+        toggleFxPedalFocus(pedal);
+    };
     fxContainer.addAndMakeVisible(vst3Pedal.get());
 
     for (int i = 0; i < kNumFxPedals; ++i)
@@ -756,6 +875,10 @@ void MainComponent::setupFXPedals()
         fxPedals[i]->onDragEnd = [this](FXPedalComponent& pedal, const juce::MouseEvent& e)
         {
             endFxPedalDrag(pedal, e);
+        };
+        fxPedals[i]->onZoomRequest = [this](FXPedalComponent& pedal)
+        {
+            toggleFxPedalFocus(pedal);
         };
         fxContainer.addAndMakeVisible(fxPedals[i].get());
     }
@@ -902,11 +1025,50 @@ void MainComponent::setupFXPedals()
     fxPedals[2]->knob5.onValueChange=[this](){ effectsChain.setCompTail((float)fxPedals[2]->knob5.getValue()); };
     fxPedals[2]->knob6.onValueChange=[this](){ effectsChain.setCompEq((float)fxPedals[2]->knob6.getValue()); };
 
-    fxPedals[3]->knob1.setRange(-12,12,1); fxPedals[3]->knob1.setValue(7);
+    fxPedals[3]->configureExtendedKnobs("SHIFT A", "SHIFT B", "MIX", "DELAY", "FEEDBACK", "");
+    for (auto* knob : { &fxPedals[3]->knob1, &fxPedals[3]->knob2, &fxPedals[3]->knob3,
+                        &fxPedals[3]->knob4, &fxPedals[3]->knob5 })
+        knob->setComponentID("eventideH90Knob");
+    fxPedals[3]->knob1.setRange(-24.0, 24.0, 1.0); fxPedals[3]->knob1.setValue(7.0);
+    fxPedals[3]->knob2.setRange(-24.0, 24.0, 1.0); fxPedals[3]->knob2.setValue(12.0);
+    cfg(fxPedals[3]->knob3, 0.0, 1.0, 0.40);
+    cfg(fxPedals[3]->knob4, 0.0, 1000.0, 25.0);
+    cfg(fxPedals[3]->knob5, 0.0, 0.92, 0.0);
+    fxPedals[3]->knob6.setVisible(false);
+    fxPedals[3]->knob7.setVisible(false);
+    fxPedals[3]->knob8.setVisible(false);
+    fxPedals[3]->knob9.setVisible(false);
     fxPedals[3]->onBtn.onClick=[this](){ effectsChain.setHarmonicEnabled(fxPedals[3]->onBtn.getToggleState()); };
-    fxPedals[3]->knob1.onValueChange=[this](){ effectsChain.setHarmonicInterval((int)fxPedals[3]->knob1.getValue()); };
-    fxPedals[3]->knob2.onValueChange=[this](){ effectsChain.setHarmonicMix((float)fxPedals[3]->knob2.getValue()); };
-    fxPedals[3]->knob3.onValueChange=[this](){ effectsChain.setHarmonicLevel((float)fxPedals[3]->knob3.getValue()); };
+    fxPedals[3]->knob1.onValueChange=[this](){ effectsChain.setHarmonicInterval((int)fxPedals[3]->knob1.getValue()); fxPedals[3]->repaint(); };
+    fxPedals[3]->knob2.onValueChange=[this](){ effectsChain.setHarmonicIntervalB((int)fxPedals[3]->knob2.getValue()); fxPedals[3]->repaint(); };
+    fxPedals[3]->knob3.onValueChange=[this](){ effectsChain.setHarmonicMix((float)fxPedals[3]->knob3.getValue()); fxPedals[3]->repaint(); };
+    fxPedals[3]->knob4.onValueChange=[this](){ effectsChain.setHarmonicDelayMs((float)fxPedals[3]->knob4.getValue()); fxPedals[3]->repaint(); };
+    fxPedals[3]->knob5.onValueChange=[this](){ effectsChain.setHarmonicFeedback((float)fxPedals[3]->knob5.getValue()); fxPedals[3]->repaint(); };
+    fxPedals[3]->onSecondaryFootswitch=[this](){ effectsChain.setHarmonicFlex(true); };
+    fxPedals[3]->onSecondaryFootswitchRelease=[this](){ effectsChain.setHarmonicFlex(false); };
+    fxPedals[3]->onTertiaryFootswitch=[this]()
+    {
+        static constexpr int h90Programs[][2] = { { 7, 12 }, { -12, 7 }, { -5, 7 }, { 12, 24 } };
+        int currentProgram = 0;
+        for (int i = 0; i < (int) juce::numElementsInArray(h90Programs); ++i)
+            if (juce::roundToInt(fxPedals[3]->knob1.getValue()) == h90Programs[i][0]
+                && juce::roundToInt(fxPedals[3]->knob2.getValue()) == h90Programs[i][1])
+                currentProgram = i + 1;
+        const auto& next = h90Programs[currentProgram % (int) juce::numElementsInArray(h90Programs)];
+        fxPedals[3]->knob1.setValue(next[0], juce::sendNotificationSync);
+        fxPedals[3]->knob2.setValue(next[1], juce::sendNotificationSync);
+    };
+    fxPedals[3]->setKnobValueFormatter(0, [](double v){ return (v > 0.0 ? "+" : "") + juce::String(juce::roundToInt(v)) + " st"; });
+    fxPedals[3]->setKnobValueFormatter(1, [](double v){ return (v > 0.0 ? "+" : "") + juce::String(juce::roundToInt(v)) + " st"; });
+    fxPedals[3]->setKnobValueFormatter(2, formatPercent01);
+    fxPedals[3]->setKnobValueFormatter(3, formatMs);
+    fxPedals[3]->setKnobValueFormatter(4, formatPercent01);
+    effectsChain.setHarmonicInterval((int) fxPedals[3]->knob1.getValue());
+    effectsChain.setHarmonicIntervalB((int) fxPedals[3]->knob2.getValue());
+    effectsChain.setHarmonicMix((float) fxPedals[3]->knob3.getValue());
+    effectsChain.setHarmonicLevel(1.0f);
+    effectsChain.setHarmonicDelayMs((float) fxPedals[3]->knob4.getValue());
+    effectsChain.setHarmonicFeedback((float) fxPedals[3]->knob5.getValue());
 
     fxPedals[4]->configureExtendedKnobs("BLEND", "RISE", "TAIL", "TONE", "SIZE", "DENS");
     cfg(fxPedals[4]->knob1,0.0,2.0,1.0);
@@ -959,20 +1121,73 @@ void MainComponent::setupFXPedals()
     fxPedals[6]->knob2.onValueChange=[this](){ effectsChain.setFuzzTone((float)fxPedals[6]->knob2.getValue()); };
     fxPedals[6]->knob3.onValueChange=[this](){ effectsChain.setFuzzLevel((float)fxPedals[6]->knob3.getValue()); };
 
-    cfg(fxPedals[7]->knob1,0,1,0.5); cfg(fxPedals[7]->knob2,0.05,1,0.6); cfg(fxPedals[7]->knob3,0,1,0.8);
-    fxPedals[7]->knob1.setComponentID("mirrorDriveKnob");
-    fxPedals[7]->knob2.setComponentID("mirrorDriveKnob");
-    fxPedals[7]->knob3.setComponentID("mirrorDriveKnob");
-    fxPedals[7]->onBtn.onClick=[this](){ effectsChain.setDriveEnabled(fxPedals[7]->onBtn.getToggleState()); };
-    fxPedals[7]->knob1.onValueChange=[this](){ effectsChain.setDrive((float)fxPedals[7]->knob1.getValue()); };
-    fxPedals[7]->knob2.onValueChange=[this](){ effectsChain.setDriveTone((float)fxPedals[7]->knob2.getValue()); };
-    fxPedals[7]->knob3.onValueChange=[this](){ effectsChain.setDriveLevel((float)fxPedals[7]->knob3.getValue()); };
+    fxPedals[7]->configureNineKnobs("LEVEL A", "DRIVE A", "TONE A",
+                                    "LEVEL B", "DRIVE B", "TONE B",
+                                    "TYPE A", "TYPE B", "CONFIG");
+    for (auto* knob : { &fxPedals[7]->knob1, &fxPedals[7]->knob2, &fxPedals[7]->knob3,
+                        &fxPedals[7]->knob4, &fxPedals[7]->knob5, &fxPedals[7]->knob6 })
+        knob->setComponentID("sunsetKnob");
+    fxPedals[7]->knob7.setComponentID("sunsetToggle");
+    fxPedals[7]->knob8.setComponentID("sunsetToggle");
+    cfg(fxPedals[7]->knob1, 0.0, 1.0, 0.52); // LEVEL A
+    cfg(fxPedals[7]->knob2, 0.0, 1.0, 0.42); // DRIVE A
+    cfg(fxPedals[7]->knob3, 0.0, 1.0, 0.55); // TONE A
+    cfg(fxPedals[7]->knob4, 0.0, 1.0, 0.52); // LEVEL B
+    cfg(fxPedals[7]->knob5, 0.0, 1.0, 0.36); // DRIVE B
+    cfg(fxPedals[7]->knob6, 0.0, 1.0, 0.55); // TONE B
+    fxPedals[7]->knob7.setRange(0.0, 2.0, 1.0); fxPedals[7]->knob7.setValue(1.0); // texas
+    fxPedals[7]->knob8.setRange(0.0, 2.0, 1.0); fxPedals[7]->knob8.setValue(0.0); // 2stage
+    fxPedals[7]->knob9.setRange(0.0, 2.0, 1.0); fxPedals[7]->knob9.setValue(0.0); // A -> B
+    fxPedals[7]->knob9.setVisible(false); // CONFIG is operated on the rear/top lip.
+    fxPedals[7]->knob1.setTooltip("LEVEL A");
+    fxPedals[7]->knob2.setTooltip("DRIVE A");
+    fxPedals[7]->knob3.setTooltip("TONE A");
+    fxPedals[7]->knob4.setTooltip("LEVEL B");
+    fxPedals[7]->knob5.setTooltip("DRIVE B");
+    fxPedals[7]->knob6.setTooltip("TONE B");
+    fxPedals[7]->knob7.setTooltip("A: Ge / texas / treble");
+    fxPedals[7]->knob8.setTooltip("B: 2stage / hard / JFET");
+    fxPedals[7]->onBtn.onClick=[this](){ effectsChain.setDriveAEnabled(fxPedals[7]->onBtn.getToggleState()); };
+    fxPedals[7]->onTertiaryFootswitch=[this](){ effectsChain.setDriveBEnabled(fxPedals[7]->isTertiaryFootswitchLatched()); };
+    fxPedals[7]->knob1.onValueChange=[this](){ effectsChain.setDriveALevel((float)fxPedals[7]->knob1.getValue()); };
+    fxPedals[7]->knob2.onValueChange=[this](){ effectsChain.setDriveA((float)fxPedals[7]->knob2.getValue()); };
+    fxPedals[7]->knob3.onValueChange=[this](){ effectsChain.setDriveATone((float)fxPedals[7]->knob3.getValue()); };
+    fxPedals[7]->knob4.onValueChange=[this](){ effectsChain.setDriveBLevel((float)fxPedals[7]->knob4.getValue()); };
+    fxPedals[7]->knob5.onValueChange=[this](){ effectsChain.setDriveB((float)fxPedals[7]->knob5.getValue()); };
+    fxPedals[7]->knob6.onValueChange=[this](){ effectsChain.setDriveBTone((float)fxPedals[7]->knob6.getValue()); };
+    fxPedals[7]->knob7.onValueChange=[this](){ effectsChain.setDriveAType(juce::roundToInt(fxPedals[7]->knob7.getValue())); fxPedals[7]->repaint(); };
+    fxPedals[7]->knob8.onValueChange=[this](){ effectsChain.setDriveBType(juce::roundToInt(fxPedals[7]->knob8.getValue())); fxPedals[7]->repaint(); };
+    fxPedals[7]->knob9.onValueChange=[this](){ effectsChain.setDriveRouting(juce::roundToInt(fxPedals[7]->knob9.getValue())); fxPedals[7]->repaint(); };
+    fxPedals[7]->onSunsetBrightChange=[this](int mode){ effectsChain.setDriveBright(mode); };
+    effectsChain.setDriveALevel((float)fxPedals[7]->knob1.getValue());
+    effectsChain.setDriveA((float)fxPedals[7]->knob2.getValue());
+    effectsChain.setDriveATone((float)fxPedals[7]->knob3.getValue());
+    effectsChain.setDriveBLevel((float)fxPedals[7]->knob4.getValue());
+    effectsChain.setDriveB((float)fxPedals[7]->knob5.getValue());
+    effectsChain.setDriveBTone((float)fxPedals[7]->knob6.getValue());
+    effectsChain.setDriveAType(juce::roundToInt(fxPedals[7]->knob7.getValue()));
+    effectsChain.setDriveBType(juce::roundToInt(fxPedals[7]->knob8.getValue()));
+    effectsChain.setDriveRouting(juce::roundToInt(fxPedals[7]->knob9.getValue()));
+    effectsChain.setDriveBright(fxPedals[7]->getSunsetBrightMode());
 
-    cfg(fxPedals[8]->knob1,0,1,0.5); cfg(fxPedals[8]->knob2,0.1,8,1.2); cfg(fxPedals[8]->knob3,0,1,0.35);
+    fxPedals[8]->knob1.setComponentID("smallCloneMix");
+    fxPedals[8]->knob2.setComponentID("smallCloneRateKnob");
+    fxPedals[8]->knob3.setComponentID("smallCloneDepthSwitch");
+    cfg(fxPedals[8]->knob1,0,1,0.5); cfg(fxPedals[8]->knob2,0.1,8,1.2);
+    fxPedals[8]->knob3.setRange(0.0, 1.0, 1.0); fxPedals[8]->knob3.setValue(0.0);
+    fxPedals[8]->knob1.setTooltip("MIX - arrastrar sobre la placa SMALL CLONE");
+    fxPedals[8]->knob2.setTooltip("RATE");
+    fxPedals[8]->knob3.setTooltip("DEPTH");
     fxPedals[8]->onBtn.onClick=[this](){ effectsChain.setChorusEnabled(fxPedals[8]->onBtn.getToggleState()); };
     fxPedals[8]->knob1.onValueChange=[this](){ effectsChain.setChorusMix((float)fxPedals[8]->knob1.getValue()); };
     fxPedals[8]->knob2.onValueChange=[this](){ effectsChain.setChorusRate((float)fxPedals[8]->knob2.getValue()); };
     fxPedals[8]->knob3.onValueChange=[this](){ effectsChain.setChorusDepth((float)fxPedals[8]->knob3.getValue()); };
+    fxPedals[8]->setKnobValueFormatter(0, formatPercent01);
+    fxPedals[8]->setKnobValueFormatter(1, [](double v){ return juce::String(v, 2) + " Hz"; });
+    fxPedals[8]->setKnobValueFormatter(2, [](double v){ return v >= 0.5 ? "HIGH" : "LOW"; });
+    effectsChain.setChorusMix((float) fxPedals[8]->knob1.getValue());
+    effectsChain.setChorusRate((float) fxPedals[8]->knob2.getValue());
+    effectsChain.setChorusDepth((float) fxPedals[8]->knob3.getValue());
 
     fxPedals[9]->configureExtendedKnobs("DEPTH", "MODE", "RATE / f IN", "BEATS", "SYM / f OUT", "");
     for (auto* knob : { &fxPedals[9]->knob1, &fxPedals[9]->knob2, &fxPedals[9]->knob3,
@@ -1008,11 +1223,60 @@ void MainComponent::setupFXPedals()
         effectsChain.setTremoloControlPressed(false);
     };
 
-    cfg(fxPedals[10]->knob1,0,1,0.3); cfg(fxPedals[10]->knob2,50,1500,400); cfg(fxPedals[10]->knob3,0,0.95,0.4);
+    fxPedals[10]->configureNineKnobs("TIME", "REPEATS", "FILTER", "GRIT", "SPEED",
+                                     "DEPTH", "MIX", "TYPE", "VALUE");
+    for (auto* knob : { &fxPedals[10]->knob1, &fxPedals[10]->knob2, &fxPedals[10]->knob3,
+                        &fxPedals[10]->knob4, &fxPedals[10]->knob5, &fxPedals[10]->knob6,
+                        &fxPedals[10]->knob7, &fxPedals[10]->knob8, &fxPedals[10]->knob9 })
+        knob->setComponentID("timeLineKnob");
+    cfg(fxPedals[10]->knob1, 50.0, 1500.0, 400.0); // TIME
+    cfg(fxPedals[10]->knob2, 0.0, 0.95, 0.40);     // REPEATS
+    cfg(fxPedals[10]->knob3, 0.0, 1.0, 0.62);      // FILTER
+    cfg(fxPedals[10]->knob4, 0.0, 1.0, 0.12);      // GRIT
+    cfg(fxPedals[10]->knob5, 0.02, 12.0, 0.35);    // SPEED
+    cfg(fxPedals[10]->knob6, 0.0, 1.0, 0.10);      // DEPTH
+    cfg(fxPedals[10]->knob7, 0.0, 1.0, 0.30);      // MIX
+    fxPedals[10]->knob8.setRange(0.0, 11.0, 1.0); fxPedals[10]->knob8.setValue(6.0); // TYPE
+    cfg(fxPedals[10]->knob9, 0.0, 1.0, 0.50);      // VALUE
     fxPedals[10]->onBtn.onClick=[this](){ effectsChain.setDelayEnabled(fxPedals[10]->onBtn.getToggleState()); };
-    fxPedals[10]->knob1.onValueChange=[this](){ effectsChain.setDelayMix((float)fxPedals[10]->knob1.getValue()); };
-    fxPedals[10]->knob2.onValueChange=[this](){ effectsChain.setDelayTimeMs((float)fxPedals[10]->knob2.getValue()); };
-    fxPedals[10]->knob3.onValueChange=[this](){ effectsChain.setDelayFeedback((float)fxPedals[10]->knob3.getValue()); };
+    fxPedals[10]->knob1.onValueChange=[this](){ effectsChain.setDelayTimeMs((float)fxPedals[10]->knob1.getValue()); fxPedals[10]->repaint(); };
+    fxPedals[10]->knob2.onValueChange=[this](){ effectsChain.setDelayFeedback((float)fxPedals[10]->knob2.getValue()); };
+    fxPedals[10]->knob3.onValueChange=[this](){ effectsChain.setDelayFilter((float)fxPedals[10]->knob3.getValue()); };
+    fxPedals[10]->knob4.onValueChange=[this](){ effectsChain.setDelayGrit((float)fxPedals[10]->knob4.getValue()); };
+    fxPedals[10]->knob5.onValueChange=[this](){ effectsChain.setDelayModRate((float)fxPedals[10]->knob5.getValue()); };
+    fxPedals[10]->knob6.onValueChange=[this](){ effectsChain.setDelayModDepth((float)fxPedals[10]->knob6.getValue()); };
+    fxPedals[10]->knob7.onValueChange=[this](){ effectsChain.setDelayMix((float)fxPedals[10]->knob7.getValue()); };
+    fxPedals[10]->knob8.onValueChange=[this](){ effectsChain.setDelayType(juce::roundToInt(fxPedals[10]->knob8.getValue())); fxPedals[10]->repaint(); };
+    fxPedals[10]->knob9.onValueChange=[this](){ effectsChain.setDelayValue((float)fxPedals[10]->knob9.getValue()); fxPedals[10]->repaint(); };
+    fxPedals[10]->onSecondaryFootswitch=[this]()
+    {
+        const double nextValue = fxPedals[10]->knob9.getValue() < 0.5 ? 0.75 : 0.25;
+        fxPedals[10]->knob9.setValue(nextValue, juce::sendNotificationSync);
+    };
+    fxPedals[10]->onTap=[this]()
+    {
+        const juce::int64 now = juce::Time::currentTimeMillis();
+        const juce::int64 elapsed = now - lastDelayTapMs;
+        lastDelayTapMs = now;
+        if (elapsed >= 50 && elapsed <= 1500)
+            fxPedals[10]->knob1.setValue((double) elapsed, juce::sendNotificationSync);
+    };
+    fxPedals[10]->setKnobValueFormatter(0, formatMs);
+    fxPedals[10]->setKnobValueFormatter(1, formatPercent01);
+    fxPedals[10]->setKnobValueFormatter(2, formatPercent01);
+    fxPedals[10]->setKnobValueFormatter(3, formatPercent01);
+    fxPedals[10]->setKnobValueFormatter(4, [](double v){ return juce::String(v, 2) + " Hz"; });
+    fxPedals[10]->setKnobValueFormatter(5, formatPercent01);
+    fxPedals[10]->setKnobValueFormatter(6, formatPercent01);
+    effectsChain.setDelayTimeMs((float) fxPedals[10]->knob1.getValue());
+    effectsChain.setDelayFeedback((float) fxPedals[10]->knob2.getValue());
+    effectsChain.setDelayFilter((float) fxPedals[10]->knob3.getValue());
+    effectsChain.setDelayGrit((float) fxPedals[10]->knob4.getValue());
+    effectsChain.setDelayModRate((float) fxPedals[10]->knob5.getValue());
+    effectsChain.setDelayModDepth((float) fxPedals[10]->knob6.getValue());
+    effectsChain.setDelayMix((float) fxPedals[10]->knob7.getValue());
+    effectsChain.setDelayType(juce::roundToInt(fxPedals[10]->knob8.getValue()));
+    effectsChain.setDelayValue((float) fxPedals[10]->knob9.getValue());
 
     fxPedals[11]->configureNineKnobs("DECAY", "PRE-DELAY", "MIX", "TONE", "PARAM 1",
                                         "PARAM 2", "MOD", "TYPE", "VALUE");
@@ -1109,14 +1373,16 @@ int MainComponent::findFxPedalIndex(const FXPedalComponent& pedal) const
 
 int MainComponent::fxPedalBodyWidth(int pedalIndex) const
 {
-    if (pedalIndex == 1) return 225;
+    if (pedalIndex == 1) return 180;
     if (pedalIndex == 2) return 245;
     if (pedalIndex == 9) return 245;
-    if (pedalIndex == 3) return 156;
+    if (pedalIndex == 3) return 310;
     if (pedalIndex == 6) return 270;
-    if (pedalIndex == 7) return 225;
+    if (pedalIndex == 7) return 270;
+    if (pedalIndex == 8) return 158;
     if (pedalIndex == 12) return 270;
     if (pedalIndex == 11) return 320;
+    if (pedalIndex == 10) return 330;
     return 156;
 }
 
@@ -1132,6 +1398,63 @@ void MainComponent::revealFxPedal(int pedalIndex)
 
     const int centredX = fxPedals[pedalIndex]->getBounds().getCentreX() - fxViewport.getWidth() / 2;
     fxViewport.setViewPosition(juce::jlimit(0, juce::jmax(0, fxContainer.getWidth() - fxViewport.getWidth()), centredX), 0);
+}
+
+void MainComponent::focusFxPedalForSnapshot(int pedalIndex)
+{
+    if (pedalIndex >= 0 && pedalIndex < kNumFxPedals && fxPedals[pedalIndex] != nullptr)
+        toggleFxPedalFocus(*fxPedals[pedalIndex]);
+}
+
+void MainComponent::toggleFxPedalFocus(FXPedalComponent& pedal)
+{
+    if (fxPedalFocusOverlay.getPedal() == &pedal)
+    {
+        closeFxPedalFocus();
+        return;
+    }
+
+    if (fxPedalFocusOverlay.getPedal() != nullptr)
+        closeFxPedalFocus();
+
+    int pedalIndex = findFxPedalIndex(pedal);
+    if (&pedal == vst3Pedal.get())
+        pedalIndex = -1;
+    else if (pedalIndex < 0)
+        return;
+
+    if (draggingFxPedal >= 0)
+    {
+        fxPedals[draggingFxPedal]->setDragHintVisible(false);
+        draggingFxPedal = -1;
+        dragInsertSlot = -1;
+    }
+
+    focusedFxPedalIndex = pedalIndex;
+    const int compactWidth = pedalIndex < 0 ? kVst3PedalBodyWidth : fxPedalBodyWidth(pedalIndex);
+    const int compactHeight = juce::jmax(1, fxContainer.getHeight() - 8);
+    fxPedalFocusOverlay.setBounds(getLocalBounds());
+    fxPedalFocusOverlay.showPedal(pedal, compactWidth, compactHeight);
+    resized();
+    fxPedalFocusOverlay.toFront(true);
+    fxContainer.repaint();
+}
+
+void MainComponent::closeFxPedalFocus()
+{
+    auto* pedal = fxPedalFocusOverlay.getPedal();
+    if (pedal == nullptr)
+        return;
+
+    const int previousIndex = focusedFxPedalIndex;
+    fxContainer.addAndMakeVisible(pedal);
+    fxPedalFocusOverlay.clearPedal();
+    focusedFxPedalIndex = -2;
+    resized();
+    fxContainer.repaint();
+
+    if (previousIndex >= 0)
+        revealFxPedal(previousIndex);
 }
 
 int MainComponent::fxSlotStartX(int slot) const
@@ -1486,31 +1809,45 @@ void MainComponent::loadSessionFromFile()
         if (selectedFile == juce::File())
             return;
 
-        juce::ValueTree sessionTree;
-        LooperEngine::SessionSnapshot looperSnapshot;
-        juce::MemoryBlock vstState;
-        juce::String errorMessage;
-
-        if (!SessionManager::readSessionFile(selectedFile, sessionTree, looperSnapshot, vstState, errorMessage))
-        {
-            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                                   "No se pudo abrir",
-                                                   errorMessage);
-            return;
-        }
-
-        if (!applySessionTree(sessionTree, looperSnapshot, vstState, errorMessage))
-        {
-            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                                   "No se pudo restaurar",
-                                                   errorMessage);
-            return;
-        }
-
-        lblMidiStatus.setText("Sesion cargada: " + selectedFile.getFileName(),
-                              juce::dontSendNotification);
-        lblMidiStatus.setColour(juce::Label::textColourId, LnfC::PlayGreen);
+        openSessionFile(selectedFile);
     });
+}
+
+bool MainComponent::openSessionFile(const juce::File& sessionFile)
+{
+    if (!sessionFile.existsAsFile() || !sessionFile.hasFileExtension("loopernico"))
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                               "No se pudo abrir",
+                                               "El archivo de sesion no existe o no tiene la extension .loopernico.");
+        return false;
+    }
+
+    juce::ValueTree sessionTree;
+    LooperEngine::SessionSnapshot looperSnapshot;
+    juce::MemoryBlock vstState;
+    juce::String errorMessage;
+
+    if (!SessionManager::readSessionFile(sessionFile, sessionTree, looperSnapshot, vstState, errorMessage))
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                               "No se pudo abrir",
+                                               errorMessage);
+        return false;
+    }
+
+    if (!applySessionTree(sessionTree, looperSnapshot, vstState, errorMessage))
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                               "No se pudo restaurar",
+                                               errorMessage);
+        return false;
+    }
+
+    lblMidiStatus.setText("Sesion cargada: " + sessionFile.getFileName(),
+                          juce::dontSendNotification);
+    lblMidiStatus.setColour(juce::Label::textColourId, LnfC::PlayGreen);
+    return true;
 }
 
 void MainComponent::exportMixToFile()
@@ -1662,6 +1999,12 @@ juce::ValueTree MainComponent::createSessionTree(const LooperEngine::SessionSnap
         pedal.setProperty("knob7", fxPedals[i]->knob7.getValue(), nullptr);
         pedal.setProperty("knob8", fxPedals[i]->knob8.getValue(), nullptr);
         pedal.setProperty("knob9", fxPedals[i]->knob9.getValue(), nullptr);
+        if (i == 7)
+        {
+            pedal.setProperty("sunsetVersion", 1, nullptr);
+            pedal.setProperty("sunsetBOn", fxPedals[i]->isTertiaryFootswitchLatched(), nullptr);
+            pedal.setProperty("sunsetBright", fxPedals[i]->getSunsetBrightMode(), nullptr);
+        }
         if (i == 12)
         {
             pedal.setProperty("eqVolume", fxPedals[i]->eqVolumeSlider.getValue(), nullptr);
@@ -1781,6 +2124,26 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
         setSlider(pedalUi->knob7, (double) pedal.getProperty("knob7", pedalUi->knob7.getValue()));
         setSlider(pedalUi->knob8, (double) pedal.getProperty("knob8", pedalUi->knob8.getValue()));
         setSlider(pedalUi->knob9, (double) pedal.getProperty("knob9", pedalUi->knob9.getValue()));
+        if (pedalIndex == 7)
+        {
+            if (!pedal.hasProperty("sunsetVersion"))
+            {
+                // Mirror Drive sessions used knob1=drive, knob2=tone and
+                // knob3=level.  Translate them into Sunset channel A once.
+                setSlider(pedalUi->knob1, (double) pedal.getProperty("knob3", 0.52));
+                setSlider(pedalUi->knob2, (double) pedal.getProperty("knob1", 0.42));
+                setSlider(pedalUi->knob3, (double) pedal.getProperty("knob2", 0.55));
+                setSlider(pedalUi->knob4, 0.52);
+                setSlider(pedalUi->knob5, 0.36);
+                setSlider(pedalUi->knob6, 0.55);
+                setSlider(pedalUi->knob7, 1.0);
+                setSlider(pedalUi->knob8, 0.0);
+                setSlider(pedalUi->knob9, 0.0);
+            }
+            pedalUi->setSunsetBrightMode((int) pedal.getProperty("sunsetBright", 1));
+            pedalUi->setTertiaryFootswitchLatched((bool) pedal.getProperty("sunsetBOn", false));
+            effectsChain.setDriveBEnabled(pedalUi->isTertiaryFootswitchLatched());
+        }
         if (pedalIndex == 12)
         {
             setSlider(pedalUi->eqVolumeSlider,
@@ -1921,7 +2284,7 @@ void MainComponent::toggleFxPedalFromMidi(int pedalIndex)
 
     static constexpr const char* pedalNames[kNumFxPedals] = {
         "NOISE GATE", "RHYTHM BOX", "COMPRESSOR", "HARMONIZER",
-        "SUSTAIN GRAN", "SUSTAIN CHORDS", "FUZZ", "OVERDRIVE", "CHORUS",
+        "SUSTAIN GRAN", "SUSTAIN CHORDS", "FUZZ", "SUNSET", "CHORUS",
         "TREMOLO", "TAPE DELAY", "ROOM REVERB", "OUTPUT EQ"
     };
 
@@ -2688,9 +3051,14 @@ void MainComponent::resized()
         totalPedalWidth += fxPedalPitch(fxOrder[(size_t) slot]);
     fxContainer.setSize(totalPedalWidth, fxViewport.getHeight());
 
+    fxPedalFocusOverlay.setBounds(getLocalBounds());
+    if (focusedFxPedalIndex != -2)
+        fxPedalFocusOverlay.resized();
+
     if (vst3Pedal != nullptr)
     {
-        vst3Pedal->setBounds(14, 4, kVst3PedalBodyWidth, fxContainer.getHeight() - 8);
+        if (focusedFxPedalIndex != -1)
+            vst3Pedal->setBounds(14, 4, kVst3PedalBodyWidth, fxContainer.getHeight() - 8);
         const int contentX = 25;
         const int contentW = vst3Pedal->getWidth() - contentX * 2;
         const int buttonGap = 5;
@@ -2714,7 +3082,7 @@ void MainComponent::resized()
     for (int slot = 0; slot < kNumFxPedals; ++slot)
     {
         const int pedalIndex = fxOrder[(size_t) slot];
-        if (pedalIndex == draggingFxPedal)
+        if (pedalIndex == draggingFxPedal || pedalIndex == focusedFxPedalIndex)
             continue;
 
         fxPedals[pedalIndex]->setBounds(fxSlotStartX(slot) + 14, 4,
@@ -2728,8 +3096,8 @@ void MainComponent::resized()
     auto patternBox = pedalArea->knob5.getBounds();
     auto modeBox = pedalArea->knob6.getBounds();
 
-    lblRhythmBpmValue.setBounds(k1.getX(), k1.getBottom() - 1, k1.getWidth(), 14);
-    lblRhythmColorValue.setBounds(k3.getX(), k3.getBottom() - 1, k3.getWidth(), 14);
+    lblRhythmBpmValue.setBounds(styleBox.getX(), styleBox.getY() - 12, styleBox.getWidth(), 12);
+    lblRhythmColorValue.setBounds(0, 0, 0, 0);
     lblRhythmStyle.setBounds(0, 0, 0, 0);
     lblRhythmPattern.setBounds(0, 0, 0, 0);
     lblRhythmMode.setBounds(0, 0, 0, 0);
@@ -2756,6 +3124,9 @@ void MainComponent::resized()
     btnLoopInLater.setBounds(loopGroupX + 64, controlY + kControlRowOffsetY, 58, 24);
     btnLoopOutShorter.setBounds(loopGroupX + 132, controlY + kControlRowOffsetY, 66, 24);
     btnLoopOutLonger.setBounds(loopGroupX + 204, controlY + kControlRowOffsetY, 66, 24);
+
+    if (focusedFxPedalIndex != -2)
+        fxPedalFocusOverlay.toFront(false);
 
     lblSilenceThreshold.setBounds(fullX + 24, mY + 5, 100, 18);
     sldSilenceThreshold.setBounds(fullX + 126, mY + 5, 420, 18);

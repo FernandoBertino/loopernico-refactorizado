@@ -30,6 +30,10 @@
       <FILE id="jAbDJx" name="MidiController.h" compile="0" resource="0"
             file="Source/MidiController.h"/>
     </GROUP>
+    <GROUP id="{4670B424-83DC-44F5-8253-7452360C194E}" name="Brand">
+      <FILE id="AppIco" name="loopernico-app.png" compile="0" resource="1"
+            file="Assets/Brand/Icons/loopernico-app.png"/>
+    </GROUP>
   </MAINGROUP>
   <MODULES>
     <MODULE id="juce_audio_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
@@ -68,7 +72,7 @@
         <MODULEPATH id="juce_audio_processors_headless" path="../../JUCE/modules"/>
       </MODULEPATHS>
     </ANDROIDSTUDIO>
-    <VS2026 targetFolder="Builds/VisualStudio2026">
+    <VS2026 targetFolder="Builds/VisualStudio2026" smallIcon="AppIco" bigIcon="AppIco">
       <CONFIGURATIONS>
         <CONFIGURATION isDebug="1" name="Debug" targetName="Loopernico Refactorizado"/>
         <CONFIGURATION isDebug="0" name="Release" targetName="Loopernico Refactorizado"/>

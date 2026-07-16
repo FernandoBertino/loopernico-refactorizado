@@ -1041,6 +1041,8 @@ void EffectsChain::prepare(double sampleRate, int maxBlockSize)
     delayBuffer.setSize(2, (int)(sampleRate_ * 3.0));
     chorusBuffer.setSize(2, juce::jmax(1024, (int)(sampleRate_ * 0.08)));
     pitchBuffer.setSize(2, kPitchBufLen);
+    harmonicDelayBufferA.setSize(2, juce::jmax(1024, (int) (sampleRate_ * 1.05)));
+    harmonicDelayBufferB.setSize(2, juce::jmax(1024, (int) (sampleRate_ * 1.05)));
     freezeBuffer.setSize(2, kFreezeBufLen);
     chordBodyBuffer.setSize(2, juce::jmax(4096, (int) (sampleRate_ * 0.070)));
     reverbPreDelayBuffer.setSize(2, juce::jmax(2, (int) (sampleRate_ * 1.5) + 2));
@@ -1071,6 +1073,8 @@ void EffectsChain::reset()
     delayBuffer.clear();
     chorusBuffer.clear();
     pitchBuffer.clear();
+    harmonicDelayBufferA.clear();
+    harmonicDelayBufferB.clear();
     freezeBuffer.clear();
     chordBodyBuffer.clear();
     reverbPreDelayBuffer.clear();
@@ -1111,16 +1115,21 @@ void EffectsChain::reset()
     delayWritePos   = 0;
     chorusWritePos  = 0;
     pitchWritePos   = 0;
+    harmonicDelayWritePos = 0;
     freezeWritePos  = 0;
     chordBodyWritePos = 0;
     reverbPreDelayWritePos = 0;
     reverbToneState[0] = reverbToneState[1] = 0.0f;
     reverbModPhase = 0.0;
+    delayModPhase = 0.0;
     freezeHoldActive = false;
     freezeLayerWriteIndex = 0;
     chordFreezeHoldActive = false;
 
     std::memset(lowPassFilters, 0, sizeof(lowPassFilters));
+    std::memset(sunsetStateA, 0, sizeof(sunsetStateA));
+    std::memset(sunsetStateB, 0, sizeof(sunsetStateB));
+    std::memset(sunsetPreviousInput, 0, sizeof(sunsetPreviousInput));
     noiseGateEnv = 0.0f;
     noiseGateGain = 1.0f;
     std::memset(chordBodyDamp,   0, sizeof(chordBodyDamp));
@@ -1143,6 +1152,8 @@ void EffectsChain::reset()
     rhythmToneState[0] = 0.0f;
     rhythmToneState[1] = 0.0f;
     pitchPhaseHarm = 0.0;
+    pitchPhaseHarmB = 0.0;
+    std::memset(harmonicAutoEqState, 0, sizeof(harmonicAutoEqState));
     chorusPhase    = 0.0;
     tremoloPhase   = 0.0;
     tremoloFootSpeedAmount = 0.0f;
@@ -1219,7 +1230,9 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
     const bool drumOn = drumTriggerEnabled.load();
     const bool harmOn = harmonicEnabled.load();
     const bool fzOn   = fuzzEnabled.load();
-    const bool drOn   = driveEnabled.load();
+    const bool drAOn  = driveAEnabled.load();
+    const bool drBOn  = driveBEnabled.load();
+    const bool drOn   = drAOn || drBOn;
     const bool choOn  = chorusEnabled.load();
     const bool trOn   = tremoloEnabled.load();
     const bool delOn  = delayEnabled.load();
@@ -1262,15 +1275,33 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
     const float drumHatPitch = drumHatPitchHz.load();
     const int   drumPlacement = drumTriggerPlacement.load();
     const int   harmInterval = harmonicInterval.load();
+    const int   harmIntervalBValue = harmonicIntervalB.load();
     const float harmM   = harmonicMix.load();
     const float harmL   = harmonicLevel.load();
+    const float harmDelay = harmonicDelayMs.load();
+    const float harmFeedbackValue = harmonicFeedback.load();
+    const bool  harmFlexOn = harmonicFlex.load();
     const float fzL     = fuzzLevel.load();
     const float fzT     = fuzzTone.load();
-    const float drL     = driveLevel.load();
-    const float drT     = driveTone.load();
+    const float drADrive = driveA.load();
+    const float drATone  = driveATone.load();
+    const float drALevel = driveALevel.load();
+    const int drAType    = driveAType.load();
+    const float drBDrive = driveB.load();
+    const float drBTone  = driveBTone.load();
+    const float drBLevel = driveBLevel.load();
+    const int drBType    = driveBType.load();
+    const int drRoute    = driveRouting.load();
+    const int drBright   = driveBright.load();
     const float delM    = delayMix.load();
     const float delTime = delayTimeMs.load();
     const float delFB   = delayFeedback.load();
+    const float delFilter = delayFilter.load();
+    const float delGrit = delayGrit.load();
+    const float delModRate = delayModRate.load();
+    const float delModDepth = delayModDepth.load();
+    const int delType = delayType.load();
+    const float delValue = delayValue.load();
     const float revM    = reverbMix.load();
     const float revRoom = reverbRoomSize.load();
     const float revDamp = reverbDamping.load();
@@ -1294,9 +1325,9 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
     const float chordFrzTailMs = chordFreezeTailMs.load();
     const float chordFrzTone = chordFreezeTone.load();
     const float chordFrzCrossfade = chordFreezeCrossfade.load();
-    const float choM    = chorusMix.load();
-    const float choRate = chorusRate.load();
-    const float choDepth= chorusDepth.load();
+    const float choM    = juce::jlimit(0.0f, 1.0f, chorusMix.load());
+    const float choRate = juce::jlimit(0.05f, 10.0f, chorusRate.load());
+    const float choDepth= juce::jlimit(0.0f, 1.0f, chorusDepth.load());
     const float trRate  = tremoloRate.load();
     const float trDepth = tremoloDepth.load();
     const int trMode = tremoloMode.load();
@@ -1442,18 +1473,75 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
     const float drumRearmTransientThresh = drumTransientThresh * 0.34f;
     const float rhythmToneCoeff = juce::jmap(juce::jlimit(0.0f, 1.0f, rhythmToneValue), 0.045f, 0.22f);
 
-    // Pitch shifter: std::pow FUERA del loop (antes eran 2 pows x44100 veces/seg)
-    const float pitchDeltaHarm = 1.0f - std::pow(2.0f, (float)harmInterval / 12.0f);
-    // Fuzz y drive: factores constantes por bloque
+    // H90-style dual pitch engine: two independently shifted voices. FLEX raises
+    // both voices one octave, matching the H90 performance gesture.
+    const int effectiveHarmIntervalA = juce::jlimit(-24, 36, harmInterval + (harmFlexOn ? 12 : 0));
+    const int effectiveHarmIntervalB = juce::jlimit(-24, 36, harmIntervalBValue + (harmFlexOn ? 12 : 0));
+    const float pitchDeltaHarm = 1.0f - std::pow(2.0f, (float) effectiveHarmIntervalA / 12.0f);
+    const float pitchDeltaHarmB = 1.0f - std::pow(2.0f, (float) effectiveHarmIntervalB / 12.0f);
+    // Fuzz: factor constante por bloque.
     const float fuzzDriveFactor = fuzz.load() * 40.0f + 1.0f;
-    const float driveDriveFactor= drive.load() * 12.0f + 1.0f;
 
-    // Delay: tiempo en muestras constante por bloque
-    const float currentDelaySamples = (delTime / 1000.0f) * (float)sampleRate_;
+    // Sunset dual drive.  The nonlinear core runs at 4x using interpolated
+    // sub-samples; all filter coefficients therefore target the oversampled
+    // rate.  Besides reducing aliasing, this preserves the different attack
+    // feel of the six circuit families when both sides are stacked.
+    constexpr int sunsetOversampling = 4;
+    const float sunsetRate = (float) sampleRate_ * (float) sunsetOversampling;
+    auto sunsetPole = [sunsetRate](float hz)
+    {
+        return 1.0f - std::exp(-juce::MathConstants<float>::twoPi * hz / sunsetRate);
+    };
+    const float sunsetHp80 = sunsetPole(80.0f);
+    const float sunsetHp150 = sunsetPole(150.0f);
+    const float sunsetHp330 = sunsetPole(330.0f);
+    const float sunsetLp650 = sunsetPole(650.0f);
+    const float sunsetLp950 = sunsetPole(950.0f);
+    const float sunsetLp3800 = sunsetPole(3800.0f);
+    const float sunsetToneA = sunsetPole(juce::jmap(drATone, 1350.0f, 14500.0f));
+    const float sunsetToneB = sunsetPole(juce::jmap(drBTone, 1200.0f, 15000.0f));
+    const float sunsetTrebleHp = sunsetPole(juce::jmap(drATone, 90.0f, 2100.0f));
+    const float sunsetGainA = std::pow(10.0f, juce::jmap(drADrive, 5.0f, 38.0f) / 20.0f);
+    const float sunsetGainB = std::pow(10.0f, juce::jmap(drBDrive, 4.0f, 42.0f) / 20.0f);
+    auto sunsetOutputLevel = [](float level)
+    {
+        level = juce::jlimit(0.0f, 1.0f, level);
+        if (level <= 0.5f)
+            return juce::jmap(level, 0.0f, 0.5f, 0.0f, 1.0f);
+        return std::pow(10.0f, juce::jmap(level, 0.5f, 1.0f, 0.0f, 8.0f) / 20.0f);
+    };
+    const float sunsetLevelA = sunsetOutputLevel(drALevel);
+    const float sunsetLevelB = sunsetOutputLevel(drBLevel);
+    const float sunsetBrightAmount = drBright == 0 ? -0.20f : (drBright == 2 ? 0.18f : 0.0f);
 
-    // Chorus: componente fija de delay
-    const float choBaseDelay = (float)sampleRate_ * 0.015f;
-    const float choVarDelay  = (float)sampleRate_ * 0.007f * choDepth;
+    // TimeLine MX delay: every parameter is reduced to scalar state before the sample loop.
+    static constexpr float delayTypeRatios[] = {
+        0.75f, 1.00f, 1.18f, 1.00f, 0.50f, 0.50f,
+        1.00f, 1.25f, 1.00f, 0.875f, 1.00f, 1.50f
+    };
+    const int safeDelayType = juce::jlimit(0, 11, delType);
+    const float currentDelaySamples = juce::jlimit(2.0f, (float) delayBuffer.getNumSamples() - 2.0f,
+        (delTime / 1000.0f) * (float) sampleRate_ * delayTypeRatios[safeDelayType]);
+    const float delaySecondTapRatio = juce::jmap(juce::jlimit(0.0f, 1.0f, delValue), 0.28f, 0.92f);
+    const float delaySecondTapMix = safeDelayType == 0 ? 0.58f
+                                   : (safeDelayType == 1 || safeDelayType == 3 ? 0.34f : 0.16f * delValue);
+    const float delayFilterCoeff = juce::jlimit(0.015f, 0.72f,
+        juce::jmap(juce::jlimit(0.0f, 1.0f, delFilter), 0.025f, 0.58f)
+        * ((safeDelayType == 8 || safeDelayType == 10) ? 0.55f : 1.0f));
+    const float delayGritAmount = juce::jlimit(0.0f, 1.0f, delGrit
+        + ((safeDelayType == 2 || safeDelayType == 8 || safeDelayType == 10) ? 0.22f : 0.0f));
+    const float delayModSamples = (float) sampleRate_ * juce::jmap(juce::jlimit(0.0f, 1.0f, delModDepth),
+                                                                   0.0f, 0.0065f);
+    const double deltaDelayModPhase = (2.0 * juce::MathConstants<double>::pi
+                                       * (double) delModRate) / sampleRate_;
+
+    // Small Clone: DEPTH is a two-position switch, not an amount that can disable
+    // modulation.  LOW and HIGH therefore select two non-zero BBD excursions.
+    // Keeping the centre delay above the largest excursion prevents the read head
+    // from crossing the write head at the top of the LFO cycle.
+    const float choBaseDelay = (float) sampleRate_ * 0.0085f;
+    const float choDepthMs = juce::jmap(choDepth, 1.6f, 5.0f);
+    const float choVarDelay = (float) sampleRate_ * choDepthMs * 0.001f;
     const int freezeTargetLen = juce::jlimit(96, kFreezeBufLen - 1,
                                              (int)((frzWindowMs / 1000.0f) * (float)sampleRate_));
     const int chordFreezeTargetLen = juce::jlimit(256, kFreezeBufLen - 1,
@@ -1471,6 +1559,8 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
     // Stutter setup (igual que antes — logica de estado)
     int channels = juce::jmin(buffer.getNumChannels(), 2);
     channels = juce::jmin(channels, pitchBuffer.getNumChannels());
+    channels = juce::jmin(channels, harmonicDelayBufferA.getNumChannels());
+    channels = juce::jmin(channels, harmonicDelayBufferB.getNumChannels());
     channels = juce::jmin(channels, delayBuffer.getNumChannels());
     channels = juce::jmin(channels, chorusBuffer.getNumChannels());
     channels = juce::jmin(channels, freezeBuffer.getNumChannels());
@@ -1478,6 +1568,18 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
     if (channels <= 0 || numSamples <= 0)
         return;
     const int delayBufLen  = delayBuffer.getNumSamples();
+    const int harmonicDelayBufLen = harmonicDelayBufferA.getNumSamples();
+    const int harmonicDelaySamplesA = juce::jlimit(0, harmonicDelayBufLen - 2,
+        juce::roundToInt(harmDelay * 0.001f * (float) sampleRate_));
+    const int harmonicDelaySamplesB = juce::jlimit(0, harmonicDelayBufLen - 2,
+        juce::roundToInt(harmDelay * 0.001f * (float) sampleRate_ * 1.17f));
+    const float harmonicFeedbackAmount = juce::jlimit(0.0f, 0.92f, harmFeedbackValue);
+    const float harmonicWetMix = juce::jlimit(0.0f, 1.0f, harmM);
+    const float harmonicOutput = juce::jlimit(0.0f, 1.5f, harmL);
+    const float harmonicEqCoeffA = juce::jmap(juce::jlimit(0.0f, 1.0f, (float) juce::jmax(0, effectiveHarmIntervalA) / 24.0f),
+                                               0.34f, 0.075f);
+    const float harmonicEqCoeffB = juce::jmap(juce::jlimit(0.0f, 1.0f, (float) juce::jmax(0, effectiveHarmIntervalB) / 24.0f),
+                                               0.34f, 0.075f);
     const int chorusBufLen = chorusBuffer.getNumSamples();
     const int freezeBufLen = freezeBuffer.getNumSamples();
     const int chordBodyBufLen = chordBodyBuffer.getNumSamples();
@@ -1522,6 +1624,8 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
     //    en cada muestra de cada canal.
     // =========================================================================
     float* pitchPtr[2]   = {};
+    float* harmonicDelayAPtr[2] = {};
+    float* harmonicDelayBPtr[2] = {};
     float* delayPtr[2]   = {};
     float* chorusPtr[2]  = {};
     float* freezePtr[2]  = {};
@@ -1531,6 +1635,8 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
     for (int ch = 0; ch < channels; ++ch)
     {
         pitchPtr[ch]   = pitchBuffer.getWritePointer(ch);
+        harmonicDelayAPtr[ch] = harmonicDelayBufferA.getWritePointer(ch);
+        harmonicDelayBPtr[ch] = harmonicDelayBufferB.getWritePointer(ch);
         delayPtr[ch]   = delayBuffer.getWritePointer(ch);
         chorusPtr[ch]  = chorusBuffer.getWritePointer(ch);
         freezePtr[ch]  = freezeBuffer.getWritePointer(ch);
@@ -2315,29 +2421,71 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
             if (harmOn)
             {
                 const float dry = sample;
-                float rPos1 = (float)pitchWritePos - kPitchLookbackSamples - (float)pitchPhaseHarm;
-                if (rPos1 < 0.0f) rPos1 += kPBLenF;
-                if (rPos1 >= kPBLenF) rPos1 -= kPBLenF;
-                const int   a1 = (int)rPos1;
-                const int   b1 = (a1 + 1) % kPitchBufLen;
-                const float f1 = rPos1 - (float)a1;
-                const float s1 = pitchPtr[ch][a1] + f1 * (pitchPtr[ch][b1] - pitchPtr[ch][a1]);
+                auto readPitchVoice = [&](double phase)
+                {
+                    float readPositionA = (float) pitchWritePos - kPitchLookbackSamples - (float) phase;
+                    while (readPositionA < 0.0f) readPositionA += kPBLenF;
+                    while (readPositionA >= kPBLenF) readPositionA -= kPBLenF;
+                    const int indexA = (int) readPositionA;
+                    const int indexB = (indexA + 1) % kPitchBufLen;
+                    const float fractionA = readPositionA - (float) indexA;
+                    const float grainA = pitchPtr[ch][indexA]
+                                       + fractionA * (pitchPtr[ch][indexB] - pitchPtr[ch][indexA]);
 
-                float p2 = (float)pitchPhaseHarm + halfWinF;
-                if (p2 >= winSizeF) p2 -= winSizeF;
-                float rPos2 = (float)pitchWritePos - kPitchLookbackSamples - p2;
-                if (rPos2 < 0.0f) rPos2 += kPBLenF;
-                if (rPos2 >= kPBLenF) rPos2 -= kPBLenF;
-                const int   a2 = (int)rPos2;
-                const int   b2 = (a2 + 1) % kPitchBufLen;
-                const float f2 = rPos2 - (float)a2;
-                const float s2 = pitchPtr[ch][a2] + f2 * (pitchPtr[ch][b2] - pitchPtr[ch][a2]);
+                    float oppositePhase = (float) phase + halfWinF;
+                    if (oppositePhase >= winSizeF) oppositePhase -= winSizeF;
+                    float readPositionB = (float) pitchWritePos - kPitchLookbackSamples - oppositePhase;
+                    while (readPositionB < 0.0f) readPositionB += kPBLenF;
+                    while (readPositionB >= kPBLenF) readPositionB -= kPBLenF;
+                    const int indexC = (int) readPositionB;
+                    const int indexD = (indexC + 1) % kPitchBufLen;
+                    const float fractionB = readPositionB - (float) indexC;
+                    const float grainB = pitchPtr[ch][indexC]
+                                       + fractionB * (pitchPtr[ch][indexD] - pitchPtr[ch][indexC]);
 
-                const float w1 = ((float)pitchPhaseHarm < halfWinF)
-                    ? ((float)pitchPhaseHarm / halfWinF)
-                    : ((winSizeF - (float)pitchPhaseHarm) / halfWinF);
-                const float wet = s1 * w1 + s2 * (1.0f - w1);
-                sample = dry * (1.0f - harmM) + wet * (harmM * harmL * 0.707f);
+                    const float windowA = ((float) phase < halfWinF)
+                        ? ((float) phase / halfWinF)
+                        : ((winSizeF - (float) phase) / halfWinF);
+                    return grainA * windowA + grainB * (1.0f - windowA);
+                };
+
+                float voiceA = readPitchVoice(pitchPhaseHarm);
+                float voiceB = readPitchVoice(pitchPhaseHarmB);
+
+                // The H90 Polyphony Auto EQ softens high-frequency buildup on
+                // upward shifts while preserving the attack of downward voices.
+                harmonicAutoEqState[0][ch] += harmonicEqCoeffA * (voiceA - harmonicAutoEqState[0][ch]);
+                harmonicAutoEqState[1][ch] += harmonicEqCoeffB * (voiceB - harmonicAutoEqState[1][ch]);
+                const float autoEqBlendA = juce::jlimit(0.0f, 0.78f, (float) juce::jmax(0, effectiveHarmIntervalA) / 30.0f);
+                const float autoEqBlendB = juce::jlimit(0.0f, 0.78f, (float) juce::jmax(0, effectiveHarmIntervalB) / 30.0f);
+                voiceA = juce::jmap(autoEqBlendA, voiceA, harmonicAutoEqState[0][ch]);
+                voiceB = juce::jmap(autoEqBlendB, voiceB, harmonicAutoEqState[1][ch]);
+
+                auto processVoiceDelay = [&](float shifted, float* history, int delaySamples)
+                {
+                    if (delaySamples <= 0)
+                    {
+                        history[harmonicDelayWritePos] = shifted;
+                        return shifted;
+                    }
+
+                    int readIndex = harmonicDelayWritePos - delaySamples;
+                    while (readIndex < 0) readIndex += harmonicDelayBufLen;
+                    const float delayed = history[readIndex];
+                    history[harmonicDelayWritePos] = shifted + delayed * harmonicFeedbackAmount;
+                    return delayed;
+                };
+
+                voiceA = processVoiceDelay(voiceA, harmonicDelayAPtr[ch], harmonicDelaySamplesA);
+                voiceB = processVoiceDelay(voiceB, harmonicDelayBPtr[ch], harmonicDelaySamplesB);
+
+                // Two equal-power voices, subtly spread in stereo like the H90.
+                float wet = 0.5f * (voiceA + voiceB);
+                if (channels > 1)
+                    wet = ch == 0 ? voiceA * 0.68f + voiceB * 0.32f
+                                  : voiceA * 0.32f + voiceB * 0.68f;
+                sample = dry * (1.0f - harmonicWetMix)
+                       + wet * (harmonicWetMix * harmonicOutput * 0.82f);
             }
 
             #if 0
@@ -2434,13 +2582,125 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
 
             auto processOverdrive = [&]()
             {
-                if (drOn)
+                if (!drOn)
                 {
-                    const float dry = sample;
-                    float wet = std::atan(sample * driveDriveFactor) / juce::MathConstants<float>::halfPi;
-                    lowPassFilters[2][ch] += drT * (wet - lowPassFilters[2][ch]);
-                    sample = dry * (1.0f - drL * 0.4f) + lowPassFilters[2][ch] * (drL * 0.75f);
+                    sunsetPreviousInput[ch] = sample;
+                    return;
                 }
+
+                auto shapeAsymmetric = [](float x, float positiveGain, float negativeGain)
+                {
+                    return x >= 0.0f ? std::tanh(x * positiveGain) / std::tanh(positiveGain)
+                                     : std::tanh(x * negativeGain) / std::tanh(negativeGain);
+                };
+
+                auto processA = [&](float input)
+                {
+                    auto* st = sunsetStateA;
+                    float wet = input;
+
+                    if (drAType == 0) // Ge: germanium asymmetry plus drive-dependent clean path.
+                    {
+                        st[0][ch] += sunsetHp80 * (input - st[0][ch]);
+                        st[1][ch] += sunsetLp650 * (input - st[1][ch]);
+                        const float driven = (input - st[0][ch] + st[1][ch] * 0.18f) * sunsetGainA;
+                        const float clipped = shapeAsymmetric(driven, 1.75f, 1.18f);
+                        const float dryBlend = juce::jmap(drADrive, 0.48f, 0.04f);
+                        wet = clipped * (1.0f - dryBlend) + input * dryBlend;
+                    }
+                    else if (drAType == 1) // texas: filtered single-stage soft clipper and mid push.
+                    {
+                        st[0][ch] += sunsetHp330 * (input - st[0][ch]);
+                        const float driven = (input - st[0][ch]) * sunsetGainA * 1.28f;
+                        wet = std::tanh(driven * 1.45f);
+                        st[1][ch] += sunsetLp950 * (wet - st[1][ch]);
+                        wet += st[1][ch] * 0.28f;
+                    }
+                    else // treble: variable low cut and up to roughly 20 dB of clean/JFET boost.
+                    {
+                        st[0][ch] += sunsetTrebleHp * (input - st[0][ch]);
+                        const float tightened = input - st[0][ch];
+                        const float boost = std::pow(10.0f, juce::jmap(drADrive, 0.0f, 20.0f) / 20.0f);
+                        wet = std::tanh(tightened * boost * 0.82f) / 0.82f;
+                    }
+
+                    if (drAType != 2)
+                    {
+                        st[2][ch] += sunsetToneA * (wet - st[2][ch]);
+                        wet = st[2][ch];
+                    }
+                    st[4][ch] += sunsetLp3800 * (wet - st[4][ch]);
+                    wet += (wet - st[4][ch]) * sunsetBrightAmount;
+                    return wet * sunsetLevelA;
+                };
+
+                auto processB = [&](float input)
+                {
+                    auto* st = sunsetStateB;
+                    float wet = input;
+
+                    if (drBType == 0) // 2stage: soft clipping followed by a firmer second stage.
+                    {
+                        st[0][ch] += sunsetHp80 * (input - st[0][ch]);
+                        const float first = std::tanh((input - st[0][ch] * 0.72f)
+                                                    * sunsetGainB * 0.72f);
+                        wet = std::atan(first * (1.7f + drBDrive * 4.4f))
+                            / juce::MathConstants<float>::halfPi * 1.18f;
+                    }
+                    else if (drBType == 1) // hard: high-headroom single-stage hard clipper.
+                    {
+                        st[0][ch] += sunsetHp150 * (input - st[0][ch]);
+                        const float driven = (input - st[0][ch] * 0.82f) * sunsetGainB * 1.18f;
+                        const float threshold = juce::jmap(drBDrive, 0.86f, 0.42f);
+                        wet = juce::jlimit(-threshold, threshold, driven) / threshold;
+                        wet = std::tanh(wet * 1.12f);
+                    }
+                    else // JFET: warm, asymmetric boost that rounds progressively with drive.
+                    {
+                        st[0][ch] += sunsetHp80 * (input - st[0][ch]);
+                        st[1][ch] += sunsetLp650 * (input - st[1][ch]);
+                        const float driven = (input - st[0][ch] * 0.35f + st[1][ch] * 0.16f)
+                                           * (1.0f + drBDrive * 8.5f);
+                        wet = shapeAsymmetric(driven, 1.08f + drBDrive * 0.62f,
+                                                       0.82f + drBDrive * 0.42f);
+                    }
+
+                    st[2][ch] += sunsetToneB * (wet - st[2][ch]);
+                    wet = st[2][ch];
+                    st[4][ch] += sunsetLp3800 * (wet - st[4][ch]);
+                    wet += (wet - st[4][ch]) * sunsetBrightAmount;
+                    return wet * sunsetLevelB;
+                };
+
+                const float previous = sunsetPreviousInput[ch];
+                float result = sample;
+                for (int os = 0; os < sunsetOversampling; ++os)
+                {
+                    const float sub = previous + (sample - previous)
+                                               * ((float) (os + 1) / (float) sunsetOversampling);
+                    if (drRoute == 0)
+                    {
+                        result = drAOn ? processA(sub) : sub;
+                        if (drBOn)
+                            result = processB(result);
+                    }
+                    else if (drRoute == 1)
+                    {
+                        result = drBOn ? processB(sub) : sub;
+                        if (drAOn)
+                            result = processA(result);
+                    }
+                    else if (drAOn && drBOn)
+                    {
+                        result = (processA(sub) + processB(sub)) * 0.68f;
+                    }
+                    else
+                    {
+                        result = drAOn ? processA(sub) : processB(sub);
+                    }
+                }
+                sunsetPreviousInput[ch] = sample;
+                sample = juce::jlimit(-2.5f, 2.5f, result);
             };
 
             auto processSustainGran = [&]()
@@ -2534,14 +2794,21 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
                 chorusPtr[ch][chorusWritePos] = sample;
                 if (choOn)
                 {
-                    const float lfo = std::sin((float)chorusPhase
-                                      + (float)ch * juce::MathConstants<float>::halfPi) * 0.5f + 0.5f;
+                    // A small phase offset on the right channel preserves mono
+                    // compatibility while giving duplicated mono inputs some width.
+                    const float stereoOffset = ch == 0 ? 0.0f
+                                                       : juce::MathConstants<float>::pi * 0.35f;
+                    const float lfo = std::sin((float) chorusPhase + stereoOffset);
                     float rPos = (float)chorusWritePos - (choBaseDelay + lfo * choVarDelay);
                     while (rPos < 0.0f) rPos += (float)chorusBufLen;
                     const int ia = (int)rPos;
                     const int ib = (ia + 1) % chorusBufLen;
-                    const float wet = chorusPtr[ch][ia] * 0.5f + chorusPtr[ch][ib] * 0.5f;
-                    sample = sample * (1.0f - choM * 0.5f) + wet * (choM * 0.5f);
+                    const float frac = rPos - (float) ia;
+                    const float wet = chorusPtr[ch][ia] + (chorusPtr[ch][ib] - chorusPtr[ch][ia]) * frac;
+                    // At MIX = 0.5 both paths have equal gain.  The previous
+                    // double *0.5 scaling left only 25% wet signal and masked the
+                    // already missing LOW-depth modulation.
+                    sample = sample * (1.0f - choM) + wet * choM;
                 }
             };
 
@@ -2590,20 +2857,46 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
 
             auto processDelay = [&]()
             {
-                float rPos = (float)delayWritePos - currentDelaySamples;
-                if (rPos < 0.0f) rPos += (float)delayBufLen;
-                const int   di1  = (int)rPos;
-                const int   di2  = (di1 + 1) % delayBufLen;
-                const float dfrc = rPos - (float)di1;
-                float delWet = delayPtr[ch][di1] + dfrc * (delayPtr[ch][di2] - delayPtr[ch][di1]);
-                lowPassFilters[3][ch] += 0.25f * (delWet - lowPassFilters[3][ch]);
+                const float stereoPhase = (float) delayModPhase
+                    + (ch == 0 ? 0.0f : juce::MathConstants<float>::halfPi);
+                const float modulation = std::sin(stereoPhase) * delayModSamples;
+                auto readDelay = [delayBufLen](float* history, float delaySamples, int writePos)
+                {
+                    float readPos = (float) writePos - delaySamples;
+                    while (readPos < 0.0f)
+                        readPos += (float) delayBufLen;
+                    while (readPos >= (float) delayBufLen)
+                        readPos -= (float) delayBufLen;
+                    const int a = (int) readPos;
+                    const int bIndex = (a + 1) % delayBufLen;
+                    const float frac = readPos - (float) a;
+                    return history[a] + frac * (history[bIndex] - history[a]);
+                };
+
+                float delWet = readDelay(delayPtr[ch], currentDelaySamples + modulation, delayWritePos);
+                const float secondTap = readDelay(delayPtr[ch],
+                                                  currentDelaySamples * delaySecondTapRatio - modulation * 0.45f,
+                                                  delayWritePos);
+                delWet += secondTap * delaySecondTapMix;
+                if (channels > 1 && (safeDelayType == 0 || safeDelayType == 1 || safeDelayType == 3))
+                {
+                    const float cross = readDelay(delayPtr[1 - ch],
+                                                  currentDelaySamples * (0.62f + delValue * 0.28f),
+                                                  delayWritePos);
+                    delWet += cross * (0.12f + 0.22f * delValue);
+                }
+
+                lowPassFilters[3][ch] += delayFilterCoeff * (delWet - lowPassFilters[3][ch]);
                 delWet = lowPassFilters[3][ch];
+                const float driven = delWet * (1.0f + delayGritAmount * 3.5f);
+                const float saturated = driven / (1.0f + std::abs(driven));
+                delWet = juce::jmap(delayGritAmount, delWet, saturated * 1.45f);
 
                 if (delOn)
                 {
                     const float dry = sample;
-                    sample = dry * (1.0f - delM * 0.5f) + delWet * (delM * 0.7f);
-                    delayPtr[ch][delayWritePos] = sample + delWet * delFB;
+                    sample = dry * (1.0f - delM * 0.55f) + delWet * (delM * 0.82f);
+                    delayPtr[ch][delayWritePos] = dry + delWet * delFB;
                 }
                 else
                 {
@@ -2638,8 +2931,12 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
 
         // --- AVANCE DE POSICIONES (una vez por muestra, fuera del loop de canales) ---
         delayWritePos   = (delayWritePos   + 1) % delayBufLen;
+        delayModPhase += deltaDelayModPhase;
+        if (delayModPhase >= juce::MathConstants<double>::twoPi)
+            delayModPhase -= juce::MathConstants<double>::twoPi;
         chorusWritePos  = (chorusWritePos  + 1) % chorusBufLen;
         pitchWritePos   = (pitchWritePos   + 1) % kPitchBufLen;
+        harmonicDelayWritePos = (harmonicDelayWritePos + 1) % harmonicDelayBufLen;
         freezeWritePos  = (freezeWritePos  + 1) % freezeBufLen;
         chordBodyWritePos = (chordBodyWritePos + 1) % chordBodyBufLen;
 
@@ -2731,6 +3028,9 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
         pitchPhaseHarm += pitchDeltaHarm;
         while (pitchPhaseHarm >= winSizeF) pitchPhaseHarm -= winSizeF;
         while (pitchPhaseHarm <  0.0)     pitchPhaseHarm += winSizeF;
+        pitchPhaseHarmB += pitchDeltaHarmB;
+        while (pitchPhaseHarmB >= winSizeF) pitchPhaseHarmB -= winSizeF;
+        while (pitchPhaseHarmB <  0.0)     pitchPhaseHarmB += winSizeF;
 
         // Avance de fase del chorus
         // CORRECCION: deltaChorusPhase pre-calculado fuera del loop

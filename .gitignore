@@ -11,6 +11,7 @@ Builds/
 *.obj
 *.pdb
 *.log
+Installer/Output/
 
 # Archivos temporales del sistema
 Thumbs.db

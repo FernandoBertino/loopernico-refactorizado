@@ -16,6 +16,7 @@ namespace
         bool enabled = false;
         juce::String outputPath;
         int focusPedal = -1;
+        juce::File sessionFile;
     };
 
     SnapshotLaunchRequest parseSnapshotLaunchRequest(const juce::String& commandLine)
@@ -39,6 +40,12 @@ namespace
             else if (argument.startsWithIgnoreCase("--snapshot-fx="))
             {
                 request.focusPedal = argument.fromFirstOccurrenceOf("=", false, false).getIntValue();
+            }
+            else if (argument.endsWithIgnoreCase(".loopernico"))
+            {
+                request.sessionFile = juce::File::isAbsolutePath(argument)
+                    ? juce::File(argument)
+                    : juce::File::getCurrentWorkingDirectory().getChildFile(argument);
             }
         }
 
@@ -115,9 +122,21 @@ public:
 
             setVisible (true);
 
+            if (snapshotRequest.sessionFile != juce::File())
+            {
+                juce::Timer::callAfterDelay(250,
+                    [safeWindow = juce::Component::SafePointer<MainWindow>(this),
+                     sessionFile = snapshotRequest.sessionFile]
+                    {
+                        if (auto* window = safeWindow.getComponent())
+                            if (auto* main = dynamic_cast<MainComponent*> (window->getContentComponent()))
+                                main->openSessionFile(sessionFile);
+                    });
+            }
+
             if (snapshotRequest.enabled && snapshotRequest.focusPedal >= 0)
                 if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
-                    main->revealFxPedal(snapshotRequest.focusPedal);
+                    main->focusFxPedalForSnapshot(snapshotRequest.focusPedal);
 
            #if ! JUCE_IOS && ! JUCE_ANDROID
             // With JUCE's native Windows peer this maps to SW_SHOWMAXIMIZED: it uses

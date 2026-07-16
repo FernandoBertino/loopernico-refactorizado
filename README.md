@@ -14,9 +14,6 @@ hosting VST3 y exportacion de audio.
 - Projucer debe tener configurada una ruta global de modulos valida. El archivo
   `.jucer` usa modulos globales y tiene habilitado el host VST3.
 
-Las dependencias de Signalsmith Stretch usadas por el proyecto estan incluidas
-en `ThirdParty/SignalsmithStretch`.
-
 ## Generar y compilar
 
 1. Abrir `Loopernico Refactorizado.jucer` con Projucer.
@@ -24,6 +21,17 @@ en `ThirdParty/SignalsmithStretch`.
 3. Guardar el proyecto para regenerar `Builds/VisualStudio2026`.
 4. Abrir `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
 5. Seleccionar `Debug | x64` o `Release | x64` y compilar el proyecto App.
+
+## Crear el instalador de Windows
+
+1. Compilar primero `Release | x64`.
+2. Instalar Inno Setup 6 y abrir `Installer/Loopernico.iss`.
+3. Elegir **Build > Compile**. El instalador queda en `Installer/Output`.
+
+El instalador crea el acceso directo **Loopernico** en el escritorio, conserva
+los recursos visuales y de audio bajo la carpeta de instalacion y registra
+`.loopernico` como **Archivo de Loopernico**, con su icono propio. Al hacer doble
+clic en una sesion, Windows inicia Loopernico y carga directamente ese archivo.
 
 Los archivos de `Builds` son generados por Projucer. Si se agregan o quitan
 fuentes, el cambio debe hacerse en el `.jucer` y luego regenerarse la solucion.

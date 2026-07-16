@@ -198,6 +198,7 @@ public:
     void setKnobValueFormatter(int knobIndex, std::function<juce::String(double)> formatter);
     void setInfoText(const juce::String& mainText, const juce::String& subText = {});
     void setDragHintVisible(bool visible);
+    const juce::String& getDisplayName() const noexcept { return pedalName; }
     /** Centre of the physical side jack, expressed in this component's coordinates. */
     juce::Point<float> getJackCentre(JackSide side) const noexcept;
     juce::ToggleButton onBtn{"ON"};
@@ -209,12 +210,75 @@ public:
     std::function<void()> onTertiaryFootswitch;
     std::function<void()> onTap;
     bool isTertiaryFootswitchLatched() const noexcept { return tertiaryFootswitchLatched; }
+    void setTertiaryFootswitchLatched(bool latched) noexcept
+    {
+        tertiaryFootswitchLatched = latched;
+        repaint();
+    }
+    int getSunsetBrightMode() const noexcept { return sunsetBrightMode; }
+    void setSunsetBrightMode(int mode)
+    {
+        const int next = juce::jlimit(0, 2, mode);
+        if (sunsetBrightMode == next)
+            return;
+        sunsetBrightMode = next;
+        if (onSunsetBrightChange)
+            onSunsetBrightChange(next);
+        repaint();
+    }
+    std::function<void(int)> onSunsetBrightChange;
     std::function<void(FXPedalComponent&, const juce::MouseEvent&)> onDragStart;
     std::function<void(FXPedalComponent&, const juce::MouseEvent&)> onDragMove;
     std::function<void(FXPedalComponent&, const juce::MouseEvent&)> onDragEnd;
+    std::function<void(FXPedalComponent&)> onZoomRequest;
 
     void mouseDown(const juce::MouseEvent& e) override
     {
+        if (pedalName == "SUNSET")
+        {
+            auto body = getLocalBounds().toFloat().reduced(3.0f);
+            const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth());
+            const float bodyWidth = juce::jmin(body.getWidth(), bodyHeight);
+            body = { body.getCentreX() - bodyWidth * 0.5f,
+                     body.getCentreY() - bodyHeight * 0.5f,
+                     bodyWidth, bodyHeight };
+            const auto mouse = e.position;
+            const auto inside = [mouse](juce::Point<float> centre, float radius)
+            {
+                const float dx = mouse.x - centre.x;
+                const float dy = mouse.y - centre.y;
+                return dx * dx + dy * dy <= radius * radius;
+            };
+            const float footY = body.getY() + body.getHeight() * 0.837f;
+            if (inside({ body.getX() + body.getWidth() * 0.208f, footY }, 28.0f))
+            {
+                onBtn.setToggleState(!onBtn.getToggleState(), juce::sendNotification);
+                repaint();
+                return;
+            }
+            if (inside({ body.getX() + body.getWidth() * 0.805f, footY }, 28.0f))
+            {
+                tertiaryFootswitchLatched = !tertiaryFootswitchLatched;
+                if (onTertiaryFootswitch)
+                    onTertiaryFootswitch();
+                repaint();
+                return;
+            }
+
+            // The physical CONFIG and BRIGHT switches live on the rear panel.
+            // Their slim hit areas sit on the rolled top lip in the virtual unit.
+            if (mouse.y <= body.getY() + body.getHeight() * 0.075f)
+            {
+                if (mouse.x < body.getCentreX())
+                    knob9.setValue((juce::roundToInt(knob9.getValue()) + 1) % 3,
+                                   juce::sendNotificationSync);
+                else
+                    setSunsetBrightMode((sunsetBrightMode + 1) % 3);
+                repaint();
+                return;
+            }
+        }
+
         if (pedalName == "TREMOLO")
         {
             auto body = getLocalBounds().toFloat().reduced(3.0f);
@@ -248,6 +312,36 @@ public:
             }
         }
 
+        if (pedalName == "HARMONIZER")
+        {
+            auto body = getLocalBounds().toFloat().reduced(3.0f);
+            const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / (4.0f / 3.0f));
+            body = { body.getX(), body.getCentreY() - bodyHeight * 0.5f,
+                     body.getWidth(), bodyHeight };
+            const float footY = body.getY() + body.getHeight() * 0.835f;
+            const float footXs[] = { 0.125f, 0.500f, 0.875f };
+            for (int i = 0; i < 3; ++i)
+            {
+                const float dx = e.position.x - (body.getX() + body.getWidth() * footXs[i]);
+                const float dy = e.position.y - footY;
+                if (dx * dx + dy * dy <= 27.0f * 27.0f)
+                {
+                    if (i == 0)
+                        onBtn.setToggleState(!onBtn.getToggleState(), juce::sendNotification);
+                    else if (i == 1)
+                    {
+                        secondaryFootswitchDown = true;
+                        if (onSecondaryFootswitch)
+                            onSecondaryFootswitch();
+                    }
+                    else if (onTertiaryFootswitch)
+                        onTertiaryFootswitch();
+                    repaint();
+                    return;
+                }
+            }
+        }
+
         if (pedalName == "VST3 HOST")
         {
             auto body = getLocalBounds().toFloat().reduced(3.0f);
@@ -269,9 +363,11 @@ public:
         if (pedalName == "RHYTHM BOX")
         {
             auto body = getLocalBounds().toFloat().reduced(3.0f);
-            const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / 0.88f);
-            body = { body.getX(), body.getCentreY() - bodyHeight * 0.5f,
-                     body.getWidth(), bodyHeight };
+            const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / 0.72f);
+            const float bodyWidth = juce::jmin(body.getWidth(), bodyHeight * 0.72f);
+            body = { body.getCentreX() - bodyWidth * 0.5f,
+                     body.getCentreY() - bodyHeight * 0.5f,
+                     bodyWidth, bodyHeight };
 
             const auto mouse = e.position;
             const auto isInsideCircle = [mouse](juce::Point<float> centre, float radius)
@@ -281,29 +377,31 @@ public:
                 return dx * dx + dy * dy <= radius * radius;
             };
 
-            const auto leftFoot = juce::Point<float>(body.getX() + body.getWidth() * 0.255f,
-                                                      body.getY() + body.getHeight() * 0.885f);
-            const auto rightFoot = juce::Point<float>(body.getX() + body.getWidth() * 0.745f,
-                                                       body.getY() + body.getHeight() * 0.885f);
-            const auto tap = juce::Point<float>(body.getCentreX(),
-                                                 body.getY() + body.getHeight() * 0.820f);
+            const auto leftFoot = juce::Point<float>(body.getX() + body.getWidth() * 0.205f,
+                                                      body.getY() + body.getHeight() * 0.805f);
+            const auto rightFoot = juce::Point<float>(body.getX() + body.getWidth() * 0.795f,
+                                                       body.getY() + body.getHeight() * 0.805f);
+            const auto tap = juce::Point<float>(body.getX() + body.getWidth() * 0.755f,
+                                                 body.getY() + body.getHeight() * 0.380f);
+            const float switchRadius = body.getWidth() * 0.13f;
 
-            if (isInsideCircle(leftFoot, 25.0f))
+            if (isInsideCircle(leftFoot, switchRadius))
             {
                 onBtn.setToggleState(!onBtn.getToggleState(), juce::sendNotification);
                 repaint();
                 return;
             }
 
-            if (isInsideCircle(rightFoot, 25.0f))
+            if (isInsideCircle(rightFoot, switchRadius))
             {
+                secondaryFootswitchDown = true;
                 if (onSecondaryFootswitch)
                     onSecondaryFootswitch();
                 repaint();
                 return;
             }
 
-            if (isInsideCircle(tap, 23.0f))
+            if (isInsideCircle(tap, body.getWidth() * 0.13f))
             {
                 if (onTap)
                     onTap();
@@ -343,8 +441,57 @@ public:
             }
         }
 
-        const bool customWideFootswitch = ((pedalName == "FUZZ" || pedalName == "OVERDRIVE" || pedalName == "COMPRESSOR"
-                                              || pedalName == "HARMONIZER" || pedalName == "SUSTAIN GRAN"
+        if (pedalName == "TAPE DELAY")
+        {
+            auto body = getLocalBounds().toFloat().reduced(3.0f);
+            const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / 1.5f);
+            body = { body.getX(), body.getCentreY() - bodyHeight * 0.5f,
+                     body.getWidth(), bodyHeight };
+            const auto mouse = e.position;
+            const float footY = body.getY() + body.getHeight() * 0.842f;
+            const float xs[] = { 0.115f, 0.500f, 0.880f };
+            for (int i = 0; i < 3; ++i)
+            {
+                const float dx = mouse.x - (body.getX() + body.getWidth() * xs[i]);
+                const float dy = mouse.y - footY;
+                if (dx * dx + dy * dy <= 25.0f * 25.0f)
+                {
+                    if (i == 0)
+                        onBtn.setToggleState(!onBtn.getToggleState(), juce::sendNotification);
+                    else if (i == 1)
+                    {
+                        secondaryFootswitchDown = true;
+                        if (onSecondaryFootswitch)
+                            onSecondaryFootswitch();
+                    }
+                    else if (i == 2 && onTap)
+                        onTap();
+                    repaint();
+                    return;
+                }
+            }
+        }
+
+        if (pedalName == "CHORUS")
+        {
+            auto body = getLocalBounds().toFloat().reduced(3.0f);
+            const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / (2.0f / 3.0f));
+            body = { body.getX(), body.getCentreY() - bodyHeight * 0.5f,
+                     body.getWidth(), bodyHeight };
+            const auto foot = juce::Point<float>(body.getCentreX(),
+                                                  body.getY() + body.getHeight() * 0.728f);
+            const float dx = e.position.x - foot.x;
+            const float dy = e.position.y - foot.y;
+            if (dx * dx + dy * dy <= 27.0f * 27.0f)
+            {
+                onBtn.setToggleState(!onBtn.getToggleState(), juce::sendNotification);
+                repaint();
+                return;
+            }
+        }
+
+        const bool customWideFootswitch = ((pedalName == "FUZZ" || pedalName == "COMPRESSOR"
+                                              || pedalName == "SUSTAIN GRAN"
                                               || pedalName == "SUSTAIN CHORDS" || pedalName == "OUTPUT EQ")
                                                && e.y > juce::roundToInt(getHeight() * 0.66f))
                                           || (pedalName.containsIgnoreCase("NOISE GATE")
@@ -364,6 +511,12 @@ public:
     {
         if (onDragMove)
             onDragMove(*this, e);
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent&) override
+    {
+        if (onZoomRequest)
+            onZoomRequest(*this);
     }
 
     void mouseUp(const juce::MouseEvent& e) override
@@ -392,6 +545,7 @@ private:
     bool dragHintVisible = false;
     bool secondaryFootswitchDown = false;
     bool tertiaryFootswitchLatched = false;
+    int sunsetBrightMode = 1;
     juce::String infoMain, infoSub;
     std::function<juce::String(double)> knobValueFormatters[9];
 

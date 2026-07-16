@@ -161,18 +161,37 @@ public:
 
     void setHarmonicEnabled(bool b) { harmonicEnabled.store(b); }
     void setHarmonicInterval(int i) { harmonicInterval.store(i); }
+    void setHarmonicIntervalB(int i) { harmonicIntervalB.store(i); }
     void setHarmonicMix(float m) { harmonicMix.store(m); }
     void setHarmonicLevel(float l) { harmonicLevel.store(l); }
+    void setHarmonicDelayMs(float ms) { harmonicDelayMs.store(juce::jlimit(0.0f, 1000.0f, ms)); }
+    void setHarmonicFeedback(float f) { harmonicFeedback.store(juce::jlimit(0.0f, 0.92f, f)); }
+    void setHarmonicFlex(bool pressed) { harmonicFlex.store(pressed); }
 
     void setFuzzEnabled(bool b) { fuzzEnabled.store(b); }
     void setFuzz(float f) { fuzz.store(f); } // CORRECCIÓN: Nombre correcto
     void setFuzzTone(float t) { fuzzTone.store(t); }
     void setFuzzLevel(float l) { fuzzLevel.store(l); }
 
-    void setDriveEnabled(bool b) { driveEnabled.store(b); }
-    void setDrive(float d) { drive.store(d); } // CORRECCIÓN: Nombre correcto
-    void setDriveTone(float t) { driveTone.store(t); }
-    void setDriveLevel(float l) { driveLevel.store(l); }
+    // Strymon Sunset: two independently switchable gain engines.  The legacy
+    // setters remain aliases for channel A so old sessions and integrations do
+    // not lose their overdrive settings.
+    void setDriveEnabled(bool b) { driveAEnabled.store(b); }
+    void setDriveAEnabled(bool b) { driveAEnabled.store(b); }
+    void setDriveBEnabled(bool b) { driveBEnabled.store(b); }
+    void setDrive(float d) { driveA.store(juce::jlimit(0.0f, 1.0f, d)); }
+    void setDriveTone(float t) { driveATone.store(juce::jlimit(0.0f, 1.0f, t)); }
+    void setDriveLevel(float l) { driveALevel.store(juce::jlimit(0.0f, 1.0f, l)); }
+    void setDriveA(float d) { setDrive(d); }
+    void setDriveATone(float t) { setDriveTone(t); }
+    void setDriveALevel(float l) { setDriveLevel(l); }
+    void setDriveAType(int type) { driveAType.store(juce::jlimit(0, 2, type)); }
+    void setDriveB(float d) { driveB.store(juce::jlimit(0.0f, 1.0f, d)); }
+    void setDriveBTone(float t) { driveBTone.store(juce::jlimit(0.0f, 1.0f, t)); }
+    void setDriveBLevel(float l) { driveBLevel.store(juce::jlimit(0.0f, 1.0f, l)); }
+    void setDriveBType(int type) { driveBType.store(juce::jlimit(0, 2, type)); }
+    void setDriveRouting(int routing) { driveRouting.store(juce::jlimit(0, 2, routing)); }
+    void setDriveBright(int bright) { driveBright.store(juce::jlimit(0, 2, bright)); }
 
     void setChorusEnabled(bool b) { chorusEnabled.store(b); }
     void setChorusMix(float m) { chorusMix.store(m); }
@@ -193,6 +212,12 @@ public:
     void setDelayMix(float m) { delayMix.store(m); }
     void setDelayTimeMs(float t) { delayTimeMs.store(t); }
     void setDelayFeedback(float f) { delayFeedback.store(f); }
+    void setDelayFilter(float v) { delayFilter.store(juce::jlimit(0.0f, 1.0f, v)); }
+    void setDelayGrit(float v) { delayGrit.store(juce::jlimit(0.0f, 1.0f, v)); }
+    void setDelayModRate(float hz) { delayModRate.store(juce::jlimit(0.02f, 12.0f, hz)); }
+    void setDelayModDepth(float v) { delayModDepth.store(juce::jlimit(0.0f, 1.0f, v)); }
+    void setDelayType(int type) { delayType.store(juce::jlimit(0, 11, type)); }
+    void setDelayValue(float v) { delayValue.store(juce::jlimit(0.0f, 1.0f, v)); }
 
     void setReverbEnabled(bool b) { reverbEnabled.store(b); }
     void setReverbMix(float m) { reverbMix.store(m); }
@@ -400,18 +425,36 @@ private:
 
     std::atomic<bool> harmonicEnabled{ false };
     std::atomic<int>  harmonicInterval{ 7 };
+    std::atomic<int>  harmonicIntervalB{ 12 };
     std::atomic<float> harmonicMix{ 0.4f };
-    std::atomic<float> harmonicLevel{ 0.6f };
+    std::atomic<float> harmonicLevel{ 1.0f };
+    std::atomic<float> harmonicDelayMs{ 25.0f };
+    std::atomic<float> harmonicFeedback{ 0.0f };
+    std::atomic<bool> harmonicFlex{ false };
 
     std::atomic<bool> fuzzEnabled{ false };
     std::atomic<float> fuzz{ 0.4f }; // CORRECCIÓN: Ahora es el atómico oficial
     std::atomic<float> fuzzTone{ 0.4f };
     std::atomic<float> fuzzLevel{ 0.7f };
 
-    std::atomic<bool> driveEnabled{ false };
-    std::atomic<float> drive{ 0.5f }; // CORRECCIÓN: Ahora es el atómico oficial
-    std::atomic<float> driveTone{ 0.6f };
-    std::atomic<float> driveLevel{ 0.8f };
+    std::atomic<bool> driveAEnabled{ false };
+    std::atomic<bool> driveBEnabled{ false };
+    std::atomic<float> driveA{ 0.42f };
+    std::atomic<float> driveATone{ 0.55f };
+    std::atomic<float> driveALevel{ 0.52f };
+    std::atomic<int> driveAType{ 1 };       // Ge, texas, treble
+    std::atomic<float> driveB{ 0.36f };
+    std::atomic<float> driveBTone{ 0.55f };
+    std::atomic<float> driveBLevel{ 0.52f };
+    std::atomic<int> driveBType{ 0 };       // 2stage, hard, JFET
+    std::atomic<int> driveRouting{ 0 };     // A->B, B->A, parallel
+    std::atomic<int> driveBright{ 1 };      // minus, neutral, plus
+
+    // Four-times oversampled nonlinear state.  Each engine owns its filters so
+    // routing changes do not cause the other engine's tone memory to jump.
+    float sunsetStateA[6][2]{};
+    float sunsetStateB[6][2]{};
+    float sunsetPreviousInput[2]{};
 
     std::atomic<bool> chorusEnabled{ false };
     std::atomic<float> chorusMix{ 0.5f };
@@ -432,6 +475,12 @@ private:
     std::atomic<float> delayMix{ 0.3f };
     std::atomic<float> delayTimeMs{ 400.0f };
     std::atomic<float> delayFeedback{ 0.4f };
+    std::atomic<float> delayFilter{ 0.62f };
+    std::atomic<float> delayGrit{ 0.12f };
+    std::atomic<float> delayModRate{ 0.35f };
+    std::atomic<float> delayModDepth{ 0.10f };
+    std::atomic<int> delayType{ 6 };
+    std::atomic<float> delayValue{ 0.50f };
 
     std::atomic<bool> reverbEnabled{ false };
     std::atomic<float> reverbMix{ 0.22f };
@@ -484,6 +533,8 @@ private:
     juce::AudioBuffer<float> delayBuffer;
     juce::AudioBuffer<float> chorusBuffer;
     juce::AudioBuffer<float> pitchBuffer;
+    juce::AudioBuffer<float> harmonicDelayBufferA;
+    juce::AudioBuffer<float> harmonicDelayBufferB;
     juce::AudioBuffer<float> freezeBuffer;
     juce::AudioBuffer<float> chordBodyBuffer;
     juce::AudioBuffer<float> reverbPreDelayBuffer;
@@ -496,6 +547,7 @@ private:
     int delayWritePos{ 0 };
     int chorusWritePos{ 0 };
     int pitchWritePos{ 0 };
+    int harmonicDelayWritePos{ 0 };
     int freezeWritePos{ 0 };
     int chordBodyWritePos{ 0 };
     int reverbPreDelayWritePos{ 0 };
@@ -582,7 +634,10 @@ private:
     std::array<int, 4> drumRecentIntervals{};
 
     double pitchPhaseHarm{ 0.0 };
+    double pitchPhaseHarmB{ 0.0 };
+    float harmonicAutoEqState[2][2]{};
     double chorusPhase{ 0.0 };
+    double delayModPhase{ 0.0 };
     double tremoloPhase{ 0.0 };
     float tremoloFootSpeedAmount{ 0.0f };
     float tremoloFadeGain{ 1.0f };
