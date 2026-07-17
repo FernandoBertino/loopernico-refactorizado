@@ -657,7 +657,7 @@ void drawMetalFootswitch(juce::Graphics& g, float cx, float cy, float size, bool
 
 const juce::Image& getPedalEnamelTexture(const juce::String& name)
 {
-    static const auto noiseGate = loadPedalTexture("Pedals/boss-ns2-noise-suppressor-face-v1.png");
+    static const auto noiseGate = loadPedalTexture("Pedals/boss-ns2-noise-suppressor-face-v8.png");
     static const auto pampaFuzz = loadPedalTexture("Pedals/pampa-fuzz-face-v3.png");
     static const auto sunset = loadPedalTexture("Pedals/strymon-sunset-face-v2.png");
     static const auto dedaloJet = loadPedalTexture("Pedals/dedalo-jet-compressor-face-v4.png");
@@ -716,8 +716,7 @@ juce::Rectangle<int> getPedalTextureCrop(const juce::String& name, const juce::I
     const int w = image.getWidth();
     const int h = image.getHeight();
     if (name.containsIgnoreCase("NOISE GATE"))
-        return { juce::roundToInt(w * 0.128f), juce::roundToInt(h * 0.040f),
-                 juce::roundToInt(w * 0.744f), juce::roundToInt(h * 0.910f) };
+        return image.getBounds();
     if (name == "RHYTHM BOX")
         return { juce::roundToInt(w * 0.068f), juce::roundToInt(h * 0.052f),
                  juce::roundToInt(w * 0.864f), juce::roundToInt(h * 0.856f) };
@@ -877,28 +876,32 @@ void FXPedalComponent::paint(juce::Graphics& g)
                            : (harmonizerArtwork ? (4.0f / 3.0f)
                            : (sustainGranArtwork ? 0.667f
                             : (beatBuddyArtwork ? 0.72f
-                           : (bossNoiseArtwork ? 0.64f
+                           : (bossNoiseArtwork ? (976.0f / 1612.0f)
                            : (modelHostArtwork ? 1.20f : (tenBandEqArtwork ? (124.0f / 92.0f) : 1.08f))))))))))));
         const float bodyHeight = juce::jmin(b.getHeight(), b.getWidth() / aspect);
-        const float bodyWidth = beatBuddyArtwork ? juce::jmin(b.getWidth(), bodyHeight * aspect)
-                                                  : b.getWidth();
+        const float bodyWidth = (beatBuddyArtwork || bossNoiseArtwork)
+                                    ? juce::jmin(b.getWidth(), bodyHeight * aspect)
+                                    : b.getWidth();
         b = juce::Rectangle<float>(b.getCentreX() - bodyWidth * 0.5f,
                                    b.getCentreY() - bodyHeight * 0.5f,
                                    bodyWidth, bodyHeight);
     }
     auto originalBody = b;
 
-    g.setColour(juce::Colours::black.withAlpha(0.20f));
-    g.fillRoundedRectangle(b.translated(0.0f, 7.0f).expanded(4.0f, 2.0f), 12.0f);
-    g.setColour(juce::Colours::black.withAlpha(0.62f));
-    g.fillRoundedRectangle(b.translated(0.0f, 3.0f).expanded(1.5f), 10.0f);
-
     const auto enamel = pedalCol.withMultipliedSaturation(0.68f).darker(0.08f);
-    juce::ColourGradient bodyGrad(
-        enamel.brighter(0.10f), b.getX(), b.getY(),
-        enamel.darker(0.58f),   b.getX(), b.getBottom(), false);
-    g.setGradientFill(bodyGrad);
-    g.fillRoundedRectangle(b, 9.0f);
+    if (!bossNoiseArtwork)
+    {
+        g.setColour(juce::Colours::black.withAlpha(0.20f));
+        g.fillRoundedRectangle(b.translated(0.0f, 7.0f).expanded(4.0f, 2.0f), 12.0f);
+        g.setColour(juce::Colours::black.withAlpha(0.62f));
+        g.fillRoundedRectangle(b.translated(0.0f, 3.0f).expanded(1.5f), 10.0f);
+
+        juce::ColourGradient bodyGrad(
+            enamel.brighter(0.10f), b.getX(), b.getY(),
+            enamel.darker(0.58f),   b.getX(), b.getBottom(), false);
+        g.setGradientFill(bodyGrad);
+        g.fillRoundedRectangle(b, 9.0f);
+    }
 
     if (const auto& enamelTexture = getPedalEnamelTexture(pedalName); enamelTexture.isValid())
     {
@@ -912,13 +915,15 @@ void FXPedalComponent::paint(juce::Graphics& g)
                     crop.getX(), crop.getY(), crop.getWidth(), crop.getHeight());
     }
 
-    // A cast aluminium enclosure: rolled top lip, darker side walls and a subtle centre sheen.
-    g.setColour(enamel.brighter(0.42f).withAlpha(0.18f));
-    g.fillRoundedRectangle(b.reduced(2.0f).withHeight(7.0f), 5.0f);
-    juce::ColourGradient centreSheen(juce::Colours::white.withAlpha(0.10f), b.getCentreX(), b.getY(),
-                                     juce::Colours::transparentWhite, b.getRight(), b.getY(), false);
-    g.setGradientFill(centreSheen);
-    g.fillRoundedRectangle(b.reduced(6.0f, 3.0f), 6.0f);
+    if (!bossNoiseArtwork)
+    {
+        // A cast aluminium enclosure: rolled top lip, darker side walls and a subtle centre sheen.
+        g.setColour(enamel.brighter(0.42f).withAlpha(0.18f));
+        g.fillRoundedRectangle(b.reduced(2.0f).withHeight(7.0f), 5.0f);
+        juce::ColourGradient centreSheen(juce::Colours::white.withAlpha(0.10f), b.getCentreX(), b.getY(),
+                                         juce::Colours::transparentWhite, b.getRight(), b.getY(), false);
+        g.setGradientFill(centreSheen);
+        g.fillRoundedRectangle(b.reduced(6.0f, 3.0f), 6.0f);
 
     juce::ColourGradient directionalLight(juce::Colours::white.withAlpha(0.12f), b.getX(), b.getY(),
                                            juce::Colours::transparentWhite, b.getCentreX(), b.getCentreY(), true);
@@ -954,8 +959,9 @@ void FXPedalComponent::paint(juce::Graphics& g)
     g.drawRoundedRectangle(b.reduced(0.5f), 9.0f, 1.4f);
     g.setColour(juce::Colours::black.withAlpha(0.55f));
     g.drawRoundedRectangle(b.reduced(2.5f), 7.0f, 1.0f);
-    g.setColour(juce::Colours::black.withAlpha(0.20f));
-    g.drawRoundedRectangle(b.reduced(1.5f), 8.0f, 1.5f);
+        g.setColour(juce::Colours::black.withAlpha(0.20f));
+        g.drawRoundedRectangle(b.reduced(1.5f), 8.0f, 1.5f);
+    }
 
     juce::Rectangle<float> plate;
     if (!customArtwork)
@@ -991,7 +997,7 @@ void FXPedalComponent::paint(juce::Graphics& g)
     const float screwBottom = customArtwork ? b.getBottom() : (float) getHeight();
     float scrR = 4.2f;
     if (!modelHostArtwork && !tenBandEqArtwork && !timeLineArtwork && !smallCloneArtwork && !beatBuddyArtwork
-        && !sunsetArtwork) // These faces already contain their enclosure hardware.
+        && !sunsetArtwork && !bossNoiseArtwork) // These faces already contain their enclosure hardware.
     {
         drawScrew(g, b.getX() + scrR + 2.0f, sb + scrR + 2.5f, scrR);
         drawScrew(g, b.getRight() - scrR - 2.0f, sb + scrR + 2.5f, scrR);
@@ -1016,10 +1022,13 @@ void FXPedalComponent::paint(juce::Graphics& g)
     {
         const auto red = juce::Colour(0xffd9202a);
         const bool active = onBtn.getToggleState();
-        drawLedLens(g, b.getCentreX(),
-                    b.getY() + b.getHeight() * 0.078f, 2.8f, red, active);
-        drawLedLens(g, b.getX() + b.getWidth() * 0.165f,
-                    b.getY() + b.getHeight() * 0.176f, 2.5f, red, active);
+        if (active)
+        {
+            drawLedLens(g, b.getX() + b.getWidth() * 0.510f,
+                        b.getY() + b.getHeight() * 0.065f, 2.8f * hardwareScale, red, true);
+            drawLedLens(g, b.getX() + b.getWidth() * 0.188f,
+                        b.getY() + b.getHeight() * 0.170f, 2.5f * hardwareScale, red, true);
+        }
     }
 
     if (sunsetArtwork)
@@ -1468,7 +1477,7 @@ void FXPedalComponent::paint(juce::Graphics& g)
         g.setColour(juce::Colours::white.withAlpha(0.18f));
         g.fillEllipse(jx - 5.5f, jy - 7.0f, 4.5f, 2.5f);
     };
-    if (!smallCloneArtwork && !beatBuddyArtwork)
+    if (!smallCloneArtwork && !beatBuddyArtwork && !bossNoiseArtwork)
     {
         auto outJack = getJackCentre(JackSide::output);
         auto inJack = getJackCentre(JackSide::input);
@@ -1669,17 +1678,24 @@ void FXPedalComponent::resized()
 
     if (pedalName.containsIgnoreCase("NOISE GATE"))
     {
-        const int bodyTop = 3;
-        const int bodyLeft = 3;
-        const int bodyWidth = getWidth() - 6;
-        const int knobSize = scaled(34);
-        const int knobCY = bodyTop + juce::roundToInt((getHeight() - 6) * 0.150f);
-        const float centres[] = { 0.358f, 0.562f, 0.765f };
+        constexpr float aspect = 976.0f / 1612.0f;
+        const int availableWidth = getWidth() - 6;
+        const int availableHeight = getHeight() - 6;
+        const int bodyHeight = juce::jmin(availableHeight,
+                                          juce::roundToInt((float) availableWidth / aspect));
+        const int bodyWidth = juce::jmin(availableWidth,
+                                         juce::roundToInt((float) bodyHeight * aspect));
+        const int bodyTop = (getHeight() - bodyHeight) / 2;
+        const int bodyLeft = (getWidth() - bodyWidth) / 2;
+        const int knobSize = juce::jmax(22, juce::roundToInt(bodyWidth * 0.200f));
+        const int knobCY = bodyTop + juce::roundToInt(bodyHeight * 0.163f);
+        const float centres[] = { 0.399f, 0.606f, 0.810f };
         juce::Slider* knobs[] = { &knob1, &knob2, &knob3 };
         for (int i = 0; i < 3; ++i)
         {
             const int cx = bodyLeft + juce::roundToInt(bodyWidth * centres[i]);
-            knobs[i]->setBounds(cx - knobSize / 2, knobCY - knobSize / 2, knobSize, knobSize);
+            knobs[i]->setBounds(cx - knobSize / 2, knobCY - knobSize / 2,
+                                knobSize, knobSize);
         }
         knob4.setBounds(0, 0, 0, 0);
         knob5.setBounds(0, 0, 0, 0);

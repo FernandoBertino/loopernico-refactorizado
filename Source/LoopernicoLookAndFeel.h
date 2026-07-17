@@ -100,20 +100,23 @@ public:
             return;
         }
 
-        // Broad drop shadow from the physical height of the knob. The darker,
-        // tighter ellipses in each knob style remain as contact occlusion.
-        const float shadowOffsetX = juce::jlimit(0.8f, 3.2f, radius * 0.10f);
-        const float shadowOffsetY = juce::jlimit(1.2f, 4.2f, radius * 0.17f);
-        const float shadowRadius = radius * 1.10f;
-        const auto shadowCentre = centre.translated(shadowOffsetX, shadowOffsetY);
-        juce::ColourGradient knobShadow(juce::Colours::black.withAlpha(0.31f),
-                                        shadowCentre.x, shadowCentre.y,
-                                        juce::Colours::transparentBlack,
-                                        shadowCentre.x + shadowRadius, shadowCentre.y, true);
-        knobShadow.addColour(0.66, juce::Colours::black.withAlpha(0.17f));
-        g.setGradientFill(knobShadow);
-        g.fillEllipse(shadowCentre.x - shadowRadius, shadowCentre.y - shadowRadius,
-                      shadowRadius * 2.0f, shadowRadius * 2.0f);
+        if (slider.getComponentID() != "bossNoiseKnob")
+        {
+            // Broad drop shadow from the physical height of the knob. The darker,
+            // tighter ellipses in each knob style remain as contact occlusion.
+            const float shadowOffsetX = juce::jlimit(0.8f, 3.2f, radius * 0.10f);
+            const float shadowOffsetY = juce::jlimit(1.2f, 4.2f, radius * 0.17f);
+            const float shadowRadius = radius * 1.10f;
+            const auto shadowCentre = centre.translated(shadowOffsetX, shadowOffsetY);
+            juce::ColourGradient knobShadow(juce::Colours::black.withAlpha(0.31f),
+                                            shadowCentre.x, shadowCentre.y,
+                                            juce::Colours::transparentBlack,
+                                            shadowCentre.x + shadowRadius, shadowCentre.y, true);
+            knobShadow.addColour(0.66, juce::Colours::black.withAlpha(0.17f));
+            g.setGradientFill(knobShadow);
+            g.fillEllipse(shadowCentre.x - shadowRadius, shadowCentre.y - shadowRadius,
+                          shadowRadius * 2.0f, shadowRadius * 2.0f);
+        }
 
         if (slider.getComponentID() == "smallCloneRateKnob")
         {
@@ -299,41 +302,44 @@ public:
         if (slider.getComponentID() == "bossNoiseKnob")
         {
             const float angle = startAngle + pos * (endAngle - startAngle);
-            const float r = radius * 0.88f;
-
-            g.setColour(juce::Colours::black.withAlpha(0.30f));
-            g.fillEllipse(centre.x - r - 1.8f, centre.y - r + 2.3f,
-                          r * 2.0f + 3.6f, r * 2.0f + 3.6f);
-            g.setColour(juce::Colour(0xff242424));
-            g.fillEllipse(centre.x - r - 1.2f, centre.y - r - 1.2f,
-                          r * 2.0f + 2.4f, r * 2.0f + 2.4f);
-
-            for (int i = 0; i < 24; ++i)
+            static const auto rasterKnob = []
             {
-                const float a = juce::MathConstants<float>::twoPi * (float) i / 24.0f;
-                const auto p1 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * (r * 0.82f);
-                const auto p2 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * r;
-                g.setColour(juce::Colours::white.withAlpha(i % 2 == 0 ? 0.22f : 0.10f));
-                g.drawLine({ p1, p2 }, 0.8f);
+                const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
+                const juce::File candidates[] = {
+                    sourceDirectory.getSiblingFile("Assets").getChildFile("Hardware/boss-ns2-knob-v4.png"),
+                    juce::File::getCurrentWorkingDirectory().getChildFile("Assets/Hardware/boss-ns2-knob-v4.png"),
+                    juce::File::getCurrentWorkingDirectory()
+                        .getChildFile("Loopernico Refactorizado/Assets/Hardware/boss-ns2-knob-v4.png")
+                };
+                for (const auto& file : candidates)
+                    if (file.existsAsFile())
+                        if (auto image = juce::ImageFileFormat::loadFrom(file); image.isValid())
+                            return image;
+                return juce::Image{};
+            }();
+
+            if (rasterKnob.isValid())
+            {
+                const auto target = bounds.reduced(0.5f, 0.5f);
+                g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+                g.drawImage(rasterKnob, target);
+
+                const auto capCentre = target.getCentre();
+                const float capRadius = target.getWidth() * 0.405f;
+                const auto markerStart = capCentre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (capRadius * 0.08f);
+                const auto markerEnd = capCentre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (capRadius * 0.72f);
+                g.setColour(juce::Colour(0xff111111));
+                g.drawLine({ markerStart, markerEnd }, juce::jmax(1.6f, capRadius * 0.10f));
+                return;
             }
 
-            juce::ColourGradient ivory(juce::Colour(0xffffffff), centre.x - r * 0.50f, centre.y - r * 0.62f,
-                                       juce::Colour(0xffbbb8ae), centre.x + r * 0.50f, centre.y + r * 0.58f, true);
-            ivory.addColour(0.46, juce::Colour(0xffeeeae0));
-            g.setGradientFill(ivory);
-            g.fillEllipse(centre.x - r * 0.72f, centre.y - r * 0.72f,
-                          r * 1.44f, r * 1.44f);
-            g.setColour(juce::Colours::black.withAlpha(0.28f));
-            g.drawEllipse(centre.x - r * 0.72f, centre.y - r * 0.72f,
-                          r * 1.44f, r * 1.44f, 0.9f);
-
+            const float r = radius * 0.88f;
+            g.setColour(juce::Colour(0xff242424));
+            g.fillEllipse(centre.x - r, centre.y - r, r * 2.0f, r * 2.0f);
             const auto markerStart = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.16f);
             const auto markerEnd = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.62f);
             g.setColour(juce::Colour(0xff181818));
             g.drawLine({ markerStart, markerEnd }, 2.0f);
-            g.setColour(juce::Colours::white.withAlpha(0.38f));
-            g.fillEllipse(centre.x - r * 0.42f, centre.y - r * 0.54f,
-                          r * 0.65f, r * 0.18f);
             return;
         }
 
