@@ -479,7 +479,7 @@ public:
             body = { body.getX(), body.getCentreY() - bodyHeight * 0.5f,
                      body.getWidth(), bodyHeight };
             const auto foot = juce::Point<float>(body.getCentreX(),
-                                                  body.getY() + body.getHeight() * 0.728f);
+                                                  body.getY() + body.getHeight() * 0.755f);
             const float dx = e.position.x - foot.x;
             const float dy = e.position.y - foot.y;
             if (dx * dx + dy * dy <= 27.0f * 27.0f)

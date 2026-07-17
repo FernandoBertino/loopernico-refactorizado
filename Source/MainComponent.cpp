@@ -540,7 +540,7 @@ MainComponent::MainComponent()
     sldSilenceThreshold.onValueChange = [this]() { looper.setSilenceThresholdDb((float)sldSilenceThreshold.getValue()); };
     addAndMakeVisible(sldSilenceThreshold);
 
-    masterKnob.setSliderStyle(juce::Slider::LinearVertical);
+    masterKnob.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     masterKnob.setRange(0.0, 1.0, 0.01);
     masterKnob.setValue(0.85);
     masterKnob.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);

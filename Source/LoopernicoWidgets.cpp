@@ -596,6 +596,13 @@ juce::Point<float> FXPedalComponent::getJackCentre(JackSide side) const noexcept
 
 namespace
 {
+constexpr float kCompactPedalHeight = 236.0f;
+
+float getPedalHardwareScale(const juce::Component& pedal)
+{
+    return juce::jmax(0.1f, (float) pedal.getHeight() / kCompactPedalHeight);
+}
+
 juce::Image loadPedalTexture(const juce::String& fileName)
 {
     const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
@@ -612,21 +619,57 @@ juce::Image loadPedalTexture(const juce::String& fileName)
     return {};
 }
 
+const juce::Image& getMetalFootswitchImage()
+{
+    static const auto footswitch = loadPedalTexture("Hardware/footswitch-metal-v3.png");
+    return footswitch;
+}
+
+void drawMetalFootswitch(juce::Graphics& g, float cx, float cy, float size, bool pressed)
+{
+    const auto& footswitch = getMetalFootswitchImage();
+    if (!footswitch.isValid())
+        return;
+
+    const float pressOffset = pressed ? size * 0.0375f : 0.0f;
+    const float renderedSize = pressed ? size * 0.97f : size;
+    const auto target = juce::Rectangle<float>(renderedSize, renderedSize)
+                            .withCentre({ cx, cy + pressOffset });
+
+    juce::Graphics::ScopedSaveState state(g);
+    const float height = pressed ? 0.35f : 1.0f;
+    const auto shadowCentre = juce::Point<float>(cx + size * 0.045f * height,
+                                                  cy + size * 0.075f * height);
+    const float shadowRadius = size * (pressed ? 0.36f : 0.43f);
+    juce::ColourGradient shadow(juce::Colours::black.withAlpha(pressed ? 0.20f : 0.42f),
+                                shadowCentre.x, shadowCentre.y,
+                                juce::Colours::transparentBlack,
+                                shadowCentre.x + shadowRadius, shadowCentre.y, true);
+    shadow.addColour(0.62, juce::Colours::black.withAlpha(pressed ? 0.12f : 0.27f));
+    g.setGradientFill(shadow);
+    g.fillEllipse(shadowCentre.x - shadowRadius, shadowCentre.y - shadowRadius,
+                  shadowRadius * 2.0f, shadowRadius * 2.0f);
+
+    g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+    g.setOpacity(pressed ? 0.92f : 1.0f);
+    g.drawImage(footswitch, target);
+}
+
 const juce::Image& getPedalEnamelTexture(const juce::String& name)
 {
     static const auto noiseGate = loadPedalTexture("Pedals/boss-ns2-noise-suppressor-face-v1.png");
     static const auto pampaFuzz = loadPedalTexture("Pedals/pampa-fuzz-face-v3.png");
-    static const auto sunset = loadPedalTexture("Pedals/strymon-sunset-face-v1.png");
+    static const auto sunset = loadPedalTexture("Pedals/strymon-sunset-face-v2.png");
     static const auto dedaloJet = loadPedalTexture("Pedals/dedalo-jet-compressor-face-v3.png");
     static const auto dedaloTres = loadPedalTexture("Pedals/dedalo-tres-tremolo-face-v1.png");
     static const auto harmonizer = loadPedalTexture("Pedals/eventide-h90-harmonizer-face-v1.png");
     static const auto sustainGran = loadPedalTexture("Pedals/sustain-gran-piano-face-v1.png");
     static const auto modelHost = loadPedalTexture("Pedals/model-host-face-v2.png");
     static const auto tenBandEq = loadPedalTexture("Pedals/ten-band-eq-aluminum-face-v1.png");
-    static const auto beatBuddy = loadPedalTexture("Pedals/singular-sound-beatbuddy-face-v1.png");
-    static const auto smallClone = loadPedalTexture("Pedals/electro-harmonix-small-clone-face-v1.png");
-    static const auto bigSky = loadPedalTexture("Pedals/strymon-bigsky-mx-face-v2.png");
-    static const auto timeLine = loadPedalTexture("Pedals/strymon-timeline-mx-face-v1.png");
+    static const auto beatBuddy = loadPedalTexture("Pedals/singular-sound-beatbuddy-face-v2.png");
+    static const auto smallClone = loadPedalTexture("Pedals/electro-harmonix-small-clone-face-v2.png");
+    static const auto bigSky = loadPedalTexture("Pedals/strymon-bigsky-mx-face-v3.png");
+    static const auto timeLine = loadPedalTexture("Pedals/strymon-timeline-mx-face-v2.png");
     static const auto neutral = loadPedalTexture("Textures/pedal-enamel-neutral-v1.png");
     static const auto silver  = loadPedalTexture("Textures/pedal-brushed-silver-v1.png");
     static const auto black   = loadPedalTexture("Textures/pedal-black-powder-v1.png");
@@ -803,6 +846,7 @@ void FXPedalboardWiring::drawChain(juce::Graphics& g, const juce::Component& coo
 // The pedal rendering remains intentionally detailed because it defines the hardware-like identity of the UI.
 void FXPedalComponent::paint(juce::Graphics& g)
 {
+    const float hardwareScale = getPedalHardwareScale(*this);
     auto b = getLocalBounds().toFloat().reduced(3.0f);
     const bool wideFuzzArtwork = pedalName == "FUZZ";
     const bool sunsetArtwork = pedalName == "SUNSET";
@@ -1344,111 +1388,27 @@ void FXPedalComponent::paint(juce::Graphics& g)
     bool on = onBtn.getToggleState();
     if (beatBuddyArtwork)
     {
-        const auto gold = juce::Colour(0xffd5a243);
         const auto brightGold = juce::Colour(0xffffd77a);
-        auto drawGoldSwitch = [&](float cx, float cy, bool active)
-        {
-            const float outerR = b.getWidth() * 0.075f;
-            const float innerR = b.getWidth() * 0.052f;
-            g.setColour(juce::Colours::black.withAlpha(0.72f));
-            g.fillEllipse(cx - outerR - 2.0f, cy - outerR + 3.0f,
-                          (outerR + 2.0f) * 2.0f, (outerR + 2.0f) * 2.0f);
-            juce::ColourGradient ring(brightGold, cx - outerR * 0.58f, cy - outerR * 0.72f,
-                                      juce::Colour(0xff6f430b), cx + outerR * 0.62f, cy + outerR * 0.70f, true);
-            g.setGradientFill(ring);
-            g.fillEllipse(cx - outerR, cy - outerR, outerR * 2.0f, outerR * 2.0f);
-            g.setColour(juce::Colours::black.withAlpha(0.76f));
-            g.fillEllipse(cx - innerR - 1.0f, cy - innerR + 1.0f,
-                          (innerR + 1.0f) * 2.0f, (innerR + 1.0f) * 2.0f);
-            juce::ColourGradient cap(juce::Colour(0xfff2ede1), cx - innerR * 0.55f, cy - innerR * 0.70f,
-                                     juce::Colour(0xff5a584f), cx + innerR * 0.50f, cy + innerR * 0.62f, true);
-            g.setGradientFill(cap);
-            g.fillEllipse(cx - innerR, cy - innerR, innerR * 2.0f, innerR * 2.0f);
-            g.setColour(juce::Colours::white.withAlpha(0.30f));
-            g.fillEllipse(cx - innerR * 0.48f, cy - innerR * 0.68f,
-                          innerR * 0.92f, innerR * 0.30f);
-            if (active)
-            {
-                g.setColour(juce::Colour(0xff80ffb0).withAlpha(0.22f));
-                g.drawEllipse(cx - outerR - 3.0f, cy - outerR - 3.0f,
-                              (outerR + 3.0f) * 2.0f, (outerR + 3.0f) * 2.0f, 3.0f);
-            }
-        };
-
         const float tapCX = b.getX() + b.getWidth() * 0.755f;
         const float tapCY = b.getY() + b.getHeight() * 0.380f;
-        const float tapR = b.getWidth() * 0.088f;
-        g.setColour(juce::Colours::black.withAlpha(0.70f));
-        g.fillEllipse(tapCX - tapR - 2.0f, tapCY - tapR + 2.0f,
-                      (tapR + 2.0f) * 2.0f, (tapR + 2.0f) * 2.0f);
-        juce::ColourGradient tapRing(brightGold, tapCX - tapR * 0.65f, tapCY - tapR * 0.65f,
-                                     juce::Colour(0xff65400c), tapCX + tapR * 0.62f, tapCY + tapR * 0.65f, true);
-        g.setGradientFill(tapRing);
-        g.fillEllipse(tapCX - tapR, tapCY - tapR, tapR * 2.0f, tapR * 2.0f);
-        g.setColour(juce::Colour(0xff151719));
-        g.fillEllipse(tapCX - tapR + 4.0f, tapCY - tapR + 4.0f,
-                      (tapR - 4.0f) * 2.0f, (tapR - 4.0f) * 2.0f);
         g.setColour(brightGold.withAlpha(0.95f));
         g.setFont(juce::Font(juce::FontOptions(7.4f).withStyle("Bold")));
-        g.drawText("TAP", juce::roundToInt(tapCX - tapR), juce::roundToInt(tapCY - 5.0f),
-                   juce::roundToInt(tapR * 2.0f), 10, juce::Justification::centred);
-
-        const float footY = b.getY() + b.getHeight() * 0.805f;
-        drawGoldSwitch(b.getX() + b.getWidth() * 0.205f, footY, on);
-        drawGoldSwitch(b.getX() + b.getWidth() * 0.795f, footY, secondaryFootswitchDown);
+        g.drawText("TAP", juce::roundToInt(tapCX - b.getWidth() * 0.09f),
+                   juce::roundToInt(tapCY - b.getWidth() * 0.13f),
+                   juce::roundToInt(b.getWidth() * 0.18f), 10, juce::Justification::centred);
     }
 
     if (dedaloTresArtwork)
     {
-        auto drawTresSwitch = [&](float cx, float cy, bool pressed)
-        {
-            constexpr float footR = 14.0f;
-            constexpr float nutR = 18.5f;
-            juce::Path hexNut;
-            for (int i = 0; i < 6; ++i)
-            {
-                const float a = juce::MathConstants<float>::twoPi * (float)i / 6.0f
-                              - juce::MathConstants<float>::halfPi;
-                const auto p = juce::Point<float>(cx + std::cos(a) * nutR,
-                                                   cy + std::sin(a) * nutR);
-                if (i == 0) hexNut.startNewSubPath(p); else hexNut.lineTo(p);
-            }
-            hexNut.closeSubPath();
-            auto shadow = hexNut;
-            shadow.applyTransform(juce::AffineTransform::translation(1.5f, 2.8f));
-            g.setColour(juce::Colours::black.withAlpha(0.68f));
-            g.fillPath(shadow);
-            juce::ColourGradient nut(juce::Colour(0xfff2eee4), cx - 10.0f, cy - 12.0f,
-                                     juce::Colour(0xff5b5a56), cx + 11.0f, cy + 12.0f, true);
-            g.setGradientFill(nut);
-            g.fillPath(hexNut);
-            g.setColour(juce::Colours::black.withAlpha(0.42f));
-            g.strokePath(hexNut, juce::PathStrokeType(1.1f));
-
-            const float capY = cy + (pressed ? 1.8f : 0.0f);
-            g.setColour(juce::Colours::black.withAlpha(0.72f));
-            g.fillEllipse(cx - footR - 1.2f, capY - footR + 1.5f,
-                          footR * 2.0f + 2.4f, footR * 2.0f + 2.4f);
-            juce::ColourGradient cap(juce::Colour(0xffddd9ce), cx - 7.0f, capY - 9.0f,
-                                     juce::Colour(0xff66645f), cx + 7.0f, capY + 8.0f, true);
-            g.setGradientFill(cap);
-            g.fillEllipse(cx - footR, capY - footR, footR * 2.0f, footR * 2.0f);
-            g.setColour(juce::Colours::white.withAlpha(0.34f));
-            g.fillEllipse(cx - 6.5f, capY - 9.5f, 12.5f, 4.2f);
-        };
-
         const float leftX = b.getX() + b.getWidth() * 0.147f;
         const float rightX = b.getX() + b.getWidth() * 0.843f;
         const float ledY = b.getY() + b.getHeight() * 0.650f;
-        const float footY = b.getY() + b.getHeight() * 0.835f;
         drawLedLens(g, leftX, ledY, 3.4f, juce::Colour(0xfffff8dd), onBtn.getToggleState());
         drawLedLens(g, rightX, ledY, 3.4f, juce::Colour(0xfffff8dd), secondaryFootswitchDown);
-        drawTresSwitch(leftX, footY, false);
-        drawTresSwitch(rightX, footY, secondaryFootswitchDown);
     }
 
     if (!beatBuddyArtwork && !bossNoiseArtwork && !dedaloTresArtwork && !bigSkyArtwork && !smallCloneArtwork
-        && !harmonizerArtwork && !sunsetArtwork)
+        && !harmonizerArtwork && !sunsetArtwork && !timeLineArtwork)
     {
     float ledCX = customArtwork ? (dedaloJetArtwork ? b.getX() + b.getWidth() * 0.156f
                                                      : ((harmonizerArtwork || sustainGranArtwork) ? b.getCentreX() - 31.0f
@@ -1463,69 +1423,6 @@ void FXPedalComponent::paint(juce::Graphics& g)
                                                      )
                                 : (float)getHeight() - 16.0f;
     float ledR = customArtwork ? (dedaloJetArtwork ? 3.4f : (modelHostArtwork ? 4.2f : (tenBandEqArtwork ? 3.6f : 6.5f))) : 5.5f;
-    float footCX = customArtwork ? (dedaloJetArtwork ? b.getX() + b.getWidth() * 0.156f
-                                                     : ((harmonizerArtwork || sustainGranArtwork) ? b.getCentreX()
-                                                     : (modelHostArtwork ? b.getCentreX()
-                                                     : (tenBandEqArtwork ? b.getCentreX()
-                                                                         : (float)getWidth() * 0.5f))
-                                                     ))
-                                 : (float)getWidth() * 0.5f + 22.0f;
-    float footCY = customArtwork ? b.getY() + b.getHeight() * (wideFuzzArtwork ? 0.84f
-                                                      : (dedaloJetArtwork ? 0.871f
-                                                      : ((harmonizerArtwork || sustainGranArtwork) ? 0.895f
-                                                      : (modelHostArtwork ? 0.90f : (tenBandEqArtwork ? 0.815f : 0.88f))))
-                                                      )
-                                 : (float)getHeight() - 17.0f;
-    float footR = customArtwork ? 14.0f : 12.0f;
-
-    if (customArtwork)
-    {
-        const float nutR = footR + 4.5f;
-        juce::Path hexNut;
-        for (int i = 0; i < 6; ++i)
-        {
-            const float a = juce::MathConstants<float>::twoPi * (float) i / 6.0f - juce::MathConstants<float>::halfPi;
-            const auto p = juce::Point<float>(footCX + std::cos(a) * nutR, footCY + std::sin(a) * nutR);
-            if (i == 0) hexNut.startNewSubPath(p); else hexNut.lineTo(p);
-        }
-        hexNut.closeSubPath();
-        auto nutShadow = hexNut;
-        nutShadow.applyTransform(juce::AffineTransform::translation(1.8f, 3.0f));
-        g.setColour(juce::Colours::black.withAlpha(0.72f));
-        g.fillPath(nutShadow);
-        juce::ColourGradient nutMetal(juce::Colour(0xffeee8d9), footCX - nutR * 0.5f, footCY - nutR * 0.65f,
-                                      juce::Colour(0xff4a4945), footCX + nutR * 0.5f, footCY + nutR * 0.65f, true);
-        g.setGradientFill(nutMetal);
-        g.fillPath(hexNut);
-        g.setColour(juce::Colours::black.withAlpha(0.48f));
-        g.strokePath(hexNut, juce::PathStrokeType(1.2f));
-
-        g.setColour(juce::Colours::black.withAlpha(0.72f));
-        g.fillEllipse(footCX - footR - 1.2f, footCY - footR + 1.5f, footR * 2.0f + 2.4f, footR * 2.0f + 2.4f);
-        juce::ColourGradient switchMetal(juce::Colour(0xffd9d5c9), footCX - footR * 0.45f, footCY - footR * 0.60f,
-                                         juce::Colour(0xff5a5955), footCX + footR * 0.42f, footCY + footR * 0.55f, true);
-        g.setGradientFill(switchMetal);
-        g.fillEllipse(footCX - footR, footCY - footR, footR * 2.0f, footR * 2.0f);
-        g.setColour(juce::Colours::white.withAlpha(0.34f));
-        g.fillEllipse(footCX - footR * 0.48f, footCY - footR * 0.70f, footR * 0.90f, footR * 0.30f);
-        g.setColour(juce::Colours::black.withAlpha(0.44f));
-        g.drawEllipse(footCX - footR, footCY - footR, footR * 2.0f, footR * 2.0f, 1.0f);
-    }
-    else
-    {
-        g.setColour(juce::Colours::black.withAlpha(0.62f));
-        g.fillEllipse(footCX - footR - 2.0f, footCY - footR + 1.5f, (footR + 2.0f) * 2.0f, (footR + 2.0f) * 2.0f);
-        juce::ColourGradient footGrad(
-            juce::Colour(0xffd8d8dc), footCX - footR * 0.45f, footCY - footR * 0.55f,
-            juce::Colour(0xff4a4d54), footCX + footR * 0.45f, footCY + footR * 0.55f, true);
-        g.setGradientFill(footGrad);
-        g.fillEllipse(footCX - footR, footCY - footR, footR * 2.0f, footR * 2.0f);
-        g.setColour(juce::Colours::black.withAlpha(0.55f));
-        g.drawEllipse(footCX - footR, footCY - footR, footR * 2.0f, footR * 2.0f, 1.0f);
-        g.setColour(juce::Colours::white.withAlpha(0.28f));
-        g.fillEllipse(footCX - footR * 0.45f, footCY - footR * 0.72f, footR * 0.9f, footR * 0.35f);
-    }
-
     if (!customArtwork)
     {
         g.setColour(juce::Colours::black.withAlpha(0.45f));
@@ -1578,10 +1475,71 @@ void FXPedalComponent::paint(juce::Graphics& g)
         g.drawText("OUT", 7, (int)outJack.y - 15, 22, 9, juce::Justification::centredLeft);
         g.drawText("IN", getWidth() - 29, (int)inJack.y - 15, 22, 9, juce::Justification::centredRight);
     }
+
+    // The H90 footswitches are part of its photorealistic face texture. Every
+    // other round stomp switch uses the same rasterized steel hardware so the
+    // visual changes do not alter hit areas, callbacks or MIDI assignments.
+    if (!harmonizerArtwork && !bossNoiseArtwork)
+    {
+        auto drawAt = [&](float nx, float ny, float size, bool pressed = false)
+        {
+            drawMetalFootswitch(g, b.getX() + b.getWidth() * nx,
+                                b.getY() + b.getHeight() * ny, size, pressed);
+        };
+
+        if (beatBuddyArtwork)
+        {
+            const float size = b.getWidth() * 0.18f;
+            drawAt(0.205f, 0.805f, size, on);
+            drawAt(0.795f, 0.805f, size, secondaryFootswitchDown);
+            drawAt(0.755f, 0.380f, size, false);
+        }
+        else if (sunsetArtwork)
+        {
+            drawAt(0.208f, 0.837f, 40.0f * hardwareScale, on);
+            drawAt(0.805f, 0.837f, 40.0f * hardwareScale, tertiaryFootswitchLatched);
+        }
+        else if (dedaloTresArtwork)
+        {
+            drawAt(0.147f, 0.835f, 39.0f * hardwareScale, on);
+            drawAt(0.843f, 0.835f, 39.0f * hardwareScale, secondaryFootswitchDown);
+        }
+        else if (bigSkyArtwork)
+        {
+            drawAt(0.118f, 0.830f, 38.0f * hardwareScale, on);
+            drawAt(0.500f, 0.830f, 38.0f * hardwareScale, false);
+            drawAt(0.878f, 0.830f, 38.0f * hardwareScale, tertiaryFootswitchLatched);
+        }
+        else if (timeLineArtwork)
+        {
+            drawAt(0.115f, 0.842f, 39.0f * hardwareScale, on);
+            drawAt(0.500f, 0.842f, 39.0f * hardwareScale, secondaryFootswitchDown);
+            drawAt(0.880f, 0.842f, 39.0f * hardwareScale, false);
+        }
+        else if (smallCloneArtwork)
+        {
+            drawAt(0.500f, 0.755f, 38.0f * hardwareScale, on);
+        }
+        else
+        {
+            const float cx = dedaloJetArtwork ? b.getX() + b.getWidth() * 0.156f : b.getCentreX();
+            const float cy = b.getY() + b.getHeight() * (wideFuzzArtwork ? 0.840f
+                                                      : (dedaloJetArtwork ? 0.871f
+                                                      : (sustainGranArtwork ? 0.925f
+                                                      : (modelHostArtwork ? 0.900f
+                                                      : (tenBandEqArtwork ? 0.815f : 0.880f)))));
+            drawMetalFootswitch(g, cx, cy, 40.0f * hardwareScale, on);
+        }
+    }
 }
 
 void FXPedalComponent::resized()
 {
+    const float hardwareScale = getPedalHardwareScale(*this);
+    const auto scaled = [hardwareScale](int compactPixels)
+    {
+        return juce::jmax(1, juce::roundToInt((float) compactPixels * hardwareScale));
+    };
     auto b = getLocalBounds().reduced(5);
     onBtn.setBounds(b.getX(), getHeight() - 24, b.getWidth(), 20);
     onBtn.setVisible(false);
@@ -1663,15 +1621,15 @@ void FXPedalComponent::resized()
             const int cy = bodyTop + juce::roundToInt((float) bodyHeight * ny);
             knob.setBounds(cx - size / 2, cy - size / 2, size, size);
         };
-        place(knob8, 0.140f, 0.172f, 36); // TYPE
-        place(knob9, 0.927f, 0.172f, 34); // VALUE
-        place(knob1, 0.069f, 0.424f, 32); // DECAY
-        place(knob2, 0.214f, 0.424f, 32); // PRE-DELAY
-        place(knob4, 0.356f, 0.424f, 32); // TONE
-        place(knob7, 0.500f, 0.424f, 32); // MOD
-        place(knob5, 0.644f, 0.424f, 32); // PARAM 1
-        place(knob6, 0.786f, 0.424f, 32); // PARAM 2
-        place(knob3, 0.929f, 0.424f, 32); // MIX
+        place(knob8, 0.140f, 0.172f, scaled(36)); // TYPE
+        place(knob9, 0.927f, 0.172f, scaled(34)); // VALUE
+        place(knob1, 0.069f, 0.424f, scaled(32)); // DECAY
+        place(knob2, 0.214f, 0.424f, scaled(32)); // PRE-DELAY
+        place(knob4, 0.356f, 0.424f, scaled(32)); // TONE
+        place(knob7, 0.500f, 0.424f, scaled(32)); // MOD
+        place(knob5, 0.644f, 0.424f, scaled(32)); // PARAM 1
+        place(knob6, 0.786f, 0.424f, scaled(32)); // PARAM 2
+        place(knob3, 0.929f, 0.424f, scaled(32)); // MIX
         return;
     }
 
@@ -1689,15 +1647,15 @@ void FXPedalComponent::resized()
             const int cy = bodyTop + juce::roundToInt((float) bodyHeight * ny);
             knob.setBounds(cx - size / 2, cy - size / 2, size, size);
         };
-        place(knob8, 0.145f, 0.180f, 38); // TYPE
-        place(knob9, 0.925f, 0.180f, 36); // VALUE
-        place(knob1, 0.066f, 0.440f, 34); // TIME
-        place(knob2, 0.215f, 0.440f, 34); // REPEATS
-        place(knob3, 0.360f, 0.440f, 34); // FILTER
-        place(knob4, 0.500f, 0.440f, 34); // GRIT
-        place(knob5, 0.640f, 0.440f, 34); // SPEED
-        place(knob6, 0.785f, 0.440f, 34); // DEPTH
-        place(knob7, 0.925f, 0.440f, 34); // MIX
+        place(knob8, 0.145f, 0.180f, scaled(38)); // TYPE
+        place(knob9, 0.925f, 0.180f, scaled(36)); // VALUE
+        place(knob1, 0.066f, 0.440f, scaled(34)); // TIME
+        place(knob2, 0.215f, 0.440f, scaled(34)); // REPEATS
+        place(knob3, 0.360f, 0.440f, scaled(34)); // FILTER
+        place(knob4, 0.500f, 0.440f, scaled(34)); // GRIT
+        place(knob5, 0.640f, 0.440f, scaled(34)); // SPEED
+        place(knob6, 0.785f, 0.440f, scaled(34)); // DEPTH
+        place(knob7, 0.925f, 0.440f, scaled(34)); // MIX
         return;
     }
 
@@ -1706,7 +1664,7 @@ void FXPedalComponent::resized()
         const int bodyTop = 3;
         const int bodyLeft = 3;
         const int bodyWidth = getWidth() - 6;
-        const int knobSize = 34;
+        const int knobSize = scaled(34);
         const int knobCY = bodyTop + juce::roundToInt((getHeight() - 6) * 0.150f);
         const float centres[] = { 0.358f, 0.562f, 0.765f };
         juce::Slider* knobs[] = { &knob1, &knob2, &knob3 };
@@ -1753,14 +1711,14 @@ void FXPedalComponent::resized()
             knob.setBounds(cx - size / 2, cy - size / 2, size, size);
         };
 
-        place(knob1, 0.175f, 0.167f, 48); // LEVEL A
-        place(knob2, 0.175f, 0.417f, 48); // DRIVE A
-        place(knob3, 0.385f, 0.356f, 48); // TONE A
-        place(knob4, 0.829f, 0.167f, 48); // LEVEL B
-        place(knob5, 0.829f, 0.417f, 48); // DRIVE B
-        place(knob6, 0.617f, 0.356f, 48); // TONE B
-        place(knob7, 0.443f, 0.169f, 28); // TYPE A
-        place(knob8, 0.582f, 0.169f, 28); // TYPE B
+        place(knob1, 0.175f, 0.167f, scaled(48)); // LEVEL A
+        place(knob2, 0.175f, 0.417f, scaled(48)); // DRIVE A
+        place(knob3, 0.385f, 0.356f, scaled(48)); // TONE A
+        place(knob4, 0.829f, 0.167f, scaled(48)); // LEVEL B
+        place(knob5, 0.829f, 0.417f, scaled(48)); // DRIVE B
+        place(knob6, 0.617f, 0.356f, scaled(48)); // TONE B
+        place(knob7, 0.443f, 0.169f, scaled(28)); // TYPE A
+        place(knob8, 0.582f, 0.169f, scaled(28)); // TYPE B
         knob9.setBounds(0, 0, 0, 0);
         return;
     }
@@ -1772,8 +1730,7 @@ void FXPedalComponent::resized()
         const int bodyTop = (getHeight() - bodyHeight) / 2;
         const int bodyLeft = 3;
         const int bodyWidth = getWidth() - 6;
-        // Keep the Jet knob size stable even when the enclosure width changes.
-        const int knobSize = 40;
+        const int knobSize = scaled(40);
         const int topCY = bodyTop + juce::roundToInt(bodyHeight * 0.200f);
         const int bottomCY = bodyTop + juce::roundToInt(bodyHeight * 0.486f);
         const int leftCX = bodyLeft + juce::roundToInt(bodyWidth * 0.218f);
@@ -1803,7 +1760,7 @@ void FXPedalComponent::resized()
         const int bodyTop = (getHeight() - bodyHeight) / 2;
         const int bodyLeft = 3;
         const int bodyWidth = getWidth() - 6;
-        const int knobSize = 44;
+        const int knobSize = scaled(44);
         const int topCY = bodyTop + juce::roundToInt(bodyHeight * 0.198f);
         const int lowerCY = bodyTop + juce::roundToInt(bodyHeight * 0.433f);
         const int topX[] = {
@@ -1870,7 +1827,7 @@ void FXPedalComponent::resized()
         const int bodyTop = (getHeight() - bodyHeight) / 2;
         const int bodyLeft = 3;
         const int bodyWidth = getWidth() - 6;
-        const int knobSize = 31;
+        const int knobSize = scaled(31);
         const int topCY = bodyTop + juce::roundToInt(bodyHeight * 0.137f);
         const int lowerCY = bodyTop + juce::roundToInt(bodyHeight * 0.330f);
         const float centres[] = { 0.205f, 0.500f, 0.795f };

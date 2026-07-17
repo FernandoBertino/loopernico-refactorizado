@@ -100,6 +100,21 @@ public:
             return;
         }
 
+        // Broad drop shadow from the physical height of the knob. The darker,
+        // tighter ellipses in each knob style remain as contact occlusion.
+        const float shadowOffsetX = juce::jlimit(0.8f, 3.2f, radius * 0.10f);
+        const float shadowOffsetY = juce::jlimit(1.2f, 4.2f, radius * 0.17f);
+        const float shadowRadius = radius * 1.10f;
+        const auto shadowCentre = centre.translated(shadowOffsetX, shadowOffsetY);
+        juce::ColourGradient knobShadow(juce::Colours::black.withAlpha(0.31f),
+                                        shadowCentre.x, shadowCentre.y,
+                                        juce::Colours::transparentBlack,
+                                        shadowCentre.x + shadowRadius, shadowCentre.y, true);
+        knobShadow.addColour(0.66, juce::Colours::black.withAlpha(0.17f));
+        g.setGradientFill(knobShadow);
+        g.fillEllipse(shadowCentre.x - shadowRadius, shadowCentre.y - shadowRadius,
+                      shadowRadius * 2.0f, shadowRadius * 2.0f);
+
         if (slider.getComponentID() == "smallCloneRateKnob")
         {
             const float angle = startAngle + pos * (endAngle - startAngle);
