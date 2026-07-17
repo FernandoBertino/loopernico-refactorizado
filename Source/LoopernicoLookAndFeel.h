@@ -342,6 +342,34 @@ public:
             const float angle = startAngle + pos * (endAngle - startAngle);
             const float r = radius * 0.90f;
 
+            static const auto rasterKnob = []
+            {
+                const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
+                const juce::File candidates[] = {
+                    sourceDirectory.getSiblingFile("Assets").getChildFile("Hardware/dedalo-jet-knob-v1.png"),
+                    juce::File::getCurrentWorkingDirectory()
+                        .getChildFile("Assets/Hardware/dedalo-jet-knob-v1.png"),
+                    juce::File::getCurrentWorkingDirectory()
+                        .getChildFile("Loopernico Refactorizado/Assets/Hardware/dedalo-jet-knob-v1.png")
+                };
+                for (const auto& file : candidates)
+                    if (file.existsAsFile())
+                        if (auto image = juce::ImageFileFormat::loadFrom(file); image.isValid())
+                            return image;
+                return juce::Image{};
+            }();
+
+            if (rasterKnob.isValid())
+            {
+                const float imageSize = radius * 2.50f;
+                const auto target = juce::Rectangle<float>(imageSize, imageSize).withCentre(centre);
+                juce::Graphics::ScopedSaveState state(g);
+                g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+                g.addTransform(juce::AffineTransform::rotation(angle, centre.x, centre.y));
+                g.drawImage(rasterKnob, target);
+                return;
+            }
+
             g.setColour(juce::Colours::black.withAlpha(0.30f));
             g.fillEllipse(centre.x - r - 1.5f, centre.y - r + 2.8f,
                           r * 2.0f + 3.0f, r * 2.0f + 3.0f);

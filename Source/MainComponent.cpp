@@ -38,11 +38,11 @@ namespace
         {
             const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
             const juce::File candidates[] = {
-                sourceDirectory.getSiblingFile("Assets/Fonts/DSEG14/DSEG14Classic-Bold.ttf"),
+                sourceDirectory.getSiblingFile("Assets/Fonts/Sixteen/Sixteen-Mono-Bold.ttf"),
                 juce::File::getCurrentWorkingDirectory()
-                    .getChildFile("Assets/Fonts/DSEG14/DSEG14Classic-Bold.ttf"),
+                    .getChildFile("Assets/Fonts/Sixteen/Sixteen-Mono-Bold.ttf"),
                 juce::File::getCurrentWorkingDirectory()
-                    .getChildFile("Loopernico Refactorizado/Assets/Fonts/DSEG14/DSEG14Classic-Bold.ttf")
+                    .getChildFile("Loopernico Refactorizado/Assets/Fonts/Sixteen/Sixteen-Mono-Bold.ttf")
             };
 
             for (const auto& file : candidates)
@@ -584,7 +584,7 @@ MainComponent::MainComponent()
         updateExternalVstUi();
     };
     if (auto typeface = loadTonexDisplayTypeface(); typeface != nullptr)
-        lblVst3Status.setFont(juce::Font(juce::FontOptions(typeface).withHeight(18.0f)));
+        lblVst3Status.setFont(juce::Font(juce::FontOptions(typeface).withHeight(24.0f)));
     else
         lblVst3Status.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(),
                                                            15.0f, juce::Font::bold)));
@@ -592,7 +592,6 @@ MainComponent::MainComponent()
     lblVst3Status.setColour(juce::Label::backgroundColourId, juce::Colour(0xff070a0d).withAlpha(0.92f));
     lblVst3Status.setColour(juce::Label::outlineColourId, LnfC::Accent.withAlpha(0.20f));
     lblVst3Status.setJustificationType(juce::Justification::centred);
-    lblVst3Status.setMinimumHorizontalScale(0.62f);
     if (vst3Pedal != nullptr)
     {
         vst3Pedal->addAndMakeVisible(btnLoadVst3);
@@ -600,6 +599,11 @@ MainComponent::MainComponent()
         vst3Pedal->addAndMakeVisible(btnEditVst3);
         vst3Pedal->addChildComponent(btnBypassVst3); // State mirror; the hardware footswitch is the live bypass control.
         vst3Pedal->addAndMakeVisible(lblVst3Status);
+        vst3Pedal->onResized = [this](FXPedalComponent& pedal)
+        {
+            layoutVst3PedalControls(pedal);
+        };
+        layoutVst3PedalControls(*vst3Pedal);
     }
     updateExternalVstUi();
 
@@ -1004,13 +1008,14 @@ void MainComponent::setupFXPedals()
     effectsChain.setRhythmTone((float) fxPedals[1]->knob3.getValue());
     updateRhythmBoxReadouts();
 
-    fxPedals[2]->configureExtendedKnobs("MIX", "GAIN", "COMP", "ACTION", "TAIL", "EQ");
+    fxPedals[2]->configureExtendedKnobs("BLEND", "GAIN", "COMP", "ATTACK", "", "TONE");
     fxPedals[2]->knob1.setComponentID("dedaloJetKnob");
     fxPedals[2]->knob2.setComponentID("dedaloJetKnob");
     fxPedals[2]->knob3.setComponentID("dedaloJetKnob");
     fxPedals[2]->knob4.setComponentID("dedaloJetKnob");
     fxPedals[2]->knob5.setComponentID("dedaloJetKnob");
     fxPedals[2]->knob6.setComponentID("dedaloJetKnob");
+    fxPedals[2]->knob5.setVisible(false); // Release is fixed on the physical JET 2.
     cfg(fxPedals[2]->knob1,0.0,1.0,0.65);
     cfg(fxPedals[2]->knob2,0.5,2.5,1.0);
     cfg(fxPedals[2]->knob3,-36.0,-6.0,-18.0);
@@ -1402,8 +1407,19 @@ void MainComponent::revealFxPedal(int pedalIndex)
 
 void MainComponent::focusFxPedalForSnapshot(int pedalIndex)
 {
+    if (pedalIndex == -1 && vst3Pedal != nullptr)
+    {
+        toggleFxPedalFocus(*vst3Pedal);
+        return;
+    }
+
     if (pedalIndex >= 0 && pedalIndex < kNumFxPedals && fxPedals[pedalIndex] != nullptr)
         toggleFxPedalFocus(*fxPedals[pedalIndex]);
+}
+
+void MainComponent::setVst3DisplayTextForSnapshot(const juce::String& text)
+{
+    lblVst3Status.setDisplayText(text);
 }
 
 void MainComponent::toggleFxPedalFocus(FXPedalComponent& pedal)
@@ -1554,6 +1570,35 @@ void MainComponent::endFxPedalDrag(FXPedalComponent& pedal, const juce::MouseEve
     resized();
 }
 
+void MainComponent::layoutVst3PedalControls(FXPedalComponent& pedal)
+{
+    auto body = pedal.getLocalBounds().toFloat().reduced(3.0f);
+    const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / 1.20f);
+    body = { body.getX(), body.getCentreY() - bodyHeight * 0.5f,
+             body.getWidth(), bodyHeight };
+
+    // These proportions match the cropped model-host-face-v2 artwork. Keeping every
+    // coordinate relative to the same body rectangle prevents the live display from
+    // drifting away from its recess when the focus overlay enlarges the pedal.
+    const auto screen = juce::Rectangle<float>(body.getX() + body.getWidth() * 0.168f,
+                                                body.getY() + body.getHeight() * 0.155f,
+                                                body.getWidth() * 0.664f,
+                                                body.getHeight() * 0.334f);
+    lblVst3Status.setBounds(screen.toNearestInt());
+
+    const int buttonGap = juce::jmax(3, juce::roundToInt(body.getWidth() * 0.020f));
+    const int contentX = juce::roundToInt(body.getX() + body.getWidth() * 0.090f);
+    const int contentW = juce::roundToInt(body.getWidth() * 0.820f);
+    const int buttonY = juce::roundToInt(body.getY() + body.getHeight() * 0.025f);
+    const int buttonH = juce::jmax(18, juce::roundToInt(body.getHeight() * 0.090f));
+    const int buttonW = (contentW - buttonGap * 2) / 3;
+    btnLoadVst3.setBounds(contentX, buttonY, buttonW, buttonH);
+    btnEditVst3.setBounds(contentX + buttonW + buttonGap, buttonY, buttonW, buttonH);
+    btnUnloadVst3.setBounds(contentX + (buttonW + buttonGap) * 2, buttonY,
+                            contentW - buttonW * 2 - buttonGap * 2, buttonH);
+    btnBypassVst3.setBounds(0, 0, 0, 0);
+}
+
 void MainComponent::styleVstButton(juce::TextButton& button, juce::Colour accent)
 {
     button.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff252535));
@@ -1587,7 +1632,7 @@ void MainComponent::loadExternalVst3Plugin()
         if (!effectsChain.prepareExternalVst3(selectedFile, candidate, errorMessage))
         {
             updateExternalVstUi();
-            lblVst3Status.setText(errorMessage, juce::dontSendNotification);
+            lblVst3Status.setDisplayText(errorMessage);
             return;
         }
 
@@ -1660,11 +1705,11 @@ void MainComponent::updateExternalVstUi()
     }
 
     if (!hasPlugin)
-        lblVst3Status.setText("SIN PLUGIN CARGADO", juce::dontSendNotification);
+        lblVst3Status.setDisplayText("SIN VST");
     else if (pluginEnabled)
-        lblVst3Status.setText(pluginName, juce::dontSendNotification);
+        lblVst3Status.setDisplayText(pluginName);
     else
-        lblVst3Status.setText("BYPASS - " + pluginName, juce::dontSendNotification);
+        lblVst3Status.setDisplayText("BYPASS - " + pluginName);
 
     lblVst3Status.setColour(juce::Label::textColourId,
                             !hasPlugin ? LnfC::TextDim
@@ -3059,24 +3104,7 @@ void MainComponent::resized()
     {
         if (focusedFxPedalIndex != -1)
             vst3Pedal->setBounds(14, 4, kVst3PedalBodyWidth, fxContainer.getHeight() - 8);
-        const int contentX = 25;
-        const int contentW = vst3Pedal->getWidth() - contentX * 2;
-        const int buttonGap = 5;
-        const int buttonW = (contentW - buttonGap * 2) / 3;
-        const int screenX = juce::roundToInt((float) vst3Pedal->getWidth() * 0.18f);
-        const int screenW = vst3Pedal->getWidth() - screenX * 2;
-
-        // Keep the VST actions in a compact row above the display so the TONEX mark stays clear.
-        const int buttonY = 24;
-        const int buttonH = 19;
-        btnLoadVst3.setBounds(contentX, buttonY, buttonW, buttonH);
-        btnEditVst3.setBounds(contentX + buttonW + buttonGap, buttonY, buttonW, buttonH);
-        btnUnloadVst3.setBounds(contentX + (buttonW + buttonGap) * 2, buttonY,
-                                contentW - buttonW * 2 - buttonGap * 2, buttonH);
-
-        // Match the live status label to the smoked-glass recess in model-host-face-v2.
-        lblVst3Status.setBounds(screenX, 49, screenW, 62);
-        btnBypassVst3.setBounds(0, 0, 0, 0);
+        layoutVst3PedalControls(*vst3Pedal);
     }
 
     for (int slot = 0; slot < kNumFxPedals; ++slot)

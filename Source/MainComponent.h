@@ -8,9 +8,32 @@
 #include "EffectsChain.h"
 #include "SessionManager.h"
 
-class TonexDisplayLabel final : public juce::Label
+class TonexDisplayLabel final : public juce::Label,
+                                private juce::Timer
 {
 public:
+    ~TonexDisplayLabel() override
+    {
+        stopTimer();
+    }
+
+    void setDisplayText(const juce::String& newText)
+    {
+        const auto normalised = newText.toUpperCase();
+        if (normalised == fullText)
+            return;
+
+        fullText = normalised;
+        scrollIndex = 0;
+        phase = Phase::initialPause;
+        stopTimer();
+
+        if (fullText.length() > displayCharacters)
+            startTimer(initialAndEndPauseMs);
+
+        repaint();
+    }
+
     void paint(juce::Graphics& g) override
     {
         const auto outer = getLocalBounds().toFloat().reduced(0.5f);
@@ -19,14 +42,12 @@ public:
         g.setColour(juce::Colours::black.withAlpha(0.72f));
         g.fillRoundedRectangle(outer.translated(0.0f, 2.0f), 5.5f);
 
-        juce::ColourGradient bezel(juce::Colour(0xff30200d), outer.getX(), outer.getY(),
-                                    juce::Colour(0xff090704), outer.getX(), outer.getBottom(), false);
+        juce::ColourGradient bezel(juce::Colour(0xff28231d), outer.getX(), outer.getY(),
+                                    juce::Colour(0xff070605), outer.getX(), outer.getBottom(), false);
         g.setGradientFill(bezel);
         g.fillRoundedRectangle(outer, 5.0f);
 
-        juce::ColourGradient amber(juce::Colour(0xffffbd3f), glass.getX(), glass.getY(),
-                                    juce::Colour(0xffd97708), glass.getX(), glass.getBottom(), false);
-        g.setGradientFill(amber);
+        g.setColour(juce::Colour(0xff080704));
         g.fillRoundedRectangle(glass, 3.0f);
 
         {
@@ -34,28 +55,97 @@ public:
             g.reduceClipRegion(glass.toNearestInt());
             for (int y = juce::roundToInt(glass.getY()); y < juce::roundToInt(glass.getBottom()); y += 3)
             {
-                g.setColour(juce::Colours::black.withAlpha(0.035f));
+                g.setColour(juce::Colour(0xffffa51f).withAlpha(0.018f));
                 g.drawHorizontalLine(y, glass.getX(), glass.getRight());
             }
 
-            g.setColour(juce::Colours::white.withAlpha(0.14f));
+            g.setColour(juce::Colours::white.withAlpha(0.035f));
             g.fillRoundedRectangle(glass.reduced(1.0f).withHeight(glass.getHeight() * 0.24f), 2.0f);
 
-            auto textArea = glass.reduced(8.0f, 8.0f).toNearestInt();
-            g.setFont(getFont());
-            g.setColour(juce::Colour(0xff3a1d02).withAlpha(0.09f));
-            g.drawFittedText(juce::String::repeatedString("8", juce::jmax(1, getText().length())),
-                             textArea, juce::Justification::centred, 1, 0.45f);
-            g.setColour(juce::Colour(0xff160b01).withAlpha(isEnabled() ? 0.96f : 0.48f));
-            g.drawFittedText(getText().toUpperCase(), textArea,
-                             juce::Justification::centred, 1, 0.45f);
+            auto textArea = glass.reduced(glass.getWidth() * 0.055f,
+                                          glass.getHeight() * 0.18f).toNearestInt();
+            const auto displayText = visibleText();
+            auto displayFont = getFont();
+            displayFont.setHeight((float) textArea.getHeight() * 0.88f);
+            const float naturalWidth = juce::GlyphArrangement::getStringWidth(
+                displayFont, juce::String::repeatedString("8", displayCharacters));
+            if (naturalWidth > (float) textArea.getWidth())
+                displayFont.setHeight(displayFont.getHeight()
+                                      * (float) textArea.getWidth() / naturalWidth);
+
+            g.setFont(displayFont);
+            g.setColour(juce::Colour(0xff6f3105).withAlpha(0.16f));
+            g.drawText(juce::String::repeatedString("8", displayCharacters), textArea,
+                       juce::Justification::centred, false);
+
+            g.setColour(juce::Colour(0xffff8a12).withAlpha(isEnabled() ? 0.16f : 0.08f));
+            g.drawText(displayText, textArea.translated(0, 1), juce::Justification::centred, false);
+            g.setColour(juce::Colour(0xffffa51f).withAlpha(isEnabled() ? 0.96f : 0.48f));
+            g.drawText(displayText, textArea, juce::Justification::centred, false);
         }
 
-        g.setColour(juce::Colours::white.withAlpha(0.12f));
+        g.setColour(juce::Colours::white.withAlpha(0.08f));
         g.drawRoundedRectangle(glass.reduced(0.5f), 3.0f, 0.8f);
         g.setColour(juce::Colours::black.withAlpha(0.82f));
         g.drawRoundedRectangle(outer, 5.0f, 1.3f);
     }
+
+private:
+    static constexpr int displayCharacters = 8;
+    static constexpr int separatorCharacters = 3;
+    static constexpr int initialAndEndPauseMs = 900;
+    static constexpr int scrollStepMs = 300;
+
+    enum class Phase { initialPause, scrolling, endPause, wrapping };
+
+    juce::String visibleText() const
+    {
+        if (fullText.length() <= displayCharacters)
+            return fullText;
+
+        const auto loopText = fullText + juce::String::repeatedString(" ", separatorCharacters)
+                            + fullText;
+        return loopText.substring(scrollIndex, scrollIndex + displayCharacters);
+    }
+
+    void timerCallback() override
+    {
+        const int lastFullWindow = fullText.length() - displayCharacters;
+
+        if (phase == Phase::initialPause)
+        {
+            phase = Phase::scrolling;
+            startTimer(scrollStepMs);
+            return;
+        }
+
+        if (phase == Phase::endPause)
+        {
+            phase = Phase::wrapping;
+            startTimer(scrollStepMs);
+            return;
+        }
+
+        ++scrollIndex;
+        repaint();
+
+        if (phase == Phase::scrolling && scrollIndex >= lastFullWindow)
+        {
+            phase = Phase::endPause;
+            startTimer(initialAndEndPauseMs);
+        }
+        else if (phase == Phase::wrapping
+                 && scrollIndex >= fullText.length() + separatorCharacters)
+        {
+            scrollIndex = 0;
+            phase = Phase::initialPause;
+            startTimer(initialAndEndPauseMs);
+        }
+    }
+
+    juce::String fullText;
+    int scrollIndex = 0;
+    Phase phase = Phase::initialPause;
 };
 
 class MainComponent : public juce::AudioAppComponent,
@@ -77,6 +167,7 @@ public:
     void handleIncomingMidiMessage(juce::MidiInput* source, const juce::MidiMessage& message) override;
     void revealFxPedal(int pedalIndex);
     void focusFxPedalForSnapshot(int pedalIndex);
+    void setVst3DisplayTextForSnapshot(const juce::String& text);
     bool openSessionFile(const juce::File& sessionFile);
 
 private:
@@ -235,6 +326,7 @@ private:
     void updateOutputModeButton();
     void updateLoopEditButtons();
     void updateRhythmBoxReadouts();
+    void layoutVst3PedalControls(FXPedalComponent& pedal);
     void styleVstButton(juce::TextButton& button, juce::Colour accent);
     void loadExternalVst3Plugin();
     void unloadExternalVst3Plugin();

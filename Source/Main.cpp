@@ -15,7 +15,9 @@ namespace
     {
         bool enabled = false;
         juce::String outputPath;
-        int focusPedal = -1;
+        int focusPedal = -2;
+        int delayMs = 1500;
+        juce::String vstDisplayText;
         juce::File sessionFile;
     };
 
@@ -40,6 +42,15 @@ namespace
             else if (argument.startsWithIgnoreCase("--snapshot-fx="))
             {
                 request.focusPedal = argument.fromFirstOccurrenceOf("=", false, false).getIntValue();
+            }
+            else if (argument.startsWithIgnoreCase("--snapshot-delay="))
+            {
+                request.delayMs = juce::jlimit(100, 10000,
+                    argument.fromFirstOccurrenceOf("=", false, false).getIntValue());
+            }
+            else if (argument.startsWithIgnoreCase("--snapshot-vst-text="))
+            {
+                request.vstDisplayText = argument.fromFirstOccurrenceOf("=", false, false).unquoted();
             }
             else if (argument.endsWithIgnoreCase(".loopernico"))
             {
@@ -134,9 +145,13 @@ public:
                     });
             }
 
-            if (snapshotRequest.enabled && snapshotRequest.focusPedal >= 0)
+            if (snapshotRequest.enabled && snapshotRequest.focusPedal >= -1)
                 if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
                     main->focusFxPedalForSnapshot(snapshotRequest.focusPedal);
+
+            if (snapshotRequest.enabled && snapshotRequest.vstDisplayText.isNotEmpty())
+                if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
+                    main->setVst3DisplayTextForSnapshot(snapshotRequest.vstDisplayText);
 
            #if ! JUCE_IOS && ! JUCE_ANDROID
             // With JUCE's native Windows peer this maps to SW_SHOWMAXIMIZED: it uses
@@ -147,7 +162,7 @@ public:
            #endif
 
             if (snapshotRequest.enabled)
-                scheduleUiSnapshot(snapshotRequest.outputPath, true, 1500);
+                scheduleUiSnapshot(snapshotRequest.outputPath, true, snapshotRequest.delayMs);
         }
 
         void closeButtonPressed() override

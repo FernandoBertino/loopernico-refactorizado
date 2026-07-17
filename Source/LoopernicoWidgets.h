@@ -231,6 +231,7 @@ public:
     std::function<void(FXPedalComponent&, const juce::MouseEvent&)> onDragMove;
     std::function<void(FXPedalComponent&, const juce::MouseEvent&)> onDragEnd;
     std::function<void(FXPedalComponent&)> onZoomRequest;
+    std::function<void(FXPedalComponent&)> onResized;
 
     void mouseDown(const juce::MouseEvent& e) override
     {

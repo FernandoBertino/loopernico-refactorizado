@@ -660,11 +660,11 @@ const juce::Image& getPedalEnamelTexture(const juce::String& name)
     static const auto noiseGate = loadPedalTexture("Pedals/boss-ns2-noise-suppressor-face-v1.png");
     static const auto pampaFuzz = loadPedalTexture("Pedals/pampa-fuzz-face-v3.png");
     static const auto sunset = loadPedalTexture("Pedals/strymon-sunset-face-v2.png");
-    static const auto dedaloJet = loadPedalTexture("Pedals/dedalo-jet-compressor-face-v3.png");
+    static const auto dedaloJet = loadPedalTexture("Pedals/dedalo-jet-compressor-face-v4.png");
     static const auto dedaloTres = loadPedalTexture("Pedals/dedalo-tres-tremolo-face-v1.png");
     static const auto harmonizer = loadPedalTexture("Pedals/eventide-h90-harmonizer-face-v1.png");
     static const auto sustainGran = loadPedalTexture("Pedals/sustain-gran-piano-face-v1.png");
-    static const auto modelHost = loadPedalTexture("Pedals/model-host-face-v2.png");
+    static const auto modelHost = loadPedalTexture("Pedals/model-host-face-v3.png");
     static const auto tenBandEq = loadPedalTexture("Pedals/ten-band-eq-aluminum-face-v1.png");
     static const auto beatBuddy = loadPedalTexture("Pedals/singular-sound-beatbuddy-face-v2.png");
     static const auto smallClone = loadPedalTexture("Pedals/electro-harmonix-small-clone-face-v2.png");
@@ -1083,23 +1083,28 @@ void FXPedalComponent::paint(juce::Graphics& g)
 
     if (dedaloJetArtwork)
     {
-        const float centres[] = { 0.218f, 0.502f, 0.786f };
-        const juce::String topLabels[] = { "BLEND", "GAIN", "COMP" };
-        const juce::String bottomLabels[] = { "ATTACK", "RELEASE", "TONE" };
+        const float topCentres[] = { 0.143f, 0.497f, 0.851f };
+        const juce::String topLabels[] = { "BLEND", "COMP", "ATTACK" };
+        const float lowerCentres[] = { 0.323f, 0.675f };
+        const juce::String lowerLabels[] = { "GAIN", "TONE" };
         const float labelWidth = b.getWidth() * 0.245f;
-        const float topY = b.getY() + b.getHeight() * 0.300f;
-        const float bottomY = b.getY() + b.getHeight() * 0.592f;
+        const float topY = b.getY() + b.getHeight() * 0.325f;
+        const float lowerY = b.getY() + b.getHeight() * 0.575f;
 
         g.setColour(juce::Colour(0xff171411).withAlpha(0.94f));
-        g.setFont(juce::Font(juce::FontOptions(7.2f).withStyle("Bold")));
+        g.setFont(juce::Font(juce::FontOptions(juce::jmax(7.2f, b.getHeight() * 0.019f)).withStyle("Bold")));
         for (int i = 0; i < 3; ++i)
         {
-            const float cx = b.getX() + b.getWidth() * centres[i];
+            const float cx = b.getX() + b.getWidth() * topCentres[i];
             g.drawFittedText(topLabels[i],
-                             juce::Rectangle<float>(cx - labelWidth * 0.5f, topY, labelWidth, 11.0f).toNearestInt(),
+                             juce::Rectangle<float>(cx - labelWidth * 0.5f, topY, labelWidth, 15.0f).toNearestInt(),
                              juce::Justification::centred, 1, 0.80f);
-            g.drawFittedText(bottomLabels[i],
-                             juce::Rectangle<float>(cx - labelWidth * 0.5f, bottomY, labelWidth, 11.0f).toNearestInt(),
+        }
+        for (int i = 0; i < 2; ++i)
+        {
+            const float cx = b.getX() + b.getWidth() * lowerCentres[i];
+            g.drawFittedText(lowerLabels[i],
+                             juce::Rectangle<float>(cx - labelWidth * 0.5f, lowerY, labelWidth, 15.0f).toNearestInt(),
                              juce::Justification::centred, 1, 0.80f);
         }
     }
@@ -1535,6 +1540,9 @@ void FXPedalComponent::paint(juce::Graphics& g)
 
 void FXPedalComponent::resized()
 {
+    if (onResized)
+        onResized(*this);
+
     const float hardwareScale = getPedalHardwareScale(*this);
     const auto scaled = [hardwareScale](int compactPixels)
     {
@@ -1730,22 +1738,23 @@ void FXPedalComponent::resized()
         const int bodyTop = (getHeight() - bodyHeight) / 2;
         const int bodyLeft = 3;
         const int bodyWidth = getWidth() - 6;
-        const int knobSize = scaled(40);
-        const int topCY = bodyTop + juce::roundToInt(bodyHeight * 0.200f);
-        const int bottomCY = bodyTop + juce::roundToInt(bodyHeight * 0.486f);
-        const int leftCX = bodyLeft + juce::roundToInt(bodyWidth * 0.218f);
-        const int centreCX = bodyLeft + juce::roundToInt(bodyWidth * 0.502f);
-        const int rightCX = bodyLeft + juce::roundToInt(bodyWidth * 0.786f);
+        const int knobSize = scaled(50);
+        const int topCY = bodyTop + juce::roundToInt(bodyHeight * 0.195f);
+        const int lowerCY = bodyTop + juce::roundToInt(bodyHeight * 0.435f);
         auto placeKnob = [knobSize](juce::Slider& knob, int cx, int cy)
         {
             knob.setBounds(cx - knobSize / 2, cy - knobSize / 2, knobSize, knobSize);
         };
-        placeKnob(knob1, leftCX, topCY);
-        placeKnob(knob2, centreCX, topCY);
-        placeKnob(knob3, rightCX, topCY);
-        placeKnob(knob4, leftCX, bottomCY);
-        placeKnob(knob5, centreCX, bottomCY);
-        placeKnob(knob6, rightCX, bottomCY);
+        auto xAt = [bodyLeft, bodyWidth](float proportion)
+        {
+            return bodyLeft + juce::roundToInt(bodyWidth * proportion);
+        };
+        placeKnob(knob1, xAt(0.143f), topCY);   // BLEND
+        placeKnob(knob3, xAt(0.497f), topCY);   // COMP
+        placeKnob(knob4, xAt(0.851f), topCY);   // ATTACK
+        placeKnob(knob2, xAt(0.323f), lowerCY); // GAIN
+        placeKnob(knob6, xAt(0.675f), lowerCY); // TONE
+        knob5.setBounds(0, 0, 0, 0);            // JET 2 has a fixed release time.
         knob7.setBounds(0, 0, 0, 0);
         knob8.setBounds(0, 0, 0, 0);
         knob9.setBounds(0, 0, 0, 0);
