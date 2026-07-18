@@ -427,24 +427,6 @@ MainComponent::MainComponent()
     setupFXPedals();
     fxPedalFocusOverlay.onDismiss = [this]() { closeFxPedalFocus(); };
     addChildComponent(fxPedalFocusOverlay);
-    fxContainer.onPaint = [this](juce::Graphics& g)
-    {
-        juce::Array<FXPedalComponent*> chain;
-        if (vst3Pedal != nullptr && focusedFxPedalIndex != -1)
-            chain.add(vst3Pedal.get());
-        for (int slot = 0; slot < kNumFxPedals; ++slot)
-        {
-            const int pedalIndex = fxOrder[(size_t) slot];
-            if (pedalIndex != draggingFxPedal && pedalIndex != focusedFxPedalIndex
-                && fxPedals[pedalIndex] != nullptr)
-                chain.add(fxPedals[pedalIndex].get());
-        }
-        FXPedalboardWiring::CableStyle style;
-        style.sheath = juce::Colour(0xff111216);
-        style.thickness = 7.5f;
-        style.sag = 22.0f;
-        FXPedalboardWiring::drawChain(g, fxContainer, chain, style);
-    };
 
     // MIDI
     midiDeviceSelector.setTextWhenNoChoicesAvailable("No MIDI Devices");
@@ -3124,7 +3106,11 @@ void MainComponent::resized()
     auto patternBox = pedalArea->knob5.getBounds();
     auto modeBox = pedalArea->knob6.getBounds();
 
-    lblRhythmBpmValue.setBounds(styleBox.getX(), styleBox.getY() - 12, styleBox.getWidth(), 12);
+    const int bpmLabelHeight = juce::jmax(12, juce::roundToInt((float) styleBox.getHeight() * 0.65f));
+    const float bpmFontHeight = juce::jlimit(9.5f, 22.0f, (float) bpmLabelHeight * 0.72f);
+    lblRhythmBpmValue.setFont(juce::Font(juce::FontOptions(bpmFontHeight).withStyle("Bold")));
+    lblRhythmBpmValue.setBounds(styleBox.getX(), styleBox.getY() - bpmLabelHeight,
+                                styleBox.getWidth(), bpmLabelHeight);
     lblRhythmColorValue.setBounds(0, 0, 0, 0);
     lblRhythmStyle.setBounds(0, 0, 0, 0);
     lblRhythmPattern.setBounds(0, 0, 0, 0);

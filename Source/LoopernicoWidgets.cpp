@@ -597,6 +597,10 @@ juce::Point<float> FXPedalComponent::getJackCentre(JackSide side) const noexcept
 namespace
 {
 constexpr float kCompactPedalHeight = 236.0f;
+constexpr float kBeatBuddyScreenX = 0.090f;
+constexpr float kBeatBuddyScreenY = 0.285f;
+constexpr float kBeatBuddyScreenW = 0.820f;
+constexpr float kBeatBuddyScreenH = 0.212f;
 
 float getPedalHardwareScale(const juce::Component& pedal)
 {
@@ -666,7 +670,7 @@ const juce::Image& getPedalEnamelTexture(const juce::String& name)
     static const auto sustainGran = loadPedalTexture("Pedals/sustain-gran-piano-face-v1.png");
     static const auto modelHost = loadPedalTexture("Pedals/model-host-face-v3.png");
     static const auto tenBandEq = loadPedalTexture("Pedals/ten-band-eq-aluminum-face-v1.png");
-    static const auto beatBuddy = loadPedalTexture("Pedals/singular-sound-beatbuddy-face-v2.png");
+    static const auto beatBuddy = loadPedalTexture("Pedals/singular-sound-beatbuddy-face-v4.png");
     static const auto smallClone = loadPedalTexture("Pedals/electro-harmonix-small-clone-face-v2.png");
     static const auto bigSky = loadPedalTexture("Pedals/strymon-bigsky-mx-face-v3.png");
     static const auto timeLine = loadPedalTexture("Pedals/strymon-timeline-mx-face-v2.png");
@@ -889,7 +893,7 @@ void FXPedalComponent::paint(juce::Graphics& g)
     auto originalBody = b;
 
     const auto enamel = pedalCol.withMultipliedSaturation(0.68f).darker(0.08f);
-    if (!bossNoiseArtwork)
+    if (!bossNoiseArtwork && !beatBuddyArtwork)
     {
         g.setColour(juce::Colours::black.withAlpha(0.20f));
         g.fillRoundedRectangle(b.translated(0.0f, 7.0f).expanded(4.0f, 2.0f), 12.0f);
@@ -915,7 +919,7 @@ void FXPedalComponent::paint(juce::Graphics& g)
                     crop.getX(), crop.getY(), crop.getWidth(), crop.getHeight());
     }
 
-    if (!bossNoiseArtwork)
+    if (!bossNoiseArtwork && !beatBuddyArtwork)
     {
         // A cast aluminium enclosure: rolled top lip, darker side walls and a subtle centre sheen.
         g.setColour(enamel.brighter(0.42f).withAlpha(0.18f));
@@ -993,18 +997,6 @@ void FXPedalComponent::paint(juce::Graphics& g)
         g.drawText("DRAG", dragPlate.toNearestInt(), juce::Justification::centredRight);
     }
 
-    float sb = customArtwork ? b.getY() : getLocalBounds().toFloat().reduced(3.0f).getY();
-    const float screwBottom = customArtwork ? b.getBottom() : (float) getHeight();
-    float scrR = 4.2f;
-    if (!modelHostArtwork && !tenBandEqArtwork && !timeLineArtwork && !smallCloneArtwork && !beatBuddyArtwork
-        && !sunsetArtwork && !bossNoiseArtwork) // These faces already contain their enclosure hardware.
-    {
-        drawScrew(g, b.getX() + scrR + 2.0f, sb + scrR + 2.5f, scrR);
-        drawScrew(g, b.getRight() - scrR - 2.0f, sb + scrR + 2.5f, scrR);
-        drawScrew(g, b.getX() + scrR + 2.0f, screwBottom - scrR - 5.5f, scrR);
-        drawScrew(g, b.getRight() - scrR - 2.0f, screwBottom - scrR - 5.5f, scrR);
-    }
-
     if (modelHostArtwork)
     {
         const auto cyan = juce::Colour(0xff55dce5);
@@ -1058,36 +1050,28 @@ void FXPedalComponent::paint(juce::Graphics& g)
     if (beatBuddyArtwork)
     {
         const bool rhythmOn = onBtn.getToggleState();
-        const float screenY = b.getY() + b.getHeight() * 0.285f;
-        const float screenH = b.getHeight() * 0.225f;
-        auto screenOuter = juce::Rectangle<float>(b.getX() + b.getWidth() * 0.125f, screenY,
-                                                   b.getWidth() * 0.485f, screenH);
+        const float screenY = b.getY() + b.getHeight() * kBeatBuddyScreenY;
+        const float screenH = b.getHeight() * kBeatBuddyScreenH;
+        auto screenOuter = juce::Rectangle<float>(b.getX() + b.getWidth() * kBeatBuddyScreenX, screenY,
+                                                   b.getWidth() * kBeatBuddyScreenW, screenH);
+        const float screenScale = hardwareScale;
         g.setColour(juce::Colours::black.withAlpha(0.72f));
-        g.fillRoundedRectangle(screenOuter.translated(0.0f, 1.5f).expanded(1.2f), 3.5f);
+        g.fillRoundedRectangle(screenOuter.translated(0.0f, 1.5f * screenScale).expanded(1.2f * screenScale),
+                               3.5f * screenScale);
         g.setColour(juce::Colour(0xff050708));
-        g.fillRoundedRectangle(screenOuter, 2.5f);
+        g.fillRoundedRectangle(screenOuter, 2.5f * screenScale);
         juce::ColourGradient glass(rhythmOn ? juce::Colour(0xff24482d) : juce::Colour(0xff17221b),
                                    screenOuter.getX(), screenOuter.getY(),
                                    juce::Colour(0xff07110a), screenOuter.getX(), screenOuter.getBottom(), false);
         g.setGradientFill(glass);
-        g.fillRoundedRectangle(screenOuter.reduced(1.5f), 1.8f);
+        g.fillRoundedRectangle(screenOuter.reduced(1.5f * screenScale), 1.8f * screenScale);
         g.setColour(juce::Colours::white.withAlpha(0.11f));
-        g.fillRoundedRectangle(screenOuter.reduced(2.0f).withHeight(screenH * 0.16f), 1.5f);
+        g.fillRoundedRectangle(screenOuter.reduced(2.0f * screenScale).withHeight(screenH * 0.16f),
+                               1.5f * screenScale);
         g.setColour(juce::Colour(0xff88d785).withAlpha(0.38f));
-        g.drawRoundedRectangle(screenOuter.reduced(1.5f), 2.0f, 0.7f);
+        g.drawRoundedRectangle(screenOuter.reduced(1.5f * screenScale), 2.0f * screenScale,
+                               0.7f * screenScale);
 
-        // BeatBuddy status lamps remain dynamic: left follows playback, right shows a queued/pressed part change.
-        const float lampY = b.getY() + b.getHeight() * 0.525f;
-        drawLedLens(g, b.getX() + b.getWidth() * 0.205f, lampY, 2.1f,
-                    juce::Colour(0xff6de66f), rhythmOn);
-        drawLedLens(g, b.getX() + b.getWidth() * 0.515f, lampY, 2.1f,
-                    juce::Colour(0xffffb64a), secondaryFootswitchDown);
-        g.setColour(juce::Colour(0xffd6b76b).withAlpha(0.90f));
-        g.setFont(juce::Font(juce::FontOptions(5.4f).withStyle("Bold")));
-        g.drawText("FILL", juce::Rectangle<float>(b.getX() + b.getWidth() * 0.13f, lampY + 3.0f,
-                                                   b.getWidth() * 0.15f, 8.0f), juce::Justification::centred);
-        g.drawText("PAUSE", juce::Rectangle<float>(b.getX() + b.getWidth() * 0.43f, lampY + 3.0f,
-                                                    b.getWidth() * 0.18f, 8.0f), juce::Justification::centred);
     }
 
     if (dedaloJetArtwork)
@@ -1402,14 +1386,19 @@ void FXPedalComponent::paint(juce::Graphics& g)
     bool on = onBtn.getToggleState();
     if (beatBuddyArtwork)
     {
+        constexpr float switchCentres[] = { 0.205f, 0.500f, 0.795f };
+        constexpr const char* switchLabels[] = { "START", "NEXT", "TAP" };
         const auto brightGold = juce::Colour(0xffffd77a);
-        const float tapCX = b.getX() + b.getWidth() * 0.755f;
-        const float tapCY = b.getY() + b.getHeight() * 0.380f;
+        const float switchCY = b.getY() + b.getHeight() * 0.805f;
         g.setColour(brightGold.withAlpha(0.95f));
-        g.setFont(juce::Font(juce::FontOptions(7.4f).withStyle("Bold")));
-        g.drawText("TAP", juce::roundToInt(tapCX - b.getWidth() * 0.09f),
-                   juce::roundToInt(tapCY - b.getWidth() * 0.13f),
-                   juce::roundToInt(b.getWidth() * 0.18f), 10, juce::Justification::centred);
+        g.setFont(juce::Font(juce::FontOptions(6.8f).withStyle("Bold")));
+        for (int i = 0; i < 3; ++i)
+        {
+            const float switchCX = b.getX() + b.getWidth() * switchCentres[i];
+            g.drawText(switchLabels[i], juce::roundToInt(switchCX - b.getWidth() * 0.12f),
+                       juce::roundToInt(switchCY - b.getWidth() * 0.15f),
+                       juce::roundToInt(b.getWidth() * 0.24f), 10, juce::Justification::centred);
+        }
     }
 
     if (dedaloTresArtwork)
@@ -1461,35 +1450,6 @@ void FXPedalComponent::paint(juce::Graphics& g)
     }
     }
 
-    auto drawJack = [&](float jx, float jy)
-    {
-        g.setColour(juce::Colours::black.withAlpha(0.80f));
-        g.fillEllipse(jx - 8.0f, jy - 8.0f, 16.0f, 16.0f);
-        juce::ColourGradient jGrad(
-            juce::Colour(0xff666677), jx - 5.0f, jy - 5.0f,
-            juce::Colour(0xff2a2a36), jx + 3.0f, jy + 4.0f, true);
-        g.setGradientFill(jGrad);
-        g.drawEllipse(jx - 7.5f, jy - 7.5f, 15.0f, 15.0f, 2.5f);
-        g.setColour(juce::Colour(0xff080810));
-        g.fillEllipse(jx - 3.5f, jy - 3.5f, 7.0f, 7.0f);
-        g.setColour(juce::Colour(0xff444455));
-        g.drawEllipse(jx - 3.5f, jy - 3.5f, 7.0f, 7.0f, 0.8f);
-        g.setColour(juce::Colours::white.withAlpha(0.18f));
-        g.fillEllipse(jx - 5.5f, jy - 7.0f, 4.5f, 2.5f);
-    };
-    if (!smallCloneArtwork && !beatBuddyArtwork && !bossNoiseArtwork)
-    {
-        auto outJack = getJackCentre(JackSide::output);
-        auto inJack = getJackCentre(JackSide::input);
-        drawJack(outJack.x, outJack.y);
-        drawJack(inJack.x, inJack.y);
-
-        g.setColour(juce::Colours::white.withAlpha(0.46f));
-        g.setFont(juce::Font(juce::FontOptions(6.5f).withStyle("Bold")));
-        g.drawText("OUT", 7, (int)outJack.y - 15, 22, 9, juce::Justification::centredLeft);
-        g.drawText("IN", getWidth() - 29, (int)inJack.y - 15, 22, 9, juce::Justification::centredRight);
-    }
-
     // The H90 footswitches are part of its photorealistic face texture. Every
     // other round stomp switch uses the same rasterized steel hardware so the
     // visual changes do not alter hit areas, callbacks or MIDI assignments.
@@ -1505,8 +1465,8 @@ void FXPedalComponent::paint(juce::Graphics& g)
         {
             const float size = b.getWidth() * 0.18f;
             drawAt(0.205f, 0.805f, size, on);
-            drawAt(0.795f, 0.805f, size, secondaryFootswitchDown);
-            drawAt(0.755f, 0.380f, size, false);
+            drawAt(0.500f, 0.805f, size, secondaryFootswitchDown);
+            drawAt(0.795f, 0.805f, size, false);
         }
         else if (sunsetArtwork)
         {
@@ -1599,9 +1559,11 @@ void FXPedalComponent::resized()
         const int bodyTop = (getHeight() - bodyHeight) / 2;
         const int bodyWidth = juce::jmin(getWidth() - 6, juce::roundToInt((float) bodyHeight * aspect));
         const int bodyLeft = (getWidth() - bodyWidth) / 2;
-        const int knobSize = juce::roundToInt((float) bodyWidth * 0.245f);
-        const int knobCY = bodyTop + juce::roundToInt(bodyHeight * 0.150f);
-        const float knobCentres[] = { 0.185f, 0.500f, 0.820f };
+        // The raster is intentionally control-free. Place the complete native knobs
+        // over the printed labels using the same crop coordinates as paint().
+        const int knobSize = juce::roundToInt((float) bodyWidth * 0.150f);
+        const int knobCY = bodyTop + juce::roundToInt(bodyHeight * 0.121f);
+        const float knobCentres[] = { 0.160f, 0.500f, 0.840f };
         juce::Slider* topKnobs[] = { &knob1, &knob2, &knob3 };
         for (int i = 0; i < 3; ++i)
         {
@@ -1610,8 +1572,9 @@ void FXPedalComponent::resized()
         }
 
         // Invisible layout anchors used by MainComponent for the interactive screen controls.
-        const int screenX = bodyLeft + juce::roundToInt(bodyWidth * 0.135f);
-        const int screenW = juce::roundToInt(bodyWidth * 0.465f);
+        // Keep a small inset from the full-width glass rectangle defined above.
+        const int screenX = bodyLeft + juce::roundToInt(bodyWidth * (kBeatBuddyScreenX + 0.012f));
+        const int screenW = juce::roundToInt(bodyWidth * (kBeatBuddyScreenW - 0.024f));
         const int screenY = bodyTop + juce::roundToInt(bodyHeight * 0.340f);
         const int controlH = juce::jmax(12, juce::roundToInt(bodyHeight * 0.058f));
         knob4.setBounds(screenX, screenY, screenW, controlH);

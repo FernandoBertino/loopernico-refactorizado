@@ -380,10 +380,10 @@ public:
 
             const auto leftFoot = juce::Point<float>(body.getX() + body.getWidth() * 0.205f,
                                                       body.getY() + body.getHeight() * 0.805f);
-            const auto rightFoot = juce::Point<float>(body.getX() + body.getWidth() * 0.795f,
+            const auto middleFoot = juce::Point<float>(body.getX() + body.getWidth() * 0.500f,
                                                        body.getY() + body.getHeight() * 0.805f);
-            const auto tap = juce::Point<float>(body.getX() + body.getWidth() * 0.755f,
-                                                 body.getY() + body.getHeight() * 0.380f);
+            const auto tap = juce::Point<float>(body.getX() + body.getWidth() * 0.795f,
+                                                 body.getY() + body.getHeight() * 0.805f);
             const float switchRadius = body.getWidth() * 0.13f;
 
             if (isInsideCircle(leftFoot, switchRadius))
@@ -393,7 +393,7 @@ public:
                 return;
             }
 
-            if (isInsideCircle(rightFoot, switchRadius))
+            if (isInsideCircle(middleFoot, switchRadius))
             {
                 secondaryFootswitchDown = true;
                 if (onSecondaryFootswitch)

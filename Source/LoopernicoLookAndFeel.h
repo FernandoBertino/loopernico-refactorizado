@@ -256,46 +256,44 @@ public:
         if (slider.getComponentID() == "beatBuddyKnob")
         {
             const float angle = startAngle + pos * (endAngle - startAngle);
-            const float r = radius * 0.92f;
-            const auto gold = juce::Colour(0xffd6a144);
+            const float bezelR = juce::jmin((float) w, (float) h) * 0.46f;
+            const float recessR = bezelR * 0.78f;
+            const float r = bezelR * 0.58f;
 
-            g.setColour(juce::Colours::black.withAlpha(0.60f));
-            g.fillEllipse(centre.x - r - 2.0f, centre.y - r + 2.8f,
-                          (r + 2.0f) * 2.0f, (r + 2.0f) * 2.0f);
-            juce::ColourGradient metal(juce::Colour(0xffffd879), centre.x - r * 0.58f, centre.y - r * 0.68f,
-                                       juce::Colour(0xff67400b), centre.x + r * 0.60f, centre.y + r * 0.64f, true);
-            metal.addColour(0.48, gold);
-            g.setGradientFill(metal);
-            g.fillEllipse(centre.x - r, centre.y - r, r * 2.0f, r * 2.0f);
-            g.setColour(juce::Colours::black.withAlpha(0.68f));
-            g.fillEllipse(centre.x - r * 0.79f, centre.y - r * 0.79f,
-                          r * 1.58f, r * 1.58f);
+            g.setColour(juce::Colours::black.withAlpha(0.58f));
+            g.fillEllipse(centre.x - bezelR - 1.2f, centre.y - bezelR + 1.8f,
+                          bezelR * 2.0f + 2.4f, bezelR * 2.0f + 2.4f);
+            juce::ColourGradient bezel(juce::Colour(0xffffe4a6), centre.x - bezelR * 0.58f,
+                                       centre.y - bezelR * 0.72f, juce::Colour(0xff7c551f),
+                                       centre.x + bezelR * 0.62f, centre.y + bezelR * 0.70f, true);
+            bezel.addColour(0.48, juce::Colour(0xffd7aa55));
+            g.setGradientFill(bezel);
+            g.fillEllipse(centre.x - bezelR, centre.y - bezelR, bezelR * 2.0f, bezelR * 2.0f);
+            g.setColour(juce::Colour(0xff171716));
+            g.fillEllipse(centre.x - recessR, centre.y - recessR, recessR * 2.0f, recessR * 2.0f);
+            g.setColour(juce::Colours::black.withAlpha(0.78f));
+            g.drawEllipse(centre.x - recessR, centre.y - recessR, recessR * 2.0f, recessR * 2.0f,
+                          juce::jmax(0.7f, bezelR * 0.07f));
 
-            for (int i = 0; i < 30; ++i)
-            {
-                const float a = juce::MathConstants<float>::twoPi * (float) i / 30.0f;
-                const auto p1 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * (r * 0.68f);
-                const auto p2 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * (r * 0.79f);
-                g.setColour(juce::Colours::white.withAlpha(i % 2 == 0 ? 0.18f : 0.08f));
-                g.drawLine({ p1, p2 }, 0.9f);
-            }
-
-            juce::ColourGradient cap(juce::Colour(0xff505152), centre.x - r * 0.45f, centre.y - r * 0.55f,
-                                     juce::Colour(0xff08090a), centre.x + r * 0.42f, centre.y + r * 0.50f, true);
-            cap.addColour(0.46, juce::Colour(0xff252627));
+            juce::ColourGradient cap(juce::Colour(0xff5c5e61), centre.x - r * 0.48f, centre.y - r * 0.58f,
+                                     juce::Colour(0xff070809), centre.x + r * 0.46f, centre.y + r * 0.54f, true);
+            cap.addColour(0.44, juce::Colour(0xff242628));
             g.setGradientFill(cap);
-            g.fillEllipse(centre.x - r * 0.66f, centre.y - r * 0.66f,
-                          r * 1.32f, r * 1.32f);
-            g.setColour(juce::Colours::white.withAlpha(0.13f));
-            g.fillEllipse(centre.x - r * 0.38f, centre.y - r * 0.50f,
-                          r * 0.60f, r * 0.18f);
+            g.fillEllipse(centre.x - r, centre.y - r, r * 2.0f, r * 2.0f);
+            g.setColour(juce::Colours::black.withAlpha(0.70f));
+            g.drawEllipse(centre.x - r, centre.y - r, r * 2.0f, r * 2.0f,
+                          juce::jmax(0.7f, r * 0.08f));
+            g.setColour(juce::Colours::white.withAlpha(0.12f));
+            g.fillEllipse(centre.x - r * 0.55f, centre.y - r * 0.66f,
+                          r * 0.88f, r * 0.22f);
 
-            const auto markerStart = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.20f);
-            const auto markerEnd = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.58f);
+            const auto markerStart = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.18f);
+            const auto markerEnd = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.72f);
             g.setColour(juce::Colours::black.withAlpha(0.72f));
-            g.drawLine({ markerStart.translated(1.0f, 1.0f), markerEnd.translated(1.0f, 1.0f) }, 3.0f);
+            g.drawLine({ markerStart.translated(0.7f, 0.8f), markerEnd.translated(0.7f, 0.8f) },
+                       juce::jmax(1.4f, r * 0.25f));
             g.setColour(juce::Colour(0xffffe6ae));
-            g.drawLine({ markerStart, markerEnd }, 2.1f);
+            g.drawLine({ markerStart, markerEnd }, juce::jmax(1.0f, r * 0.16f));
             return;
         }
 
@@ -796,7 +794,10 @@ public:
     juce::Font getComboBoxFont(juce::ComboBox& box) override
     {
         if (box.getComponentID() == "rhythmScreenCombo")
-            return juce::Font(juce::FontOptions(7.2f).withStyle("Bold"));
+        {
+            const float fontHeight = juce::jlimit(7.2f, 19.0f, (float) box.getHeight() * 0.55f);
+            return juce::Font(juce::FontOptions(fontHeight).withStyle("Bold"));
+        }
         return juce::Font(juce::FontOptions(11.5f));
     }
 
