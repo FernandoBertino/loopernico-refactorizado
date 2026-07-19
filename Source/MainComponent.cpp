@@ -275,7 +275,7 @@ bool MainComponent::FXPedalFocusOverlay::keyPressed(const juce::KeyPress& key)
     return false;
 }
 
-MainComponent::MainComponent()
+MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
 {
     setLookAndFeel(&lnf);
     formatManager.registerBasicFormats();
@@ -376,6 +376,8 @@ MainComponent::MainComponent()
 
     btnRecConfirm.onClick = [this]() {
         auto prev = looper.getState();
+        if (prev == LooperEngine::State::Stopped || prev == LooperEngine::State::ArmedBase)
+            looper.setBaseRecordingUsesTimingReference(effectsChain.isRhythmEnabled());
         int  tIdx = (prev == LooperEngine::State::RecordingBase) ? 0 : looper.getTotalTracks()-1;
         looper.recConfirm();
         if ((prev == LooperEngine::State::RecordingBase || prev == LooperEngine::State::RecordingLayer)
@@ -419,10 +421,18 @@ MainComponent::MainComponent()
     btnLoadSession.onClick = [this]() { loadSessionFromFile(); };
     btnExportMix.onClick = [this]() { exportMixToFile(); };
     btnExportTracks.onClick = [this]() { exportTracksToFolder(); };
+    btnAudioSettings.onClick = [this]() { showAudioSettings(); };
+    styleHeaderButton(btnAudioSettings, LnfC::Accent);
     addAndMakeVisible(btnSaveSession);
     addAndMakeVisible(btnLoadSession);
     addAndMakeVisible(btnExportMix);
     addAndMakeVisible(btnExportTracks);
+    addAndMakeVisible(btnAudioSettings);
+
+    lblAudioStatus.setFont(juce::Font(juce::FontOptions(10.5f).withStyle("Bold")));
+    lblAudioStatus.setColour(juce::Label::textColourId, LnfC::TextDim);
+    lblAudioStatus.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(lblAudioStatus);
 
     setupFXPedals();
     fxPedalFocusOverlay.onDismiss = [this]() { closeFxPedalFocus(); };
@@ -779,8 +789,27 @@ MainComponent::MainComponent()
     });
 
     setSize(1600, 960);
-    setAudioChannels(2, 2);
-    optimiseAudioDeviceForLowLatency();
+    const auto audioInitialisation = audioDeviceController.initialise(forceAudioFallbackForDiagnostics);
+    deviceManager.addChangeListener(this);
+    audioSourcePlayer.setSource(this);
+    deviceManager.addAudioCallback(&audioSourcePlayer);
+
+    audioSettingsPanel = std::make_unique<AudioSettingsPanel>(audioDeviceController);
+    audioSettingsPanel->onClose = [this]() { closeAudioSettings(); };
+    audioSettingsPanel->onConfigurationChanged = [this]()
+    {
+        updateRecordingLatencyCompensation();
+        updateAudioStatusUi();
+    };
+    addChildComponent(audioSettingsPanel.get());
+    updateRecordingLatencyCompensation();
+    updateAudioStatusUi();
+
+    if (audioInitialisation.usingFallback || !audioInitialisation.audioAvailable)
+    {
+        lblMidiStatus.setText(audioInitialisation.message, juce::dontSendNotification);
+        lblMidiStatus.setColour(juce::Label::textColourId, LnfC::OvdAmber);
+    }
     midiDeviceListConnection = juce::MidiDeviceListConnection::make(
         [safeThis = juce::Component::SafePointer<MainComponent>(this)]()
         {
@@ -1689,7 +1718,9 @@ void MainComponent::updateExternalVstUi()
     if (!hasPlugin)
         lblVst3Status.setDisplayText("SIN VST");
     else if (pluginEnabled)
-        lblVst3Status.setDisplayText(pluginName);
+        lblVst3Status.setDisplayText(pluginName + " / LAT "
+                                     + juce::String(effectsChain.getActiveExternalPluginLatencySamples())
+                                     + " SMP");
     else
         lblVst3Status.setDisplayText("BYPASS - " + pluginName);
 
@@ -1700,12 +1731,14 @@ void MainComponent::updateExternalVstUi()
     lblVst3Status.setColour(juce::Label::outlineColourId,
                             (pluginEnabled ? juce::Colour(0xff55dce5)
                                            : LnfC::OvdAmber).withAlpha(hasPlugin ? 0.52f : 0.20f));
+    updateRecordingLatencyCompensation();
 }
 
 bool MainComponent::captureLooperSnapshotIncrementally(LooperEngine::SessionSnapshot& snapshot,
                                                        juce::String& errorMessage)
 {
-    constexpr int kChunkSamplesPerChannel = 4096;
+    // Keep each callback-lock hold comfortably below a 64/128-sample period.
+    constexpr int kChunkSamplesPerChannel = 1024;
     constexpr int kMaxAttempts = 3;
 
     for (int attempt = 0; attempt < kMaxAttempts; ++attempt)
@@ -1775,37 +1808,8 @@ void MainComponent::saveSessionToFile()
         if (!selectedFile.hasFileExtension("loopernico"))
             selectedFile = selectedFile.withFileExtension(".loopernico");
 
-        LooperEngine::SessionSnapshot looperSnapshot;
-        juce::MemoryBlock vstState;
-        juce::String snapshotError;
-        if (!captureLooperSnapshotIncrementally(looperSnapshot, snapshotError))
-        {
-            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
-                                                   "No se pudo capturar la sesion",
-                                                   snapshotError);
-            return;
-        }
-
-        juce::AudioPluginInstance* suspendedPlugin = nullptr;
-        {
-            const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
-            suspendedPlugin = effectsChain.getExternalPluginInstance();
-            if (suspendedPlugin != nullptr)
-                suspendedPlugin->suspendProcessing(true);
-        }
-
-        effectsChain.copyExternalPluginState(vstState);
-
-        if (suspendedPlugin != nullptr)
-        {
-            const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
-            if (effectsChain.getExternalPluginInstance() == suspendedPlugin)
-                suspendedPlugin->suspendProcessing(false);
-        }
-
-        const auto sessionTree = createSessionTree(looperSnapshot, vstState);
         juce::String errorMessage;
-        if (!SessionManager::writeSessionFile(selectedFile, sessionTree, looperSnapshot, vstState, errorMessage))
+        if (!saveCurrentSessionToFile(selectedFile, errorMessage))
         {
             juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                    "No se pudo guardar",
@@ -1817,6 +1821,46 @@ void MainComponent::saveSessionToFile()
                               juce::dontSendNotification);
         lblMidiStatus.setColour(juce::Label::textColourId, LnfC::PlayGreen);
     });
+}
+
+bool MainComponent::saveCurrentSessionToFile(const juce::File& sessionFile,
+                                             juce::String& errorMessage)
+{
+    LooperEngine::SessionSnapshot looperSnapshot;
+    juce::MemoryBlock vstState;
+    if (!captureLooperSnapshotIncrementally(looperSnapshot, errorMessage))
+        return false;
+
+    juce::AudioPluginInstance* suspendedPlugin = nullptr;
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        suspendedPlugin = effectsChain.getExternalPluginInstance();
+        if (suspendedPlugin != nullptr)
+            suspendedPlugin->suspendProcessing(true);
+    }
+
+    effectsChain.copyExternalPluginState(vstState);
+
+    if (suspendedPlugin != nullptr)
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        if (effectsChain.getExternalPluginInstance() == suspendedPlugin)
+            suspendedPlugin->suspendProcessing(false);
+    }
+
+    const auto sessionTree = createSessionTree(looperSnapshot, vstState);
+    return SessionManager::writeSessionFile(sessionFile, sessionTree,
+                                            looperSnapshot, vstState, errorMessage);
+}
+
+bool MainComponent::saveSessionFileForSnapshot(const juce::File& sessionFile,
+                                               juce::String& errorMessage)
+{
+    const bool saved = saveCurrentSessionToFile(sessionFile, errorMessage);
+    audioDeviceController.log(saved
+        ? "Diagnostico de guardado durante reproduccion correcto: " + sessionFile.getFullPathName()
+        : "Diagnostico de guardado fallo: " + errorMessage);
+    return saved;
 }
 
 void MainComponent::loadSessionFromFile()
@@ -2482,12 +2526,16 @@ void MainComponent::markMidiConfigurationDirty()
 MainComponent::~MainComponent()
 {
     stopTimer();
+    deviceManager.removeChangeListener(this);
     midiDeviceListConnection.reset();
     closeExternalVst3Editor();
     setLookAndFeel(nullptr);
     auto devices = juce::MidiInput::getAvailableDevices();
     for (auto& d : devices) deviceManager.removeMidiInputDeviceCallback(d.identifier, this);
-    shutdownAudio();
+    deviceManager.removeAudioCallback(&audioSourcePlayer);
+    audioSourcePlayer.setSource(nullptr);
+    deviceManager.closeAudioDevice();
+    audioDeviceController.flushPendingSettings();
 }
 
 // ============================================================================
@@ -2496,7 +2544,11 @@ MainComponent::~MainComponent()
 void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
 {
     looper.prepare(sampleRate, samplesPerBlockExpected, formatManager);
-        effectsChain.prepare(sampleRate, samplesPerBlockExpected);
+    effectsChain.prepare(sampleRate, samplesPerBlockExpected);
+    processedInputBuffer.setSize(2, juce::jmax(16, samplesPerBlockExpected), false, true, false);
+    rhythmMonitorBuffer.setSize(2, juce::jmax(16, samplesPerBlockExpected), false, true, false);
+    processedInputBuffer.clear();
+    rhythmMonitorBuffer.clear();
     for (int i = 0; i < (int)visualTracks.size(); ++i)
         visualTracks[i]->setThumbnailPointer(looper.getTrackThumbnail(i));
 }
@@ -2505,37 +2557,79 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buf)
 {
     if (!buf.buffer) return;
     const bool monoOutput = outputMono.load(std::memory_order_relaxed);
-    for (int ch = 2; ch < buf.buffer->getNumChannels(); ++ch)
-        buf.buffer->clear(ch, buf.startSample, buf.numSamples);
+    const int outputChannels = juce::jmin(2, buf.buffer->getNumChannels());
+    if (buf.numSamples <= 0 || outputChannels <= 0
+        || processedInputBuffer.getNumChannels() < 2
+        || rhythmMonitorBuffer.getNumChannels() < 2
+        || processedInputBuffer.getNumSamples() < buf.numSamples
+        || rhythmMonitorBuffer.getNumSamples() < buf.numSamples)
+    {
+        buf.clearActiveBufferRegion();
+        return;
+    }
+
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        if (ch < buf.buffer->getNumChannels())
+            processedInputBuffer.copyFrom(ch, 0, *buf.buffer, ch, buf.startSample, buf.numSamples);
+        else
+            processedInputBuffer.clear(ch, 0, buf.numSamples);
+    }
+    rhythmMonitorBuffer.clear(0, buf.numSamples);
 
     {
         float peak = 0.0f;
-        for (int ch = 0; ch < juce::jmin(2, buf.buffer->getNumChannels()); ++ch) {
-            auto* d = buf.buffer->getReadPointer(ch, buf.startSample);
+        for (int ch = 0; ch < outputChannels; ++ch) {
+            auto* d = processedInputBuffer.getReadPointer(ch);
             for (int i = 0; i < buf.numSamples; ++i) peak = std::max(peak, std::abs(d[i]));
         }
         float prev = inputVU.load(std::memory_order_relaxed);
         if (peak > prev) inputVU.store(peak, std::memory_order_relaxed);
     }
 
-    effectsChain.processBlock(*buf.buffer, buf.startSample, buf.numSamples);
+    effectsChain.processBlock(processedInputBuffer, rhythmMonitorBuffer, 0, buf.numSamples);
 
-    if (monoOutput && buf.buffer->getNumChannels() > 1)
+    if (monoOutput)
     {
-        auto* left  = buf.buffer->getWritePointer(0, buf.startSample);
-        auto* right = buf.buffer->getWritePointer(1, buf.startSample);
+        auto* inputLeft = processedInputBuffer.getWritePointer(0);
+        auto* inputRight = processedInputBuffer.getWritePointer(1);
+        auto* rhythmLeft = rhythmMonitorBuffer.getWritePointer(0);
+        auto* rhythmRight = rhythmMonitorBuffer.getWritePointer(1);
         for (int i = 0; i < buf.numSamples; ++i)
         {
-            const float mono = 0.5f * (left[i] + right[i]);
-            left[i] = mono;
-            right[i] = mono;
+            const float monoInput = 0.5f * (inputLeft[i] + inputRight[i]);
+            inputLeft[i] = inputRight[i] = monoInput;
+            const float monoRhythm = 0.5f * (rhythmLeft[i] + rhythmRight[i]);
+            rhythmLeft[i] = rhythmRight[i] = monoRhythm;
         }
     }
 
-    looper.processBlock(*buf.buffer, buf.startSample, buf.numSamples,
-                        masterVolume.load(std::memory_order_relaxed), monoOutput);
+    // El rhythm se conserva en un bus independiente durante los efectos para
+    // poder monitorearlo aun usando DIRECT, pero debe formar parte de la senal
+    // que recibe y graba el looper.
+    LoopernicoLatency::addRhythmToRecordableBuffer(processedInputBuffer,
+                                                   rhythmMonitorBuffer,
+                                                   0, buf.numSamples);
 
-    if (monoOutput && buf.buffer->getNumChannels() > 1)
+    buf.clearActiveBufferRegion();
+    const bool monitorInput = audioDeviceController.isSoftwareInputMonitoringEnabled()
+                           && !effectsChain.isRhythmSoloMode();
+    looper.processBlock(processedInputBuffer, 0, *buf.buffer, buf.startSample,
+                        buf.numSamples, monitorInput, monoOutput);
+
+    const float master = masterVolume.load(std::memory_order_relaxed);
+    for (int ch = 0; ch < outputChannels; ++ch)
+    {
+        auto* output = buf.buffer->getWritePointer(ch, buf.startSample);
+        const auto* rhythm = rhythmMonitorBuffer.getReadPointer(ch);
+        for (int i = 0; i < buf.numSamples; ++i)
+            output[i] = LoopernicoLatency::mixOutputSample(
+                output[i],
+                LoopernicoLatency::separateRhythmMonitorSample(rhythm[i], monitorInput),
+                master);
+    }
+
+    if (monoOutput && outputChannels > 1)
     {
         auto* left  = buf.buffer->getWritePointer(0, buf.startSample);
         auto* right = buf.buffer->getWritePointer(1, buf.startSample);
@@ -2568,34 +2662,146 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buf)
 
 void MainComponent::releaseResources() { looper.releaseResources(); effectsChain.reset(); }
 
-void MainComponent::optimiseAudioDeviceForLowLatency()
+void MainComponent::changeListenerCallback(juce::ChangeBroadcaster* source)
 {
-    auto* device = deviceManager.getCurrentAudioDevice();
-    if (device == nullptr)
+    if (source != &deviceManager)
         return;
 
-    auto availableBufferSizes = device->getAvailableBufferSizes();
-    if (availableBufferSizes.isEmpty())
+    audioDeviceController.handleDeviceManagerChange();
+    updateRecordingLatencyCompensation();
+    updateAudioStatusUi();
+}
+
+void MainComponent::showAudioSettings()
+{
+    if (audioSettingsPanel == nullptr)
         return;
 
-    int preferredBufferSize = availableBufferSizes.getLast();
-    for (int candidate : { 64, 128, 256 })
+    closeFxPedalFocus();
+    audioSettingsPanel->setBounds(getLocalBounds());
+    audioSettingsPanel->refresh(effectsChain.getActiveExternalPluginLatencySamples());
+    audioSettingsPanel->setVisible(true);
+    audioSettingsPanel->toFront(true);
+    audioSettingsPanel->grabKeyboardFocus();
+}
+
+void MainComponent::showAudioSettingsForSnapshot()
+{
+    showAudioSettings();
+}
+
+bool MainComponent::setAudioBufferForSnapshot(int bufferSamples)
+{
+    if (bufferSamples <= 0 || deviceManager.getCurrentAudioDevice() == nullptr)
+        return false;
+
+    auto setup = deviceManager.getAudioDeviceSetup();
+    setup.bufferSize = bufferSamples;
+    const auto error = deviceManager.setAudioDeviceSetup(setup, true);
+    audioDeviceController.handleDeviceManagerChange();
+    updateRecordingLatencyCompensation();
+    updateAudioStatusUi();
+    if (error.isNotEmpty())
     {
-        if (availableBufferSizes.contains(candidate))
-        {
-            preferredBufferSize = candidate;
-            break;
-        }
+        audioDeviceController.log("Diagnostico de buffer " + juce::String(bufferSamples)
+                                  + " fallo: " + error);
+        return false;
     }
 
-    juce::AudioDeviceManager::AudioDeviceSetup setup;
-    deviceManager.getAudioDeviceSetup(setup);
+    deviceManager.sendSynchronousChangeMessage();
+    audioDeviceController.log("Diagnostico de buffer solicitado: " + juce::String(bufferSamples));
+    return true;
+}
 
-    if (setup.bufferSize == preferredBufferSize)
+void MainComponent::setSoftwareInputMonitoringForSnapshot(bool enabled)
+{
+    audioDeviceController.setSoftwareInputMonitoringEnabled(enabled);
+    updateAudioStatusUi();
+}
+
+bool MainComponent::loadExternalVst3ForSnapshot(const juce::File& pluginFile, bool enabled)
+{
+    EffectsChain::PreparedExternalPlugin candidate;
+    juce::String error;
+    if (!effectsChain.prepareExternalVst3(pluginFile, candidate, error))
+    {
+        lblVst3Status.setDisplayText(error);
+        audioDeviceController.log("Diagnostico VST3 fallo: " + error);
+        return false;
+    }
+
+    EffectsChain::PreparedExternalPlugin retired;
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        retired = effectsChain.commitExternalPlugin(std::move(candidate));
+        effectsChain.setExternalPluginEnabled(enabled);
+    }
+    updateExternalVstUi();
+    audioDeviceController.log("Diagnostico VST3 activo: " + effectsChain.getExternalPluginName()
+                              + ", latencia="
+                              + juce::String(effectsChain.getActiveExternalPluginLatencySamples()));
+    return true;
+}
+
+void MainComponent::closeAudioSettings()
+{
+    if (audioSettingsPanel != nullptr)
+        audioSettingsPanel->setVisible(false);
+}
+
+void MainComponent::updateRecordingLatencyCompensation()
+{
+    const auto status = audioDeviceController.getStatus();
+    LoopernicoLatency::Breakdown latency;
+    latency.inputSamples = status.inputLatencySamples;
+    latency.outputSamples = status.outputLatencySamples;
+    latency.pluginSamples = effectsChain.getActiveExternalPluginLatencySamples();
+    latency.calibrationSamples = status.manualCalibrationSamples;
+    looper.setRecordingCompensationSamples(latency.effectiveSamples());
+}
+
+void MainComponent::updateAudioStatusUi()
+{
+    const auto status = audioDeviceController.getStatus();
+    if (!status.audioAvailable)
+    {
+        lblAudioStatus.setText("AUDIO NO DISPONIBLE - ABRIR AUDIO", juce::dontSendNotification);
+        lblAudioStatus.setColour(juce::Label::textColourId, LnfC::RecRed);
+        btnAudioSettings.setButtonText("AUDIO !");
         return;
+    }
 
-    setup.bufferSize = preferredBufferSize;
-    deviceManager.setAudioDeviceSetup(setup, true);
+    LoopernicoLatency::Breakdown latency;
+    latency.inputSamples = status.inputLatencySamples;
+    latency.outputSamples = status.outputLatencySamples;
+    latency.pluginSamples = effectsChain.getActiveExternalPluginLatencySamples();
+    latency.calibrationSamples = status.manualCalibrationSamples;
+    const double totalMs = status.sampleRate > 0.0
+        ? 1000.0 * latency.driverRoundTripSamples() / status.sampleRate : 0.0;
+
+    juce::String deviceName = status.inputDevice == status.outputDevice
+        ? status.inputDevice : status.inputDevice + " / " + status.outputDevice;
+    juce::String text;
+    text << status.driverType << "  |  " << deviceName
+         << "  |  " << juce::String(status.sampleRate / 1000.0, 1) << " kHz"
+         << "  |  " << status.bufferSize << " smp"
+         << "  |  IN " << status.inputLatencySamples
+         << " + OUT " << status.outputLatencySamples
+         << " = " << juce::String(totalMs, 3) << " ms"
+         << "  |  VST " << latency.pluginSamples
+         << "  |  COMP " << latency.effectiveSamples()
+         << "  |  MON " << (status.softwareInputMonitoringEnabled ? "SW" : "DIRECT")
+         << "  |  XRUN "
+         << (status.xRunsAvailable ? juce::String(status.xRuns) : "N/D");
+    lblAudioStatus.setText(text, juce::dontSendNotification);
+
+    const bool warning = status.usingFallback || status.aggressiveBuffer
+                      || (status.xRunsAvailable && status.xRuns > 0);
+    lblAudioStatus.setColour(juce::Label::textColourId, warning ? LnfC::OvdAmber : LnfC::PlayGreen);
+    btnAudioSettings.setButtonText(warning ? "AUDIO !" : "AUDIO");
+
+    if (audioSettingsPanel != nullptr && audioSettingsPanel->isVisible())
+        audioSettingsPanel->refresh(latency.pluginSamples);
 }
 
 void MainComponent::updateRhythmBoxReadouts()
@@ -2710,6 +2916,29 @@ void MainComponent::handleIncomingMidiMessage(juce::MidiInput*, const juce::Midi
 // ============================================================================
 void MainComponent::timerCallback()
 {
+    audioDeviceController.poll();
+
+    if (effectsChain.consumeExternalPluginLatencyRefreshRequest())
+    {
+        {
+            const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+            effectsChain.refreshExternalPluginLatency();
+        }
+        updateRecordingLatencyCompensation();
+        updateExternalVstUi();
+    }
+
+    if (looper.consumeFixedLoopCompletionNotification() && looper.onFixedLoopComplete)
+        looper.onFixedLoopComplete();
+
+    static int audioStatusRefreshDivider = 0;
+    if (++audioStatusRefreshDivider >= 6)
+    {
+        audioStatusRefreshDivider = 0;
+        updateRecordingLatencyCompensation();
+        updateAudioStatusUi();
+    }
+
     updateLoopEditButtons();
     static const char* kSectionNames[] = { "SECCION: VERSO", "SECCION: REMATE", "SECCION: ESTRIBILLO" };
     const int currentRhythmSection = juce::jlimit(0, 2, effectsChain.getRhythmCurrentSection());
@@ -3050,7 +3279,7 @@ void MainComponent::resized()
     layoutHeaderRow(leftHeaderZone, 49, 106,
                     { &btnUndo, &btnRedo, &btnReset });
     layoutHeaderRow(rightHeaderZone, 13, 128,
-                    { &btnSaveSession, &btnLoadSession });
+                    { &btnSaveSession, &btnLoadSession, &btnAudioSettings });
     layoutHeaderRow(rightHeaderZone, 49, 128,
                     { &btnExportMix, &btnExportTracks });
 
@@ -3144,6 +3373,14 @@ void MainComponent::resized()
 
     lblSilenceThreshold.setBounds(fullX + 24, mY + 5, 100, 18);
     sldSilenceThreshold.setBounds(fullX + 126, mY + 5, 420, 18);
+    lblAudioStatus.setBounds(fullX + 560, mY + 5, fullW - 580, 18);
+
+    if (audioSettingsPanel != nullptr)
+    {
+        audioSettingsPanel->setBounds(getLocalBounds());
+        if (audioSettingsPanel->isVisible())
+            audioSettingsPanel->toFront(false);
+    }
 
     const int footerY = H - outer - sH;
     const int midiZoneX = kFooterInset;

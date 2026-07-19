@@ -375,13 +375,15 @@ void LooperEngine::restoreSessionSnapshot(const SessionSnapshot& snapshot)
 // ==============================================================================
 // PROCESS BLOCK — Unico metodo del audio thread
 // ==============================================================================
-void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
-    int startSample, int numSamples,
-    float masterVolume, bool forceDualMonoInput)
+void LooperEngine::processBlock(const juce::AudioBuffer<float>& recordableInput,
+    int inputStartSample, juce::AudioBuffer<float>& output,
+    int outputStartSample, int numSamples,
+    bool monitorInput, bool forceDualMonoInput)
 {
     juce::ScopedNoDenormals noDenormals;
 
-    const int numCh     = juce::jmin(buffer.getNumChannels(), 2);
+    const int numCh     = juce::jmin(juce::jmin(recordableInput.getNumChannels(),
+                                                output.getNumChannels()), 2);
     State     state     = currentState.load();
     int       baseSmp   = baseLoopLengthSamples.load();
     int       totalTr   = totalTracks.load();
@@ -390,6 +392,9 @@ void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
     int       localWrite= recordWritePosition.load();
     bool      gPaused   = globalPaused.load();
     bool      gMuted    = globalMute.load();
+    const int recordingCompensation = recordingCompensationSamples.load(std::memory_order_relaxed);
+    const bool compensateBaseAgainstReference =
+        baseRecordingUsesTimingReference.load(std::memory_order_relaxed);
     const float triggerThresholdLinear = std::pow(10.0f, silenceThresholdDb.load() / 20.0f);
     int writtenTrack = -1;
 
@@ -423,9 +428,13 @@ void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
         for (int ch = 0; ch < numCh; ++ch)
             trackRdPtr[t][ch] = tracks[t].buffer.getReadPointer(ch);
 
+    const float* inputPtr[2] = {};
     float* outPtr[2] = {};
     for (int ch = 0; ch < numCh; ++ch)
-        outPtr[ch] = buffer.getWritePointer(ch) + startSample;
+    {
+        inputPtr[ch] = recordableInput.getReadPointer(ch) + inputStartSample;
+        outPtr[ch] = output.getWritePointer(ch) + outputStartSample;
+    }
 
     bool canPlay = !gMuted &&
                    (state == State::Playing || state == State::RecordingLayer);
@@ -435,11 +444,14 @@ void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
     // Lo que se graba = lo que se escucha en vivo. Una sola cadena, sin duplicacion.
     for (int s = 0; s < numSamples; ++s)
     {
+        for (int ch = 0; ch < numCh; ++ch)
+            outPtr[ch][s] = LoopernicoLatency::monitoredInputSample(inputPtr[ch][s], monitorInput);
+
         if (state == State::ArmedBase)
         {
             bool triggerDetected = false;
             for (int ch = 0; ch < numCh && !triggerDetected; ++ch)
-                triggerDetected = std::abs(outPtr[ch][s]) >= triggerThresholdLinear;
+                triggerDetected = std::abs(inputPtr[ch][s]) >= triggerThresholdLinear;
 
             if (triggerDetected)
             {
@@ -454,13 +466,22 @@ void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
 
         // 1. Grabacion ANTES de agregar el playback — para que los overdubs
         //    capturen solo la entrada nueva, no la mezcla de todos los tracks.
+        int recordingDestination = localWrite;
+        if (state == State::RecordingLayer && baseSmp > 0)
+            recordingDestination = LoopernicoLatency::compensatedLoopPosition(
+                localWrite, baseSmp, recordingCompensation);
+        else if (state == State::RecordingBase && compensateBaseAgainstReference
+                 && fixBars > 0 && baseSmp > 0)
+            recordingDestination = LoopernicoLatency::compensatedLoopPosition(
+                localWrite, baseSmp, recordingCompensation);
+
         if (forceDualMonoInput && numCh > 0)
         {
-            const float inSamp = outPtr[0][s];
+            const float inSamp = inputPtr[0][s];
             if (state == State::RecordingBase && localWrite < maxLoopLengthSamples)
             {
-                tracks[0].buffer.setSample(0, localWrite, inSamp);
-                tracks[0].buffer.setSample(1, localWrite, inSamp);
+                tracks[0].buffer.setSample(0, recordingDestination, inSamp);
+                tracks[0].buffer.setSample(1, recordingDestination, inSamp);
                 writtenTrack = 0;
             }
             else if (state == State::RecordingLayer && baseSmp > 0 && localWrite < maxLoopLengthSamples)
@@ -468,8 +489,8 @@ void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
                 const int active = totalTr - 1;
                 if (active >= 0 && active < kMaxTracks)
                 {
-                    tracks[active].buffer.setSample(0, localWrite, inSamp);
-                    tracks[active].buffer.setSample(1, localWrite, inSamp);
+                    tracks[active].buffer.setSample(0, recordingDestination, inSamp);
+                    tracks[active].buffer.setSample(1, recordingDestination, inSamp);
                     writtenTrack = active;
                 }
             }
@@ -478,10 +499,10 @@ void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
         {
             for (int ch = 0; ch < numCh; ++ch)
             {
-                const float inSamp = outPtr[ch][s];
+                const float inSamp = inputPtr[ch][s];
                 if (state == State::RecordingBase && localWrite < maxLoopLengthSamples)
                 {
-                    tracks[0].buffer.setSample(ch, localWrite, inSamp);
+                    tracks[0].buffer.setSample(ch, recordingDestination, inSamp);
                     writtenTrack = 0;
                 }
                 else if (state == State::RecordingLayer && baseSmp > 0 && localWrite < maxLoopLengthSamples)
@@ -489,7 +510,7 @@ void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
                     const int active = totalTr - 1;
                     if (active >= 0 && active < kMaxTracks)
                     {
-                        tracks[active].buffer.setSample(ch, localWrite, inSamp);
+                        tracks[active].buffer.setSample(ch, recordingDestination, inSamp);
                         writtenTrack = active;
                     }
                 }
@@ -515,11 +536,8 @@ void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
             }
         }
 
-        // 3. Aplicar master volume y soft clip.
-        for (int ch = 0; ch < numCh; ++ch)
-            outPtr[ch][s] = juce::jlimit(-1.0f, 1.0f, outPtr[ch][s]) * masterVolume;
-
-        // 4. Avanzar posicion de lectura.
+        // 3. Avanzar posicion de lectura. El rhythm y el master se suman
+        // despues, cuando los tres buses ya estan reunidos.
         if (!gPaused && (state == State::Playing || state == State::RecordingLayer))
         {
             ++localRead;
@@ -537,7 +555,7 @@ void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
             }
         }
 
-        // 5. Avanzar posicion de escritura.
+        // 4. Avanzar posicion de escritura.
         if (state == State::RecordingBase)
         {
             if (localWrite < maxLoopLengthSamples) ++localWrite;
@@ -552,9 +570,8 @@ void LooperEngine::processBlock(juce::AudioBuffer<float>& buffer,
                 canPlay = !gMuted;
 
                 bool expected = false;
-                if (onFixedLoopComplete
-                    && fixedLoopCompletionRequested.compare_exchange_strong(expected, true))
-                    juce::MessageManager::callAsync(onFixedLoopComplete);
+                if (fixedLoopCompletionRequested.compare_exchange_strong(expected, true))
+                    fixedLoopCompletionPending.store(true, std::memory_order_release);
             }
         }
         else if (state == State::RecordingLayer)
@@ -628,6 +645,15 @@ void LooperEngine::recConfirm()
         // Se hace ANTES de fijar baseLoopLengthSamples para que el loop
         // empiece y termine exactamente en el contenido real.
         recorded = trimSilence(0, recorded);
+
+        // A free base loop defines its own time origin. If Loopernico's rhythm
+        // or metronome was the timing reference, move a non-fixed capture by the
+        // effective device/VST3/calibration latency. Fixed captures already use
+        // compensated ring positions in processBlock().
+        if (baseRecordingUsesTimingReference.load(std::memory_order_relaxed)
+            && barsPerLoop.load() == 0 && recorded > 1)
+            rotateTrackRegion(0, recorded,
+                              recordingCompensationSamples.load(std::memory_order_relaxed));
 
         baseLoopLengthSamples.store(recorded);
         editableLoopSourceSamples.store(recorded);
@@ -771,6 +797,7 @@ void LooperEngine::goToStart()
 void LooperEngine::resetAll()
 {
     fixedLoopCompletionRequested.store(false);
+    fixedLoopCompletionPending.store(false);
     currentState.store(State::Stopped);
     totalTracks.store(0);
     baseLoopLengthSamples.store(0);

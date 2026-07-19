@@ -19,6 +19,18 @@
       <FILE id="bTOaVn" name="LooperEngine.cpp" compile="1" resource="0"
             file="Source/LooperEngine.cpp"/>
       <FILE id="N3meL7" name="LooperEngine.h" compile="0" resource="0" file="Source/LooperEngine.h"/>
+      <FILE id="LatCmpH" name="LatencyCompensation.h" compile="0" resource="0"
+            file="Source/LatencyCompensation.h"/>
+      <FILE id="LatCmpC" name="LatencyCompensation.cpp" compile="1" resource="0"
+            file="Source/LatencyCompensation.cpp"/>
+      <FILE id="AudCtlH" name="AudioDeviceController.h" compile="0" resource="0"
+            file="Source/AudioDeviceController.h"/>
+      <FILE id="AudCtlC" name="AudioDeviceController.cpp" compile="1" resource="0"
+            file="Source/AudioDeviceController.cpp"/>
+      <FILE id="AudPanH" name="AudioSettingsPanel.h" compile="0" resource="0"
+            file="Source/AudioSettingsPanel.h"/>
+      <FILE id="AudPanC" name="AudioSettingsPanel.cpp" compile="1" resource="0"
+            file="Source/AudioSettingsPanel.cpp"/>
       <FILE id="qg52we" name="Main.cpp" compile="1" resource="0" file="Source/Main.cpp"/>
       <FILE id="vXpXSs" name="MainComponent.cpp" compile="1" resource="0"
             file="Source/MainComponent.cpp"/>
@@ -50,7 +62,8 @@
     <MODULE id="juce_gui_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_gui_extra" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
   </MODULES>
-  <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1" JUCE_PLUGINHOST_VST3="1"/>
+  <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1" JUCE_PLUGINHOST_VST3="1"
+               JUCE_ASIO="1"/>
   <EXPORTFORMATS>
     <ANDROIDSTUDIO targetFolder="Builds/Android">
       <CONFIGURATIONS>

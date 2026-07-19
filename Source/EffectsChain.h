@@ -5,7 +5,8 @@
 #include <vector>
 #include "EQProcessor.h"
 
-class EffectsChain : private juce::Thread
+class EffectsChain : private juce::Thread,
+                     private juce::AudioProcessorListener
 {
 public:
     struct PreparedExternalPlugin
@@ -32,6 +33,7 @@ public:
         juce::String name;
         juce::String path;
         bool enabled{ true };
+        int latencySamples{ 0 };
     };
 
     static constexpr int kFreezeMaxLayers = 5;
@@ -84,7 +86,12 @@ public:
     ~EffectsChain() override;
 
     void prepare(double sampleRate, int samplesPerBlockExpected);
-    void processBlock(juce::AudioBuffer<float>& buffer, int startSample, int numSamples);
+    // Procesa la entrada externa y publica el rhythm/metronomo por separado.
+    // MainComponent reune ambos buses antes de grabar para poder decidir su
+    // monitoreo sin duplicar la bateria. Los buffers deben estar preasignados.
+    void processBlock(juce::AudioBuffer<float>& recordableInput,
+                      juce::AudioBuffer<float>& rhythmMonitor,
+                      int startSample, int numSamples);
     void reset();
     bool loadExternalVst3(const juce::File& pluginFile, juce::String& errorMessage);
     void unloadExternalPlugin();
@@ -100,6 +107,16 @@ public:
     juce::String getExternalPluginName() const { return externalPluginName; }
     juce::String getExternalPluginPath() const { return externalPluginPath; }
     juce::AudioPluginInstance* getExternalPluginInstance() const { return externalPluginInstance.get(); }
+    int getExternalPluginReportedLatencySamples() const { return externalPluginLatencySamples.load(); }
+    int getActiveExternalPluginLatencySamples() const
+    {
+        return isExternalPluginEnabled() ? externalPluginLatencySamples.load() : 0;
+    }
+    bool consumeExternalPluginLatencyRefreshRequest()
+    {
+        return externalPluginLatencyRefreshRequested.exchange(false);
+    }
+    void refreshExternalPluginLatency();
     bool copyExternalPluginState(juce::MemoryBlock& state) const;
     bool restoreExternalPluginState(const juce::MemoryBlock& state, juce::String& errorMessage);
 
@@ -120,6 +137,7 @@ public:
     void setCompEq(float e) { compEq.store(e); }
 
     void setRhythmEnabled(bool b) { rhythmEnabled.store(b); }
+    bool isRhythmEnabled() const { return rhythmEnabled.load(); }
     void setRhythmTempo(float bpm) { rhythmTempoBpm.store(bpm); }
     void setRhythmLevel(float l) { rhythmLevel.store(l); }
     void setRhythmSwing(float s) { rhythmSwing.store(s); }
@@ -127,6 +145,7 @@ public:
     void setRhythmStyle(int s) { rhythmStyle.store(s); }
     void setRhythmVariation(int v) { rhythmVariation.store(v); }
     void setRhythmMode(RhythmMode m) { rhythmMode.store((int)m); }
+    bool isRhythmSoloMode() const { return rhythmMode.load() == (int) RhythmMode::Solo; }
     void setRhythmCountInEnabled(bool isEnabled) { rhythmCountInEnabled.store(isEnabled); }
     void setRhythmCountInBars(int bars) { rhythmCountInBars.store(juce::jlimit(0, 8, bars)); }
     void setRhythmCountInSound(RhythmCountInSound sound) { rhythmCountInSound.store((int) sound); }
@@ -367,9 +386,16 @@ private:
     static RhythmSampleSlot sampleSlotForInstrument(DrumInstrument instrument);
     void processExternalPluginBlock(juce::AudioBuffer<float>& buffer, int startSample, int numSamples);
     void prepareExternalPluginScratchBuffer();
+    void audioProcessorParameterChanged(juce::AudioProcessor*, int, float) override {}
+    void audioProcessorChanged(juce::AudioProcessor*,
+                               const juce::AudioProcessorListener::ChangeDetails& details) override;
     // --- VARIABLES ATÓMICAS DE CONTROL DE ESTADO ---
-    std::array<std::atomic<int>, kPedalCount> pedalOrder;
+    // Los 13 ids caben en 4 bits cada uno. Publicar toda la permutacion en una
+    // sola operacion evita que el hilo de audio vea un orden a medio actualizar.
+    std::atomic<uint64_t> packedPedalOrder{ 0 };
     std::atomic<bool> externalPluginEnabled{ true };
+    std::atomic<int> externalPluginLatencySamples{ 0 };
+    std::atomic<bool> externalPluginLatencyRefreshRequested{ false };
 
     std::atomic<bool> noiseGateEnabled{ false };
     std::atomic<float> noiseGateThresholdDb{ -55.0f };
@@ -536,10 +562,11 @@ private:
     juce::AudioBuffer<float> harmonicDelayBufferA;
     juce::AudioBuffer<float> harmonicDelayBufferB;
     juce::AudioBuffer<float> freezeBuffer;
+    juce::AudioBuffer<float> chordFreezeInputBuffer;
     juce::AudioBuffer<float> chordBodyBuffer;
     juce::AudioBuffer<float> reverbPreDelayBuffer;
     juce::AudioBuffer<float> reverbScratchBuffer;
-    juce::Reverb            roomReverb;
+    std::array<juce::Reverb, 2> roomReverbs;
     EQProcessor             outputEq;
     std::atomic<float>      outputEqInputGainDb { 0.0f };
     std::atomic<float>      outputEqVolumeDb { 0.0f };
@@ -562,8 +589,8 @@ private:
     std::array<ChordFreezeGrain, kChordFreezeGrainCount> chordFreezeGrains;
 
     float lowPassFilters[10][2]{};
-    float noiseGateEnv{ 0.0f };
-    float noiseGateGain{ 1.0f };
+    float noiseGateEnv[2]{ 0.0f, 0.0f };
+    float noiseGateGain[2]{ 1.0f, 1.0f };
     float chordBodyDamp[2]{ 0.0f, 0.0f };
     float compEnv[2]{ 0.0f, 0.0f };
     float compLowBand[2]{ 0.0f, 0.0f };

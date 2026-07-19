@@ -7,6 +7,8 @@
 #include "MidiController.h"
 #include "EffectsChain.h"
 #include "SessionManager.h"
+#include "AudioDeviceController.h"
+#include "AudioSettingsPanel.h"
 
 class TonexDisplayLabel final : public juce::Label,
                                 private juce::Timer
@@ -148,12 +150,14 @@ private:
     Phase phase = Phase::initialPause;
 };
 
-class MainComponent : public juce::AudioAppComponent,
+class MainComponent : public juce::Component,
+                      public juce::AudioSource,
                       public juce::Timer,
-                      public juce::MidiInputCallback
+                      public juce::MidiInputCallback,
+                      private juce::ChangeListener
 {
 public:
-    MainComponent();
+    explicit MainComponent(bool forceAudioFallbackForDiagnostics = false);
     ~MainComponent() override;
 
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override;
@@ -168,7 +172,12 @@ public:
     void revealFxPedal(int pedalIndex);
     void focusFxPedalForSnapshot(int pedalIndex);
     void setVst3DisplayTextForSnapshot(const juce::String& text);
+    void showAudioSettingsForSnapshot();
     bool openSessionFile(const juce::File& sessionFile);
+    bool setAudioBufferForSnapshot(int bufferSamples);
+    void setSoftwareInputMonitoringForSnapshot(bool enabled);
+    bool loadExternalVst3ForSnapshot(const juce::File& pluginFile, bool enabled);
+    bool saveSessionFileForSnapshot(const juce::File& sessionFile, juce::String& errorMessage);
 
 private:
     static constexpr int kNumFxPedals = 13;
@@ -219,6 +228,12 @@ private:
     juce::Image rackSurfaceTexture;
     juce::Image brandWordmark;
 
+    juce::AudioDeviceManager deviceManager;
+    AudioDeviceController audioDeviceController { deviceManager };
+    juce::AudioSourcePlayer audioSourcePlayer;
+    juce::AudioBuffer<float> processedInputBuffer;
+    juce::AudioBuffer<float> rhythmMonitorBuffer;
+
     LooperEngine             looper;
     MidiController           midiController;
     juce::AudioFormatManager formatManager;
@@ -230,6 +245,8 @@ private:
     juce::TextButton      btnLoadSession{"ABRIR"};
     juce::TextButton      btnExportMix{"EXPORTAR MIX"};
     juce::TextButton      btnExportTracks{"EXPORTAR PISTAS"};
+    juce::TextButton      btnAudioSettings{"AUDIO"};
+    juce::Label           lblAudioStatus;
     juce::Viewport   trackViewport;
     juce::Component  trackContainer;
     std::vector<std::unique_ptr<TrackComponent>> visualTracks;
@@ -310,7 +327,11 @@ private:
 
     MasterVUMeter masterVUMeter;
 
-    void optimiseAudioDeviceForLowLatency();
+    void changeListenerCallback(juce::ChangeBroadcaster* source) override;
+    void showAudioSettings();
+    void closeAudioSettings();
+    void updateAudioStatusUi();
+    void updateRecordingLatencyCompensation();
     void setupFXPedals();
     void beginFxPedalDrag(FXPedalComponent& pedal, const juce::MouseEvent& e);
     void updateFxPedalDrag(FXPedalComponent& pedal, const juce::MouseEvent& e);
@@ -334,6 +355,7 @@ private:
     void closeExternalVst3Editor();
     void updateExternalVstUi();
     void saveSessionToFile();
+    bool saveCurrentSessionToFile(const juce::File& sessionFile, juce::String& errorMessage);
     void loadSessionFromFile();
     void exportMixToFile();
     void exportTracksToFolder();
@@ -359,6 +381,7 @@ private:
     std::unique_ptr<juce::FileChooser> sessionFileChooser;
     std::unique_ptr<juce::FileChooser> exportFileChooser;
     std::unique_ptr<juce::DocumentWindow> vst3EditorWindow;
+    std::unique_ptr<AudioSettingsPanel> audioSettingsPanel;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

@@ -19,6 +19,13 @@ namespace
         int delayMs = 1500;
         juce::String vstDisplayText;
         juce::File sessionFile;
+        bool showAudioSettings = false;
+        bool forceAudioFallback = false;
+        int audioBufferSamples = 0;
+        int softwareInputMonitoring = -1;
+        juce::String vst3Path;
+        bool vst3Bypass = false;
+        juce::String saveSessionPath;
     };
 
     SnapshotLaunchRequest parseSnapshotLaunchRequest(const juce::String& commandLine)
@@ -52,6 +59,36 @@ namespace
             {
                 request.vstDisplayText = argument.fromFirstOccurrenceOf("=", false, false).unquoted();
             }
+            else if (argument.equalsIgnoreCase("--snapshot-audio"))
+            {
+                request.enabled = true;
+                request.showAudioSettings = true;
+            }
+            else if (argument.equalsIgnoreCase("--snapshot-force-fallback"))
+            {
+                request.forceAudioFallback = true;
+            }
+            else if (argument.startsWithIgnoreCase("--snapshot-audio-buffer="))
+            {
+                request.audioBufferSamples = argument.fromFirstOccurrenceOf("=", false, false).getIntValue();
+            }
+            else if (argument.startsWithIgnoreCase("--snapshot-monitor-input="))
+            {
+                const auto value = argument.fromFirstOccurrenceOf("=", false, false);
+                request.softwareInputMonitoring = value.equalsIgnoreCase("off") ? 0 : 1;
+            }
+            else if (argument.startsWithIgnoreCase("--snapshot-vst3="))
+            {
+                request.vst3Path = argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            }
+            else if (argument.equalsIgnoreCase("--snapshot-vst3-bypass"))
+            {
+                request.vst3Bypass = true;
+            }
+            else if (argument.startsWithIgnoreCase("--snapshot-save-session="))
+            {
+                request.saveSessionPath = argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            }
             else if (argument.endsWithIgnoreCase(".loopernico"))
             {
                 request.sessionFile = juce::File::isAbsolutePath(argument)
@@ -79,6 +116,34 @@ public:
     void initialise (const juce::String& commandLine) override
     {
         // This method is where you should put your application's initialisation code..
+
+        if (commandLine.containsIgnoreCase("--run-latency-tests"))
+        {
+            juce::String report;
+            bool passed = LoopernicoLatency::runDeterministicTests(report);
+            juce::String outputPath;
+            juce::StringArray arguments;
+            arguments.addTokens(commandLine, true);
+            for (const auto& rawArgument : arguments)
+                if (rawArgument.unquoted().startsWithIgnoreCase("--run-latency-tests="))
+                    outputPath = rawArgument.unquoted().fromFirstOccurrenceOf("=", false, false).unquoted();
+
+            if (outputPath.isNotEmpty())
+            {
+                const juce::File reportFile(outputPath);
+                reportFile.getParentDirectory().createDirectory();
+                if (!reportFile.replaceWithText(report + "\n"))
+                {
+                    juce::Logger::writeToLog("No se pudo escribir el reporte de pruebas en: "
+                                             + reportFile.getFullPathName());
+                    passed = false;
+                }
+            }
+
+            setApplicationReturnValue(passed ? 0 : 1);
+            quit();
+            return;
+        }
 
         const auto snapshotRequest = parseSnapshotLaunchRequest(commandLine);
         mainWindow.reset (new MainWindow (getApplicationName(), snapshotRequest));
@@ -122,7 +187,7 @@ public:
                               DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar (true);
-            setContentOwned (new MainComponent(), true);
+            setContentOwned (new MainComponent(snapshotRequest.forceAudioFallback), true);
 
            #if JUCE_IOS || JUCE_ANDROID
             setFullScreen (true);
@@ -132,6 +197,17 @@ public:
            #endif
 
             setVisible (true);
+
+            if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
+            {
+                if (snapshotRequest.audioBufferSamples > 0)
+                    main->setAudioBufferForSnapshot(snapshotRequest.audioBufferSamples);
+                if (snapshotRequest.softwareInputMonitoring >= 0)
+                    main->setSoftwareInputMonitoringForSnapshot(snapshotRequest.softwareInputMonitoring != 0);
+                if (snapshotRequest.vst3Path.isNotEmpty())
+                    main->loadExternalVst3ForSnapshot(juce::File(snapshotRequest.vst3Path),
+                                                      !snapshotRequest.vst3Bypass);
+            }
 
             if (snapshotRequest.sessionFile != juce::File())
             {
@@ -145,6 +221,21 @@ public:
                     });
             }
 
+            if (snapshotRequest.saveSessionPath.isNotEmpty())
+            {
+                juce::Timer::callAfterDelay(1250,
+                    [safeWindow = juce::Component::SafePointer<MainWindow>(this),
+                     outputFile = juce::File(snapshotRequest.saveSessionPath)]
+                    {
+                        if (auto* window = safeWindow.getComponent())
+                            if (auto* main = dynamic_cast<MainComponent*> (window->getContentComponent()))
+                            {
+                                juce::String error;
+                                main->saveSessionFileForSnapshot(outputFile, error);
+                            }
+                    });
+            }
+
             if (snapshotRequest.enabled && snapshotRequest.focusPedal >= -1)
                 if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
                     main->focusFxPedalForSnapshot(snapshotRequest.focusPedal);
@@ -152,6 +243,10 @@ public:
             if (snapshotRequest.enabled && snapshotRequest.vstDisplayText.isNotEmpty())
                 if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
                     main->setVst3DisplayTextForSnapshot(snapshotRequest.vstDisplayText);
+
+            if (snapshotRequest.enabled && snapshotRequest.showAudioSettings)
+                if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
+                    main->showAudioSettingsForSnapshot();
 
            #if ! JUCE_IOS && ! JUCE_ANDROID
             // With JUCE's native Windows peer this maps to SW_SHOWMAXIMIZED: it uses

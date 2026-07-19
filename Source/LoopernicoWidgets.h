@@ -316,16 +316,20 @@ public:
         if (pedalName == "HARMONIZER")
         {
             auto body = getLocalBounds().toFloat().reduced(3.0f);
-            const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / (4.0f / 3.0f));
-            body = { body.getX(), body.getCentreY() - bodyHeight * 0.5f,
-                     body.getWidth(), bodyHeight };
-            const float footY = body.getY() + body.getHeight() * 0.835f;
-            const float footXs[] = { 0.125f, 0.500f, 0.875f };
+            constexpr float aspect = 1578.0f / 1240.0f;
+            const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / aspect);
+            const float bodyWidth = juce::jmin(body.getWidth(), bodyHeight * aspect);
+            body = { body.getCentreX() - bodyWidth * 0.5f,
+                     body.getCentreY() - bodyHeight * 0.5f,
+                     bodyWidth, bodyHeight };
+            const float footY = body.getY() + body.getHeight() * 0.850f;
+            const float footXs[] = { 0.119f, 0.500f, 0.881f };
             for (int i = 0; i < 3; ++i)
             {
                 const float dx = e.position.x - (body.getX() + body.getWidth() * footXs[i]);
                 const float dy = e.position.y - footY;
-                if (dx * dx + dy * dy <= 27.0f * 27.0f)
+                const float hitRadius = body.getWidth() * 0.090f;
+                if (dx * dx + dy * dy <= hitRadius * hitRadius)
                 {
                     if (i == 0)
                         onBtn.setToggleState(!onBtn.getToggleState(), juce::sendNotification);
@@ -476,14 +480,18 @@ public:
         if (pedalName == "CHORUS")
         {
             auto body = getLocalBounds().toFloat().reduced(3.0f);
-            const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / (2.0f / 3.0f));
-            body = { body.getX(), body.getCentreY() - bodyHeight * 0.5f,
-                     body.getWidth(), bodyHeight };
+            constexpr float aspect = 3.38f / 5.25f;
+            const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / aspect);
+            const float bodyWidth = juce::jmin(body.getWidth(), bodyHeight * aspect);
+            body = { body.getCentreX() - bodyWidth * 0.5f,
+                     body.getCentreY() - bodyHeight * 0.5f,
+                     bodyWidth, bodyHeight };
             const auto foot = juce::Point<float>(body.getCentreX(),
-                                                  body.getY() + body.getHeight() * 0.755f);
+                                                  body.getY() + body.getHeight() * 0.722f);
             const float dx = e.position.x - foot.x;
             const float dy = e.position.y - foot.y;
-            if (dx * dx + dy * dy <= 27.0f * 27.0f)
+            const float hitRadius = juce::jmax(16.0f, body.getWidth() * 0.13f);
+            if (dx * dx + dy * dy <= hitRadius * hitRadius)
             {
                 onBtn.setToggleState(!onBtn.getToggleState(), juce::sendNotification);
                 repaint();

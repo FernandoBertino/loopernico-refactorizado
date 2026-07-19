@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include <atomic>
 #include <array>
+#include "LatencyCompensation.h"
 
 // ==============================================================================
 // LooperEngine — Motor central del looper.
@@ -14,7 +15,8 @@
 //
 // Los efectos (FX Pedalboard) viven en MainComponent::effectsChain y se aplican
 // ANTES de que la señal entre al looper. El looper graba y reproduce señal pura,
-// sin cadenas de efectos internas. Lo que escuchas es exactamente lo que se graba.
+// sin cadenas de efectos internas. La entrada procesada se recibe separada del
+// bus final para poder grabarla aunque el monitoreo por software este apagado.
 //
 // Thread safety:
 //   - Todos los metodos publicos que cambian estado son seguros desde el
@@ -133,9 +135,12 @@ public:
     void releaseResources();
 
     // ---- Procesamiento (audio thread) ---------------------------------------
-    void processBlock(juce::AudioBuffer<float>& buffer,
-                      int startSample, int numSamples,
-                      float masterVolume,
+    void processBlock(const juce::AudioBuffer<float>& recordableInput,
+                      int inputStartSample,
+                      juce::AudioBuffer<float>& output,
+                      int outputStartSample,
+                      int numSamples,
+                      bool monitorInput,
                       bool forceDualMonoInput = false);
 
     // ---- Control de grabacion (message thread) ------------------------------
@@ -155,6 +160,23 @@ public:
     int   getRecordWritePosition() const { return recordWritePosition.load(); }
     float getSampleRate()      const { return (float)sampleRate_; }
     bool  canRedo()            const { return redoCount > 0; }
+
+    void setRecordingCompensationSamples(int samples)
+    {
+        recordingCompensationSamples.store(samples, std::memory_order_relaxed);
+    }
+    int getRecordingCompensationSamples() const
+    {
+        return recordingCompensationSamples.load(std::memory_order_relaxed);
+    }
+    void setBaseRecordingUsesTimingReference(bool shouldCompensate)
+    {
+        baseRecordingUsesTimingReference.store(shouldCompensate, std::memory_order_relaxed);
+    }
+    bool consumeFixedLoopCompletionNotification()
+    {
+        return fixedLoopCompletionPending.exchange(false, std::memory_order_acq_rel);
+    }
 
     std::function<void()> onFixedLoopComplete;
 
@@ -266,6 +288,9 @@ private:
     std::atomic<int>   recordStartPosition   { 0 };
     std::atomic<int>   editableLoopSourceSamples { 0 };
     std::atomic<bool>  fixedLoopCompletionRequested { false };
+    std::atomic<bool>  fixedLoopCompletionPending { false };
+    std::atomic<int>   recordingCompensationSamples { 0 };
+    std::atomic<bool>  baseRecordingUsesTimingReference { false };
     std::atomic<bool>  globalMute            { false };
     std::atomic<bool>  globalPaused          { false };
     std::atomic<float> silenceThresholdDb    { -60.0f }; // umbral para trimSilence
