@@ -1,6 +1,6 @@
 # Contexto operativo de Loopernico
 
-Ultima actualizacion: 2026-07-22 17:54 (America/Buenos_Aires)
+Ultima actualizacion: 2026-07-22 18:44 (America/Buenos_Aires)
 
 ## Uso
 
@@ -8,7 +8,29 @@ Ultima actualizacion: 2026-07-22 17:54 (America/Buenos_Aires)
 2. Verificar `git status --short --branch` y preservar cambios locales.
 3. Actualizar este traspaso despues de avances materiales o antes de detener una tarea incompleta.
 
-## Tarea activa: multiples VST3 con la carcasa TONEX original
+## Tarea terminada: eliminar el salto visible al maximizar
+
+Fernando comprobo que adelantar solamente `setFullScreen(true)` no eliminaba el salto. La causa es que el peer de JUCE para Windows implementa esa llamada mediante `ShowWindow(..., SW_SHOWMAXIMIZED)`, que todavia puede animar desde la geometria normal guardada.
+
+### Implementacion
+
+- En escritorio normal, la ventana oculta recibe primero el `userBounds` del monitor elegido y luego llama a `setFullScreen(true)` antes de `setVisible(true)`. La animacion nativa parte asi de una geometria que ya coincide con la maximizada.
+- El modo de capturas conserva deliberadamente su tamano fijo `1600x960` centrado.
+- No se modificaron layout, temporizadores, audio, sesiones, pedales ni DSP.
+
+### Verificacion y despliegue
+
+- `git diff --check`: correcto; solo advertencias de normalizacion LF/CRLF preexistentes.
+- Build final `Release | x64` con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`: codigo 0 y sin advertencias del codigo. Un build intermedio fallo por intentar pasar `Rectangle<float>` a `setBounds`; no se desplego y se corrigio explicitamente con `toNearestInt()`.
+- Traza temprana del candidato: todos los cambios de geometria ocurrieron con la ventana invisible; la primera geometria visible fue `-8,-8,1928,1048`, `ShowCmd=3` (maximizada), sin rectangulos visibles intermedios. Cierre normal con codigo 0.
+- Captura real `tmp/maximize-before-show-smoke-20260722.png`: layout completo, sin zonas sin pintar ni regresiones visuales evidentes.
+- Humo de `Current`: maximizado en `-8,-8,1928,1048`, 9/12 lecturas responsivas (las tres primeras corresponden a la inicializacion), cierre normal y codigo 0.
+- `Builds/LocalDeployment/Current`: SHA-256 `4EFAFDECFCB84D1F2221A88F7482D83DBF4DDDAA4240411883F42F5E4D3D16E3`.
+- `Builds/LocalDeployment/Previous`: SHA-256 `DC16377F5DFCB835A93F686A6062DE498B61FC8582D4A95A02FB49521761FAFF`; hay exactamente dos EXE desplegados.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` fue recreado hacia `Current`, con directorio de trabajo e icono correctos.
+- Asociacion `.loopernico` verificada: `Loopernico.Session`, tipo `Archivo de Loopernico`, comando hacia `Current` e icono de sesion correctos.
+
+## Base comprobada: multiples VST3 con la carcasa TONEX original
 
 Fernando pidio que los cuatro hosts VST3 reutilicen exactamente la carcasa TONEX terminada que existia antes de la ampliacion multi-VST.
 
@@ -37,6 +59,6 @@ Fernando pidio que los cuatro hosts VST3 reutilicen exactamente la carcasa TONEX
 - `C:\Users\Fernando\Desktop\Loopernico.lnk` fue recreado hacia `Current`, con directorio de trabajo e icono correctos.
 - Asociacion `.loopernico` verificada: `Loopernico.Session`, tipo `Archivo de Loopernico`, comando hacia `Current` e icono de sesion correctos.
 
-## Estado
+## Estado de la base VST3
 
 Implementacion terminada, verificada y desplegada como version diaria. Limite deliberado actual: cuatro VST3 simultaneos.

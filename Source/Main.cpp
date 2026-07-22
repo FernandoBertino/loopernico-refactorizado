@@ -193,7 +193,16 @@ public:
             setFullScreen (true);
            #else
             setResizable (true, true);
-            centreWithSize (getWidth(), getHeight());
+            if (snapshotRequest.enabled)
+                centreWithSize (getWidth(), getHeight());
+            else
+            {
+                const auto& displays = juce::Desktop::getInstance().getDisplays();
+                if (const auto* display = displays.getDisplayForRect (getBounds()))
+                    setBounds (display->userBounds.toNearestInt());
+
+                setFullScreen (true);
+            }
            #endif
 
             setVisible (true);
@@ -247,14 +256,6 @@ public:
             if (snapshotRequest.enabled && snapshotRequest.showAudioSettings)
                 if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
                     main->showAudioSettingsForSnapshot();
-
-           #if ! JUCE_IOS && ! JUCE_ANDROID
-            // With JUCE's native Windows peer this maps to SW_SHOWMAXIMIZED: it uses
-            // the desktop work area while retaining the title bar, taskbar and normal
-            // window controls. Snapshot mode keeps its fixed visual-reference size.
-            if (! snapshotRequest.enabled)
-                setFullScreen (true);
-           #endif
 
             if (snapshotRequest.enabled)
                 scheduleUiSnapshot(snapshotRequest.outputPath, true, snapshotRequest.delayMs);
