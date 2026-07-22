@@ -1,12 +1,50 @@
 # Contexto operativo de Loopernico
 
-Ultima actualizacion: 2026-07-22 18:44 (America/Buenos_Aires)
+Ultima actualizacion: 2026-07-22 19:13 (America/Buenos_Aires)
 
 ## Uso
 
 1. Leer `AGENTS.md` y este archivo completos al comenzar.
 2. Verificar `git status --short --branch` y preservar cambios locales.
 3. Actualizar este traspaso despues de avances materiales o antes de detener una tarea incompleta.
+
+## Tarea terminada: entrada mono duplicada para afinadores VST3
+
+Fernando informo que los efectos de los VST3 funcionaban, pero sus afinadores
+incorporados no recibian la guitarra. La causa comprobada era el ruteo estereo
+directo de las entradas fisicas: la guitarra podia estar en la entrada 2,
+mientras varios afinadores inspeccionan solamente la entrada 1.
+
+### Implementacion
+
+- `MainComponent::getNextAudioBlock()` normaliza la entrada de instrumento antes
+  de `EffectsChain` y del looper.
+- Si un canal es claramente dominante, se conserva su nivel y se duplica en
+  izquierda y derecha. Si ambos tienen nivel comparable, se usa el downmix mono
+  convencional. De este modo todos los VST3 reciben la guitarra en sus dos
+  entradas sin cambiar el orden DSP, los buffers del looper ni su compensacion.
+- Las salidas estereo generadas por pedales y VST3 siguen siendo estereo; solo se
+  normaliza la entrada fisica inicial.
+
+### Verificacion y despliegue
+
+- `git diff --check`: correcto; solo advertencias LF/CRLF preexistentes.
+- Build final `Release | x64` con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`:
+  codigo 0 y sin advertencias. Un build intermedio emitio dos advertencias C4456
+  por nombres locales repetidos; no se desplego y se corrigieron.
+- Suite interna: 14/14 pruebas deterministas de compensacion y buses, codigo 0.
+- Humo del candidato y de `Current`: captura generada, cierre normal y codigo 0.
+- `Builds/LocalDeployment/Current`: SHA-256
+  `5F9C824481F998E20E90C10673A7C51A4C2735F6B91E89A6BCD053058EB5E9F3`.
+- `Builds/LocalDeployment/Previous`: SHA-256
+  `4EFAFDECFCB84D1F2221A88F7482D83DBF4DDDAA4240411883F42F5E4D3D16E3`;
+  hay exactamente dos EXE desplegados.
+- Acceso directo recreado hacia `Current`, con directorio de trabajo e icono
+  correctos. Asociacion `.loopernico` verificada como `Loopernico.Session`, tipo
+  `Archivo de Loopernico`, comando hacia `Current` e icono de sesion correctos.
+- Limite de la verificacion automatica: la deteccion visual de nota dentro de un
+  afinador VST3 concreto requiere confirmacion con guitarra real, pero ambos
+  canales reciben ahora la misma senal de instrumento por construccion.
 
 ## Tarea terminada: eliminar el salto visible al maximizar
 

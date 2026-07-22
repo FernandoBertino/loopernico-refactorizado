@@ -2703,6 +2703,27 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buf)
         else
             processedInputBuffer.clear(ch, 0, buf.numSamples);
     }
+
+    // La entrada de instrumento puede estar conectada a cualquiera de los dos
+    // canales fisicos. Algunos VST3 procesan ambos, pero sus afinadores solo
+    // inspeccionan la entrada 1. Conservamos el nivel del canal claramente
+    // dominante (el caso habitual de una guitarra mono) y, si hay una fuente
+    // realmente estereo, hacemos un downmix convencional. Desde aqui la misma
+    // senal alimenta ambos canales, antes de los efectos y del looper.
+    const float leftMagnitude = processedInputBuffer.getMagnitude(0, 0, buf.numSamples);
+    const float rightMagnitude = processedInputBuffer.getMagnitude(1, 0, buf.numSamples);
+    const bool useLeftOnly = leftMagnitude > rightMagnitude * 2.0f;
+    const bool useRightOnly = rightMagnitude > leftMagnitude * 2.0f;
+    auto* rawInputLeft = processedInputBuffer.getWritePointer(0);
+    auto* rawInputRight = processedInputBuffer.getWritePointer(1);
+    for (int i = 0; i < buf.numSamples; ++i)
+    {
+        const float monoInput = useLeftOnly ? rawInputLeft[i]
+                              : useRightOnly ? rawInputRight[i]
+                                             : 0.5f * (rawInputLeft[i] + rawInputRight[i]);
+        rawInputLeft[i] = rawInputRight[i] = monoInput;
+    }
+
     rhythmMonitorBuffer.clear(0, buf.numSamples);
 
     {
