@@ -2604,13 +2604,6 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buf)
         }
     }
 
-    // El rhythm se conserva en un bus independiente durante los efectos para
-    // poder monitorearlo aun usando DIRECT, pero debe formar parte de la senal
-    // que recibe y graba el looper.
-    LoopernicoLatency::addRhythmToRecordableBuffer(processedInputBuffer,
-                                                   rhythmMonitorBuffer,
-                                                   0, buf.numSamples);
-
     buf.clearActiveBufferRegion();
     const bool monitorInput = audioDeviceController.isSoftwareInputMonitoringEnabled()
                            && !effectsChain.isRhythmSoloMode();

@@ -2243,9 +2243,18 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
 
             auto processRhythm = [&]()
             {
-                // El secuenciador se mantiene en el orden atomico para no
-                // alterar el estado de sesiones anteriores. Su audio sale por
-                // rhythmMonitor y MainComponent lo incorpora al bus grabable.
+                if (!rhythmOn)
+                    return;
+
+                // El BeatBuddy se comporta como un pedal real dentro de la
+                // cadena: su audio entra en este punto y atraviesa todos los
+                // efectos ubicados despues. El bus separado queda como retorno
+                // de monitoreo para DIRECT, donde no podemos devolver la entrada
+                // procesada sin duplicar la guitarra fisica.
+                if (rhythmModeIndex == (int) RhythmMode::Solo)
+                    sample = drumBusSample[ch];
+                else
+                    sample += drumBusSample[ch];
             };
 
             // Señal seca para los efectos de pitch existentes.

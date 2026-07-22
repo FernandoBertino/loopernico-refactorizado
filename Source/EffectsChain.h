@@ -86,9 +86,9 @@ public:
     ~EffectsChain() override;
 
     void prepare(double sampleRate, int samplesPerBlockExpected);
-    // Procesa la entrada externa y publica el rhythm/metronomo por separado.
-    // MainComponent reune ambos buses antes de grabar para poder decidir su
-    // monitoreo sin duplicar la bateria. Los buffers deben estar preasignados.
+    // Procesa la entrada externa e inyecta el rhythm/metronomo en la posicion
+    // del pedal dentro de la cadena. Tambien publica un bus seco separado para
+    // monitoreo DIRECT sin duplicar la guitarra. Los buffers deben estar preasignados.
     void processBlock(juce::AudioBuffer<float>& recordableInput,
                       juce::AudioBuffer<float>& rhythmMonitor,
                       int startSample, int numSamples);

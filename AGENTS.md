@@ -2,6 +2,13 @@
 
 Estas reglas complementan las preferencias globales de Fernando y se aplican a todo este repositorio.
 
+## Contexto operativo persistente
+
+- Al comenzar cualquier conversacion o tarea en este repositorio, leer completamente `PROJECT_CONTEXT.md` si existe antes de diagnosticar, editar, compilar o desplegar.
+- Tratar `PROJECT_CONTEXT.md` como un traspaso operativo: verificar sus afirmaciones contra el codigo, `git status` y el estado real de los builds; una tarea marcada como pendiente no esta terminada.
+- Despues de un avance material, una nueva medicion, un bloqueo o antes de cerrar una tarea incompleta, actualizar `PROJECT_CONTEXT.md` con fecha, estado comprobado, verificaciones realizadas y proximo paso concreto.
+- Mantener el contexto compacto y actual: reemplazar informacion obsoleta en vez de acumular una cronologia indefinida. No guardar secretos, tokens, datos personales ni grandes logs.
+
 ## Aplicacion de uso diario y despliegue local
 
 - Loopernico es una aplicacion que Fernando usa todos los dias. Mantener siempre disponible una ultima version estable y lista para abrir desde el Escritorio.
