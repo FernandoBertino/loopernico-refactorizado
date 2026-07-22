@@ -1,6 +1,6 @@
 # Contexto operativo de Loopernico
 
-Ultima actualizacion: 2026-07-22 13:09 (America/Buenos_Aires)
+Ultima actualizacion: 2026-07-22 17:54 (America/Buenos_Aires)
 
 ## Uso
 
@@ -8,30 +8,35 @@ Ultima actualizacion: 2026-07-22 13:09 (America/Buenos_Aires)
 2. Verificar `git status --short --branch` y preservar cambios locales.
 3. Actualizar este traspaso despues de avances materiales o antes de detener una tarea incompleta.
 
-## Tarea activa: bateria nuevamente dentro de la cadena de efectos
+## Tarea activa: multiples VST3 con la carcasa TONEX original
 
-Fernando informo que el audio del pedal de bateria habia quedado seco y ya no era afectado por los pedales usados para la guitarra.
+Fernando pidio que los cuatro hosts VST3 reutilicen exactamente la carcasa TONEX terminada que existia antes de la ampliacion multi-VST.
 
-## Causa y correccion comprobadas
+## Implementacion comprobada
 
-- La separacion de buses incorporada junto con el nuevo monitoreo habia dejado vacia la etapa `RhythmPedal` de `EffectsChain`; el rhythm se sumaba en `MainComponent` despues de procesar todos los efectos.
-- `processRhythm` vuelve a inyectar `drumBusSample` en la posicion real del BeatBuddy dentro del orden atomico de pedales. En modo Solo reemplaza la entrada de guitarra; en Blend/Metronome la suma.
-- Los pedales ubicados despues del BeatBuddy procesan bateria y guitarra; los ubicados antes no, conforme al orden visual de la pedalera.
-- Se retiro de `MainComponent` la suma seca posterior para evitar duplicacion. La señal combinada y procesada es la que recibe y graba el looper.
-- El bus seco separado se conserva solamente como retorno del rhythm cuando el monitoreo de entrada esta en DIRECT. La configuracion diaria comprobada de Fernando usa monitoreo SOFTWARE (`enabled=1`), por lo que escucha y graba la bateria procesada sin duplicacion.
-- No se tocaron otros pedales ni los cambios locales preexistentes en `AGENTS.md`, `.jucer`, `Screenshots/` o `tmp/`.
+- Hay cuatro hosts VST3 independientes con carga, descarga, editor y bypass propios.
+- Las cuatro instancias se construyen con el identificador visual exacto `VST3 HOST`. Asi reutilizan el mismo asset `model-host-face-v3.png`, recorte, proporciones, pantalla, tipografia, botones, footswitch, LED y hit-testing de la implementacion TONEX original; el nombre del plugin continua mostrandose en la pantalla de cada instancia.
+- Los cuatro hosts forman parte del mismo orden arrastrable que los 13 pedales internos. El orden visual publicado atomically es tambien el orden DSP real.
+- Cada VST se procesa en streaming mediante buffers preasignados. Esto permite intercalarlo con el DSP por muestra existente sin asignaciones ni acceso a disco en el callback. La latencia de puente (un bloque por VST activo) se suma a la latencia informada por cada plugin para la compensacion de grabacion.
+- Las sesiones guardan ruta, enabled, posicion y estado de las cuatro instancias dentro del bloque VST historico. Las sesiones anteriores con un solo VST se detectan y migran al host 1, conservandolo antes de los pedales internos como en el comportamiento previo.
+- El mapping MIDI `VST3` historico sigue controlando el host 1 para no romper perfiles existentes.
+- No se modifico el `.jucer` local preexistente ni otros pedales fuera de la integracion necesaria.
 
 ## Verificacion y despliegue
 
 - `git diff --check`: correcto; solo advertencias de normalizacion LF/CRLF preexistentes.
-- Build `Release | x64` con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`: codigo 0.
-- Suite interna: 14/14 pruebas deterministas de compensacion y buses, codigo 0 (`tmp/latency-rhythm-fx-fix-20260722.txt`).
-- Smoke del candidato y del ejecutable desplegado: ambos permanecieron abiertos 8 s; AudioBox ASIO 48 kHz/256 y sin salida prematura ni XRUN informado.
-- Candidato y `Builds/LocalDeployment/Current` coinciden: SHA-256 `4FF8E64EE60DC52622AC20F1ABEE704908391C9F6D772FDA958F5442DB8049E8`.
-- La version estable anterior se preservo en `Builds/LocalDeployment/Previous`: SHA-256 `B15E6BAB22F0FD0D52075E92586EE5E6BBA140DB4F9E8EB3CD791703B6E61273`; hay exactamente dos EXE desplegados.
+- Build `Release | x64` con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`: codigo 0, 0 errores y 0 advertencias.
+- Suite interna: 14/14 pruebas deterministas de compensacion y buses, codigo 0.
+- TONEX real: carga correcta desde `C:\Program Files\Common Files\VST3\TONEX.vst3` en host 1.
+- Capturas nativas compacta y ampliada: la carcasa, textura, pantalla, controles, footswitch y luces coinciden con el diseno TONEX original. La automatizacion interactiva de Windows no estuvo disponible por `0x80004002`, por lo que la comprobacion visual se hizo con `Component::createComponentSnapshot` y revision directa de los PNG.
+- Roundtrip nuevo: sesion guardada con TONEX, reabierta y capturada con plugin, estado, posicion y bypass restaurados.
+- Compatibilidad: una sesion `.loopernico` de 2026-07-19 abre correctamente con la migracion de orden.
+- Smoke del ejecutable desplegado: captura nativa correcta y codigo 0. La apertura directa de la sesion nueva mediante la asociacion permanecio activa 8 s sin salida prematura.
+- `Builds/LocalDeployment/Current`: SHA-256 `D7385CC29F8242E7735561C2B044296140052418BA8BDC580CD51C4AFA357F1E`.
+- `Builds/LocalDeployment/Previous`: SHA-256 `70CA0BE1B4FB31EC1826E85386DFF5C629E30221E8D4A41AE28EFCAF7C7C7A95`; hay exactamente dos EXE desplegados.
 - `C:\Users\Fernando\Desktop\Loopernico.lnk` fue recreado hacia `Current`, con directorio de trabajo e icono correctos.
 - Asociacion `.loopernico` verificada: `Loopernico.Session`, tipo `Archivo de Loopernico`, comando hacia `Current` e icono de sesion correctos.
 
 ## Estado
 
-Correccion terminada, verificada, desplegada como version diaria y confirmada por Fernando con su uso habitual.
+Implementacion terminada, verificada y desplegada como version diaria. Limite deliberado actual: cuatro VST3 simultaneos.

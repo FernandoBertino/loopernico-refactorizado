@@ -83,9 +83,13 @@ namespace
 EffectsChain::EffectsChain()
     : juce::Thread("Rhythm sample loader")
 {
-    std::array<int, kPedalCount> initialOrder{};
+    std::array<int, kChainItemCount> initialOrder{};
+    initialOrder[0] = kPedalCount;
     for (int i = 0; i < kPedalCount; ++i)
-        initialOrder[(size_t) i] = i;
+        initialOrder[(size_t) i + 1] = i;
+    for (int slot = 1; slot < kMaxExternalPlugins; ++slot)
+        initialOrder[(size_t) kPedalCount + slot] = kPedalCount + slot;
+    audioPedalOrder = initialOrder;
     setPedalOrder(initialOrder);
 
     juce::addDefaultFormatsToManager(pluginFormatManager);
@@ -99,8 +103,9 @@ EffectsChain::~EffectsChain()
     signalThreadShouldExit();
     notify();
     stopThread(5000);
-    if (externalPluginInstance != nullptr)
-        externalPluginInstance->removeListener(this);
+    for (auto& slot : externalPlugins)
+        if (slot.instance != nullptr)
+            slot.instance->removeListener(this);
 }
 
 EffectsChain::PreparedExternalPlugin::~PreparedExternalPlugin()
@@ -120,6 +125,7 @@ EffectsChain::PreparedExternalPlugin& EffectsChain::PreparedExternalPlugin::oper
         release();
         instance = std::move(other.instance);
         scratchBuffer = std::move(other.scratchBuffer);
+        outputBuffer = std::move(other.outputBuffer);
         midiBuffer = std::move(other.midiBuffer);
         inputChannels = other.inputChannels;
         outputChannels = other.outputChannels;
@@ -217,6 +223,8 @@ bool EffectsChain::prepareExternalVst3(const juce::File& pluginFile,
                                                           prepared.outputChannels));
     prepared.scratchBuffer.setSize(requiredChannels, maxBlockSize_, false, true, false);
     prepared.scratchBuffer.clear();
+    prepared.outputBuffer.setSize(requiredChannels, maxBlockSize_, false, true, false);
+    prepared.outputBuffer.clear();
     prepared.midiBuffer.ensureSize(64 * 1024);
     prepared.midiBuffer.clear();
     prepared.name = prepared.instance->getName();
@@ -229,39 +237,48 @@ bool EffectsChain::prepareExternalVst3(const juce::File& pluginFile,
     return true;
 }
 
-EffectsChain::PreparedExternalPlugin EffectsChain::commitExternalPlugin(PreparedExternalPlugin&& candidate) noexcept
+EffectsChain::PreparedExternalPlugin EffectsChain::commitExternalPlugin(PreparedExternalPlugin&& candidate, int slotIndex) noexcept
 {
     PreparedExternalPlugin retired;
-    if (externalPluginInstance != nullptr)
-        externalPluginInstance->removeListener(this);
-    std::swap(retired.instance, externalPluginInstance);
-    std::swap(retired.scratchBuffer, externalPluginScratchBuffer);
-    std::swap(retired.midiBuffer, externalPluginMidiBuffer);
-    std::swap(retired.inputChannels, externalPluginInputChannels);
-    std::swap(retired.outputChannels, externalPluginOutputChannels);
-    std::swap(retired.name, externalPluginName);
-    std::swap(retired.path, externalPluginPath);
-    retired.latencySamples = externalPluginLatencySamples.exchange(candidate.latencySamples);
-    retired.enabled = externalPluginEnabled.exchange(candidate.enabled);
+    if (!juce::isPositiveAndBelow(slotIndex, kMaxExternalPlugins))
+        return std::move(candidate);
 
-    std::swap(candidate.instance, externalPluginInstance);
-    std::swap(candidate.scratchBuffer, externalPluginScratchBuffer);
-    std::swap(candidate.midiBuffer, externalPluginMidiBuffer);
-    std::swap(candidate.inputChannels, externalPluginInputChannels);
-    std::swap(candidate.outputChannels, externalPluginOutputChannels);
-    std::swap(candidate.name, externalPluginName);
-    std::swap(candidate.path, externalPluginPath);
-    if (externalPluginInstance != nullptr)
-        externalPluginInstance->addListener(this);
+    auto& slot = externalPlugins[(size_t) slotIndex];
+    if (slot.instance != nullptr)
+        slot.instance->removeListener(this);
+    std::swap(retired.instance, slot.instance);
+    std::swap(retired.scratchBuffer, slot.scratchBuffer);
+    std::swap(retired.outputBuffer, slot.outputBuffer);
+    std::swap(retired.midiBuffer, slot.midiBuffer);
+    std::swap(retired.inputChannels, slot.inputChannels);
+    std::swap(retired.outputChannels, slot.outputChannels);
+    std::swap(retired.name, slot.name);
+    std::swap(retired.path, slot.path);
+    retired.latencySamples = slot.latencySamples.exchange(candidate.latencySamples);
+    retired.enabled = slot.enabled.exchange(candidate.enabled);
+
+    std::swap(candidate.instance, slot.instance);
+    std::swap(candidate.scratchBuffer, slot.scratchBuffer);
+    std::swap(candidate.outputBuffer, slot.outputBuffer);
+    std::swap(candidate.midiBuffer, slot.midiBuffer);
+    std::swap(candidate.inputChannels, slot.inputChannels);
+    std::swap(candidate.outputChannels, slot.outputChannels);
+    std::swap(candidate.name, slot.name);
+    std::swap(candidate.path, slot.path);
+    slot.streamPosition = 0;
+    slot.outputReady = false;
+    slot.streamWasEnabled = false;
+    if (slot.instance != nullptr)
+        slot.instance->addListener(this);
     externalPluginLatencyRefreshRequested.store(false);
     return retired;
 }
 
-EffectsChain::PreparedExternalPlugin EffectsChain::detachExternalPlugin() noexcept
+EffectsChain::PreparedExternalPlugin EffectsChain::detachExternalPlugin(int slot) noexcept
 {
     PreparedExternalPlugin empty;
     empty.enabled = false;
-    return commitExternalPlugin(std::move(empty));
+    return commitExternalPlugin(std::move(empty), slot);
 }
 
 void EffectsChain::unloadExternalPlugin()
@@ -269,11 +286,11 @@ void EffectsChain::unloadExternalPlugin()
     auto retired = detachExternalPlugin();
 }
 
-bool EffectsChain::copyExternalPluginState(juce::MemoryBlock& state) const
+bool EffectsChain::copyExternalPluginState(juce::MemoryBlock& state, int slotIndex) const
 {
     state.reset();
 
-    auto* plugin = externalPluginInstance.get();
+    auto* plugin = getExternalPluginInstance(slotIndex);
     if (plugin == nullptr)
         return false;
 
@@ -283,7 +300,7 @@ bool EffectsChain::copyExternalPluginState(juce::MemoryBlock& state) const
 
 bool EffectsChain::restoreExternalPluginState(const juce::MemoryBlock& state, juce::String& errorMessage)
 {
-    auto* plugin = externalPluginInstance.get();
+    auto* plugin = getExternalPluginInstance();
     if (plugin == nullptr)
     {
         errorMessage = "No hay un VST3 cargado para restaurar su estado.";
@@ -312,25 +329,81 @@ void EffectsChain::audioProcessorChanged(
 
 void EffectsChain::refreshExternalPluginLatency()
 {
-    const int latency = externalPluginInstance != nullptr
-        ? juce::jmax(0, externalPluginInstance->getLatencySamples()) : 0;
-    externalPluginLatencySamples.store(latency, std::memory_order_release);
+    for (auto& slot : externalPlugins)
+        slot.latencySamples.store(slot.instance != nullptr
+            ? juce::jmax(0, slot.instance->getLatencySamples()) : 0,
+            std::memory_order_release);
     externalPluginLatencyRefreshRequested.store(false, std::memory_order_release);
 }
 
-void EffectsChain::setPedalOrder(const std::array<int, kPedalCount>& order)
+bool EffectsChain::hasExternalPlugin(int slot) const
 {
-    uint64_t packed = 0;
-    std::array<bool, kPedalCount> seen{};
-    for (int i = 0; i < kPedalCount; ++i)
+    return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)
+        && externalPlugins[(size_t) slot].instance != nullptr;
+}
+
+void EffectsChain::setExternalPluginEnabled(bool enabled, int slot)
+{
+    if (juce::isPositiveAndBelow(slot, kMaxExternalPlugins))
+        externalPlugins[(size_t) slot].enabled.store(enabled);
+}
+
+bool EffectsChain::isExternalPluginEnabled(int slot) const
+{
+    return hasExternalPlugin(slot) && externalPlugins[(size_t) slot].enabled.load();
+}
+
+juce::String EffectsChain::getExternalPluginName(int slot) const
+{
+    return hasExternalPlugin(slot) ? externalPlugins[(size_t) slot].name : juce::String();
+}
+
+juce::String EffectsChain::getExternalPluginPath(int slot) const
+{
+    return hasExternalPlugin(slot) ? externalPlugins[(size_t) slot].path : juce::String();
+}
+
+juce::AudioPluginInstance* EffectsChain::getExternalPluginInstance(int slot) const
+{
+    return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)
+        ? externalPlugins[(size_t) slot].instance.get() : nullptr;
+}
+
+int EffectsChain::getExternalPluginReportedLatencySamples(int slot) const
+{
+    return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)
+        ? externalPlugins[(size_t) slot].latencySamples.load() : 0;
+}
+
+int EffectsChain::getActiveExternalPluginLatencySamples() const
+{
+    int total = 0;
+    for (int slot = 0; slot < kMaxExternalPlugins; ++slot)
+        if (isExternalPluginEnabled(slot))
+            total += externalPlugins[(size_t) slot].latencySamples.load() + maxBlockSize_;
+    return total;
+}
+
+void EffectsChain::setPedalOrder(const std::array<int, kChainItemCount>& order)
+{
+    uint64_t low = 0, high = 0;
+    std::array<bool, kChainItemCount> seen{};
+    for (int i = 0; i < kChainItemCount; ++i)
     {
         const int pedal = order[(size_t) i];
-        if (pedal < 0 || pedal >= kPedalCount || seen[(size_t) pedal])
+        if (pedal < 0 || pedal >= kChainItemCount || seen[(size_t) pedal])
             return;
         seen[(size_t) pedal] = true;
-        packed |= (uint64_t) pedal << (i * 4);
+        const int bit = i * 5;
+        if (bit < 60)
+            low |= (uint64_t) pedal << bit;
+        else
+            high |= (uint64_t) pedal << (bit - 60);
     }
-    packedPedalOrder.store(packed, std::memory_order_release);
+    pedalOrderSequence.fetch_add(1, std::memory_order_acq_rel);
+    packedPedalOrderLow.store(low, std::memory_order_relaxed);
+    packedPedalOrderHigh.store(high, std::memory_order_relaxed);
+    pedalOrderSequence.fetch_add(1, std::memory_order_release);
 }
 
 EffectsChain::RhythmSampleSlot EffectsChain::sampleSlotForInstrument(DrumInstrument instrument)
@@ -1014,61 +1087,81 @@ float EffectsChain::estimateRecentPitchHz(int channel, int writePosition) const
     return (float) sampleRate_ / ((float) selectedLag + adjustment);
 }
 
-void EffectsChain::prepareExternalPluginScratchBuffer()
+void EffectsChain::prepareExternalPluginScratchBuffer(int slotIndex)
 {
-    auto* plugin = externalPluginInstance.get();
-    externalPluginInputChannels = plugin != nullptr ? plugin->getTotalNumInputChannels() : 0;
-    externalPluginOutputChannels = plugin != nullptr ? plugin->getTotalNumOutputChannels() : 0;
+    if (!juce::isPositiveAndBelow(slotIndex, kMaxExternalPlugins))
+        return;
+    auto& slot = externalPlugins[(size_t) slotIndex];
+    auto* plugin = slot.instance.get();
+    slot.inputChannels = plugin != nullptr ? plugin->getTotalNumInputChannels() : 0;
+    slot.outputChannels = plugin != nullptr ? plugin->getTotalNumOutputChannels() : 0;
 
-    const int requiredChannels = juce::jmax(1, juce::jmax(externalPluginInputChannels,
-                                                          externalPluginOutputChannels));
-    externalPluginScratchBuffer.setSize(requiredChannels, maxBlockSize_, false, true, false);
-    externalPluginScratchBuffer.clear();
+    const int requiredChannels = juce::jmax(1, juce::jmax(slot.inputChannels, slot.outputChannels));
+    slot.scratchBuffer.setSize(requiredChannels, maxBlockSize_, false, true, false);
+    slot.outputBuffer.setSize(requiredChannels, maxBlockSize_, false, true, false);
+    slot.scratchBuffer.clear();
+    slot.outputBuffer.clear();
+    slot.streamPosition = 0;
+    slot.outputReady = false;
 
-    // clear() conserva esta reserva, evitando crecimiento del MidiBuffer en el callback.
-    externalPluginMidiBuffer.ensureSize(64 * 1024);
-    externalPluginMidiBuffer.clear();
+    slot.midiBuffer.ensureSize(64 * 1024);
+    slot.midiBuffer.clear();
 }
 
-void EffectsChain::processExternalPluginBlock(juce::AudioBuffer<float>& buffer, int startSample, int numSamples)
+void EffectsChain::processExternalPluginSample(int slotIndex, int channel, int channels, float& sample)
 {
-    if (!isExternalPluginEnabled() || numSamples <= 0)
+    if (!juce::isPositiveAndBelow(slotIndex, kMaxExternalPlugins))
         return;
 
-    auto* plugin = externalPluginInstance.get();
+    auto& slot = externalPlugins[(size_t) slotIndex];
+    if (!isExternalPluginEnabled(slotIndex))
+    {
+        if (slot.streamWasEnabled)
+        {
+            slot.streamPosition = 0;
+            slot.outputReady = false;
+            slot.scratchBuffer.clear();
+            slot.outputBuffer.clear();
+            slot.streamWasEnabled = false;
+        }
+        return;
+    }
+    if (!slot.streamWasEnabled)
+    {
+        slot.streamPosition = 0;
+        slot.outputReady = false;
+        slot.scratchBuffer.clear();
+        slot.outputBuffer.clear();
+        slot.streamWasEnabled = true;
+    }
+    auto* plugin = slot.instance.get();
     if (plugin == nullptr || plugin->isSuspended())
         return;
 
-    const int availableSamples = buffer.getNumSamples() - startSample;
-    const int samplesToProcess = juce::jmin(numSamples, juce::jmax(0, availableSamples));
-    const int scratchBlockSize = externalPluginScratchBuffer.getNumSamples();
-    const int scratchChannels = externalPluginScratchBuffer.getNumChannels();
-    if (samplesToProcess <= 0 || scratchBlockSize <= 0 || scratchChannels <= 0)
+    const int blockSize = slot.scratchBuffer.getNumSamples();
+    const int scratchChannels = slot.scratchBuffer.getNumChannels();
+    if (blockSize <= 0 || scratchChannels <= 0 || !juce::isPositiveAndBelow(channel, channels))
         return;
 
-    const int sourceChannels = buffer.getNumChannels();
-    const int copiedInputChannels = juce::jmin(sourceChannels,
-                                               juce::jmin(externalPluginInputChannels, scratchChannels));
-    const int copiedOutputChannels = juce::jmin(sourceChannels,
-                                                juce::jmin(externalPluginOutputChannels, scratchChannels));
+    const int pos = slot.streamPosition;
+    const float processed = slot.outputReady && channel < slot.outputChannels
+        ? slot.outputBuffer.getSample(channel, pos) : 0.0f;
+    if (channel < slot.inputChannels)
+        slot.scratchBuffer.setSample(channel, pos, sample);
+    sample = processed;
 
-    for (int offset = 0; offset < samplesToProcess; offset += scratchBlockSize)
+    if (channel == channels - 1)
     {
-        const int chunkSize = juce::jmin(scratchBlockSize, samplesToProcess - offset);
-        externalPluginScratchBuffer.clear(0, chunkSize);
-
-        for (int channel = 0; channel < copiedInputChannels; ++channel)
-            externalPluginScratchBuffer.copyFrom(channel, 0, buffer, channel,
-                                                 startSample + offset, chunkSize);
-
-        // La capacidad permanece fija; el plugin solo ve el tramo valido del scratch.
-        juce::AudioBuffer<float> chunk(externalPluginScratchBuffer.getArrayOfWritePointers(),
-                                       scratchChannels, 0, chunkSize);
-        externalPluginMidiBuffer.clear();
-        plugin->processBlock(chunk, externalPluginMidiBuffer);
-
-        for (int channel = 0; channel < copiedOutputChannels; ++channel)
-            buffer.copyFrom(channel, startSample + offset, chunk, channel, 0, chunkSize);
+        ++slot.streamPosition;
+        if (slot.streamPosition >= blockSize)
+        {
+            slot.midiBuffer.clear();
+            plugin->processBlock(slot.scratchBuffer, slot.midiBuffer);
+            std::swap(slot.scratchBuffer, slot.outputBuffer);
+            slot.scratchBuffer.clear();
+            slot.streamPosition = 0;
+            slot.outputReady = true;
+        }
     }
 }
 
@@ -1093,25 +1186,37 @@ void EffectsChain::prepare(double sampleRate, int maxBlockSize)
     for (auto& reverb : roomReverbs)
         reverb.setSampleRate(sampleRate_);
     outputEq.prepare(sampleRate_);
-    if (externalPluginInstance != nullptr)
+    for (auto& slot : externalPlugins)
     {
-        externalPluginInstance->releaseResources();
-        externalPluginInstance->setRateAndBufferSizeDetails(sampleRate_, maxBlockSize_);
-        externalPluginInstance->prepareToPlay(sampleRate_, maxBlockSize_);
-        externalPluginInstance->reset();
+        if (slot.instance != nullptr)
+        {
+            slot.instance->releaseResources();
+            slot.instance->setRateAndBufferSizeDetails(sampleRate_, maxBlockSize_);
+            slot.instance->prepareToPlay(sampleRate_, maxBlockSize_);
+            slot.instance->reset();
+        }
     }
 
     refreshExternalPluginLatency();
 
-    prepareExternalPluginScratchBuffer();
+    for (int slot = 0; slot < kMaxExternalPlugins; ++slot)
+        prepareExternalPluginScratchBuffer(slot);
 
     reset();
 }
 
 void EffectsChain::reset()
 {
-    if (externalPluginInstance != nullptr)
-        externalPluginInstance->reset();
+    for (auto& slot : externalPlugins)
+    {
+        if (slot.instance != nullptr)
+            slot.instance->reset();
+        slot.streamPosition = 0;
+        slot.outputReady = false;
+        slot.streamWasEnabled = false;
+        slot.scratchBuffer.clear();
+        slot.outputBuffer.clear();
+    }
 
     delayBuffer.clear();
     chorusBuffer.clear();
@@ -1123,7 +1228,8 @@ void EffectsChain::reset()
     chordBodyBuffer.clear();
     reverbPreDelayBuffer.clear();
     reverbScratchBuffer.clear();
-    externalPluginMidiBuffer.clear();
+    for (auto& slot : externalPlugins)
+        slot.midiBuffer.clear();
     for (auto& layer : sustainLayers)
     {
         layer.buffer.clear();
@@ -1271,8 +1377,6 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
     for (int ch = 0; ch < rhythmMonitor.getNumChannels(); ++ch)
         rhythmMonitor.clear(ch, startSample, rhythmSamplesToClear);
 
-    processExternalPluginBlock(recordableInput, startSample, numSamples);
-
     // =========================================================================
     // 1. CARGA DE ATOMICS — una sola vez por bloque, fuera de cualquier loop.
     // =========================================================================
@@ -1292,10 +1396,33 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
     const bool eqOn   = eqEnabled.load();
     const bool freezeOn = freezeEnabled.load();
     const bool chordFreezeOn = chordFreezeEnabled.load();
-    int orderedPedals[kPedalCount]{};
-    const uint64_t packedOrder = packedPedalOrder.load(std::memory_order_acquire);
-    for (int i = 0; i < kPedalCount; ++i)
-        orderedPedals[i] = (int) ((packedOrder >> (i * 4)) & 0x0f);
+    int orderedPedals[kChainItemCount]{};
+    std::copy(audioPedalOrder.begin(), audioPedalOrder.end(), orderedPedals);
+    uint64_t packedLow = 0, packedHigh = 0;
+    bool decodedConsistently = false;
+    for (int attempt = 0; attempt < 3; ++attempt)
+    {
+        const auto before = pedalOrderSequence.load(std::memory_order_acquire);
+        if ((before & 1u) != 0)
+            continue;
+        packedLow = packedPedalOrderLow.load(std::memory_order_relaxed);
+        packedHigh = packedPedalOrderHigh.load(std::memory_order_relaxed);
+        const auto after = pedalOrderSequence.load(std::memory_order_acquire);
+        if (before == after)
+        {
+            decodedConsistently = true;
+            break;
+        }
+    }
+    if (decodedConsistently)
+    {
+        for (int i = 0; i < kChainItemCount; ++i)
+        {
+            const int bit = i * 5;
+            orderedPedals[i] = (int) (((bit < 60 ? packedLow >> bit : packedHigh >> (bit - 60))) & 0x1f);
+            audioPedalOrder[(size_t) i] = orderedPedals[i];
+        }
+    }
 
     const float cMix    = compMix.load();
     const float gateThresholdDb = noiseGateThresholdDb.load();
@@ -3025,9 +3152,10 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
                 sample = outputEq.processSample(ch, sample * outputEqInputGain) * outputEqOutputGain;
             };
 
-            for (int orderIndex = 0; orderIndex < kPedalCount; ++orderIndex)
+            for (int orderIndex = 0; orderIndex < kChainItemCount; ++orderIndex)
             {
-                switch (orderedPedals[orderIndex])
+                const int chainItem = orderedPedals[orderIndex];
+                switch (chainItem)
                 {
                     case NoiseGatePedal:     processNoiseGate(); break;
                     case RhythmPedal:        processRhythm(); break;
@@ -3042,7 +3170,10 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
                     case DelayPedal:         processDelay(); break;
                     case ReverbPedal:        processReverb(); break;
                     case EqPedal:            processOutputEq(); break;
-                    default: break;
+                    default:
+                        if (chainItem >= kPedalCount && chainItem < kChainItemCount)
+                            processExternalPluginSample(chainItem - kPedalCount, ch, channels, sample);
+                        break;
                 }
             }
 

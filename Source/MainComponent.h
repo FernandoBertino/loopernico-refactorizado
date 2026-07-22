@@ -181,6 +181,8 @@ public:
 
 private:
     static constexpr int kNumFxPedals = 13;
+    static constexpr int kMaxVst3Pedals = EffectsChain::kMaxExternalPlugins;
+    static constexpr int kChainItemCount = kNumFxPedals + kMaxVst3Pedals;
     static constexpr int kVst3PedalBodyWidth = 254;
     static constexpr int kVst3PedalPitch = kVst3PedalBodyWidth + 28;
 
@@ -253,10 +255,10 @@ private:
 
     juce::Viewport    fxViewport;
     FXChainCanvas     fxContainer;
-    std::unique_ptr<FXPedalComponent> vst3Pedal;
+    std::array<std::unique_ptr<FXPedalComponent>, kMaxVst3Pedals> vst3Pedals;
     std::unique_ptr<FXPedalComponent> fxPedals[kNumFxPedals];
-    std::array<int, kNumFxPedals> fxOrder{};
-    int draggingFxPedal = -1;
+    std::array<int, kChainItemCount> fxOrder{};
+    int draggingFxPedal = -1; // id unificado: 0..12 interno, 13..16 VST
     int dragInsertSlot = -1;
     FXPedalFocusOverlay fxPedalFocusOverlay;
     int focusedFxPedalIndex = -2; // -2: ninguno, -1: VST3, 0..12: pedal interno
@@ -337,8 +339,10 @@ private:
     void updateFxPedalDrag(FXPedalComponent& pedal, const juce::MouseEvent& e);
     void endFxPedalDrag(FXPedalComponent& pedal, const juce::MouseEvent& e);
     int findFxPedalIndex(const FXPedalComponent& pedal) const;
-    int fxPedalBodyWidth(int pedalIndex) const;
-    int fxPedalPitch(int pedalIndex) const;
+    int findChainItemId(const FXPedalComponent& pedal) const;
+    FXPedalComponent* getChainItemPedal(int chainItem) const;
+    int fxPedalBodyWidth(int chainItem) const;
+    int fxPedalPitch(int chainItem) const;
     int fxSlotStartX(int slot) const;
     int fxSlotForX(int x) const;
     void moveFxPedalToSlot(int pedalIndex, int targetSlot);
@@ -349,11 +353,11 @@ private:
     void updateRhythmBoxReadouts();
     void layoutVst3PedalControls(FXPedalComponent& pedal);
     void styleVstButton(juce::TextButton& button, juce::Colour accent);
-    void loadExternalVst3Plugin();
-    void unloadExternalVst3Plugin();
-    void openExternalVst3Editor();
-    void closeExternalVst3Editor();
-    void updateExternalVstUi();
+    void loadExternalVst3Plugin(int slot = 0);
+    void unloadExternalVst3Plugin(int slot = 0);
+    void openExternalVst3Editor(int slot = 0);
+    void closeExternalVst3Editor(int slot = -1);
+    void updateExternalVstUi(int slot = -1);
     void saveSessionToFile();
     bool saveCurrentSessionToFile(const juce::File& sessionFile, juce::String& errorMessage);
     void loadSessionFromFile();
@@ -372,15 +376,15 @@ private:
     void refreshAllThumbnails();
     int findMidiDeviceIndexByIdentifier(const juce::String& identifier) const;
 
-    juce::TextButton btnLoadVst3{"CARGAR"};
-    juce::TextButton btnUnloadVst3{"QUITAR"};
-    juce::TextButton btnEditVst3{"ABRIR"};
-    juce::TextButton btnBypassVst3{"VST3 ON"};
-    TonexDisplayLabel lblVst3Status;
-    std::unique_ptr<juce::FileChooser> vst3FileChooser;
+    std::array<juce::TextButton, kMaxVst3Pedals> btnLoadVst3;
+    std::array<juce::TextButton, kMaxVst3Pedals> btnUnloadVst3;
+    std::array<juce::TextButton, kMaxVst3Pedals> btnEditVst3;
+    std::array<juce::TextButton, kMaxVst3Pedals> btnBypassVst3;
+    std::array<TonexDisplayLabel, kMaxVst3Pedals> lblVst3Status;
+    std::array<std::unique_ptr<juce::FileChooser>, kMaxVst3Pedals> vst3FileChoosers;
     std::unique_ptr<juce::FileChooser> sessionFileChooser;
     std::unique_ptr<juce::FileChooser> exportFileChooser;
-    std::unique_ptr<juce::DocumentWindow> vst3EditorWindow;
+    std::array<std::unique_ptr<juce::DocumentWindow>, kMaxVst3Pedals> vst3EditorWindows;
     std::unique_ptr<AudioSettingsPanel> audioSettingsPanel;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)

@@ -31,6 +31,46 @@ namespace
     constexpr int kMidiClearWidth = 64;
     constexpr int kMidiSaveWidth = 108;
     constexpr int kMidiControlGap = 8;
+    constexpr int kMultiVstStateMagic = 0x56535434; // VST4
+
+    juce::MemoryBlock packVstStates(const std::array<juce::MemoryBlock, EffectsChain::kMaxExternalPlugins>& states)
+    {
+        juce::MemoryOutputStream out;
+        out.writeInt(kMultiVstStateMagic);
+        out.writeInt(EffectsChain::kMaxExternalPlugins);
+        for (const auto& state : states)
+        {
+            out.writeInt((int) state.getSize());
+            if (state.getSize() > 0)
+                out.write(state.getData(), state.getSize());
+        }
+        return out.getMemoryBlock();
+    }
+
+    std::array<juce::MemoryBlock, EffectsChain::kMaxExternalPlugins>
+    unpackVstStates(const juce::MemoryBlock& packed)
+    {
+        std::array<juce::MemoryBlock, EffectsChain::kMaxExternalPlugins> states;
+        if (packed.getSize() == 0)
+            return states;
+        juce::MemoryInputStream in(packed, false);
+        if (in.readInt() != kMultiVstStateMagic)
+        {
+            states[0] = packed; // Sesiones v1: el bloque completo pertenecia al unico VST.
+            return states;
+        }
+        const int count = juce::jlimit(0, EffectsChain::kMaxExternalPlugins, in.readInt());
+        for (int slot = 0; slot < count; ++slot)
+        {
+            const int size = in.readInt();
+            if (size < 0 || (juce::int64) size > in.getNumBytesRemaining())
+                break;
+            states[(size_t) slot].setSize((size_t) size);
+            if (size > 0)
+                in.read(states[(size_t) slot].getData(), size);
+        }
+        return states;
+    }
 
     juce::Typeface::Ptr loadTonexDisplayTypeface()
     {
@@ -557,45 +597,53 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
     addAndMakeVisible(btnOutputMode);
     updateOutputModeButton();
 
-    styleVstButton(btnLoadVst3, LnfC::OvdAmber);
-    styleVstButton(btnUnloadVst3, juce::Colour(0xff9c4630));
-    styleVstButton(btnEditVst3, LnfC::Accent);
-    styleVstButton(btnBypassVst3, juce::Colour(0xff2f7d53));
-    for (auto* button : { &btnLoadVst3, &btnUnloadVst3, &btnEditVst3, &btnBypassVst3 })
+    const auto tonexTypeface = loadTonexDisplayTypeface();
+    for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
     {
-        button->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff111820));
-        button->setColour(juce::TextButton::textColourOnId, juce::Colours::white);
-    }
-    btnBypassVst3.setClickingTogglesState(true);
-    btnLoadVst3.onClick = [this]() { loadExternalVst3Plugin(); };
-    btnUnloadVst3.onClick = [this]() { unloadExternalVst3Plugin(); };
-    btnEditVst3.onClick = [this]() { openExternalVst3Editor(); };
-    btnBypassVst3.onClick = [this]()
-    {
-        effectsChain.setExternalPluginEnabled(btnBypassVst3.getToggleState());
-        updateExternalVstUi();
-    };
-    if (auto typeface = loadTonexDisplayTypeface(); typeface != nullptr)
-        lblVst3Status.setFont(juce::Font(juce::FontOptions(typeface).withHeight(24.0f)));
-    else
-        lblVst3Status.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(),
-                                                           15.0f, juce::Font::bold)));
-    lblVst3Status.setColour(juce::Label::textColourId, LnfC::TextDim);
-    lblVst3Status.setColour(juce::Label::backgroundColourId, juce::Colour(0xff070a0d).withAlpha(0.92f));
-    lblVst3Status.setColour(juce::Label::outlineColourId, LnfC::Accent.withAlpha(0.20f));
-    lblVst3Status.setJustificationType(juce::Justification::centred);
-    if (vst3Pedal != nullptr)
-    {
-        vst3Pedal->addAndMakeVisible(btnLoadVst3);
-        vst3Pedal->addAndMakeVisible(btnUnloadVst3);
-        vst3Pedal->addAndMakeVisible(btnEditVst3);
-        vst3Pedal->addChildComponent(btnBypassVst3); // State mirror; the hardware footswitch is the live bypass control.
-        vst3Pedal->addAndMakeVisible(lblVst3Status);
-        vst3Pedal->onResized = [this](FXPedalComponent& pedal)
+        btnLoadVst3[(size_t) slot].setButtonText("CARGAR");
+        btnUnloadVst3[(size_t) slot].setButtonText("QUITAR");
+        btnEditVst3[(size_t) slot].setButtonText("ABRIR");
+        btnBypassVst3[(size_t) slot].setButtonText("VST3 ON");
+        styleVstButton(btnLoadVst3[(size_t) slot], LnfC::OvdAmber);
+        styleVstButton(btnUnloadVst3[(size_t) slot], juce::Colour(0xff9c4630));
+        styleVstButton(btnEditVst3[(size_t) slot], LnfC::Accent);
+        styleVstButton(btnBypassVst3[(size_t) slot], juce::Colour(0xff2f7d53));
+        for (auto* button : { &btnLoadVst3[(size_t) slot], &btnUnloadVst3[(size_t) slot],
+                              &btnEditVst3[(size_t) slot], &btnBypassVst3[(size_t) slot] })
         {
-            layoutVst3PedalControls(pedal);
+            button->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff111820));
+            button->setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+        }
+        btnBypassVst3[(size_t) slot].setClickingTogglesState(true);
+        btnLoadVst3[(size_t) slot].onClick = [this, slot]() { loadExternalVst3Plugin(slot); };
+        btnUnloadVst3[(size_t) slot].onClick = [this, slot]() { unloadExternalVst3Plugin(slot); };
+        btnEditVst3[(size_t) slot].onClick = [this, slot]() { openExternalVst3Editor(slot); };
+        btnBypassVst3[(size_t) slot].onClick = [this, slot]()
+        {
+            effectsChain.setExternalPluginEnabled(btnBypassVst3[(size_t) slot].getToggleState(), slot);
+            updateExternalVstUi(slot);
         };
-        layoutVst3PedalControls(*vst3Pedal);
+        auto& status = lblVst3Status[(size_t) slot];
+        if (tonexTypeface != nullptr)
+            status.setFont(juce::Font(juce::FontOptions(tonexTypeface).withHeight(24.0f)));
+        else
+            status.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 15.0f,
+                                                        juce::Font::bold)));
+        status.setColour(juce::Label::textColourId, LnfC::TextDim);
+        status.setColour(juce::Label::backgroundColourId, juce::Colour(0xff070a0d).withAlpha(0.92f));
+        status.setColour(juce::Label::outlineColourId, LnfC::Accent.withAlpha(0.20f));
+        status.setJustificationType(juce::Justification::centred);
+        auto* pedal = vst3Pedals[(size_t) slot].get();
+        if (pedal != nullptr)
+        {
+            pedal->addAndMakeVisible(btnLoadVst3[(size_t) slot]);
+            pedal->addAndMakeVisible(btnUnloadVst3[(size_t) slot]);
+            pedal->addAndMakeVisible(btnEditVst3[(size_t) slot]);
+            pedal->addChildComponent(btnBypassVst3[(size_t) slot]);
+            pedal->addAndMakeVisible(status);
+            pedal->onResized = [this](FXPedalComponent& resizedPedal) { layoutVst3PedalControls(resizedPedal); };
+            layoutVst3PedalControls(*pedal);
+        }
     }
     updateExternalVstUi();
 
@@ -775,12 +823,12 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
 
     midiController.setActionCallback(MidiController::Vst3Toggle, [this]()
     {
-        if (vst3Pedal == nullptr)
+        if (vst3Pedals[0] == nullptr)
             return;
 
-        const bool nextState = !vst3Pedal->onBtn.getToggleState();
-        vst3Pedal->onBtn.setToggleState(nextState, juce::sendNotificationSync);
-        vst3Pedal->repaint();
+        const bool nextState = !vst3Pedals[0]->onBtn.getToggleState();
+        vst3Pedals[0]->onBtn.setToggleState(nextState, juce::sendNotificationSync);
+        vst3Pedals[0]->repaint();
         fxContainer.repaint();
         lblMidiStatus.setText("MIDI PEDAL VST3: " + juce::String(nextState ? "ON" : "OFF"),
                               juce::dontSendNotification);
@@ -846,37 +894,36 @@ void MainComponent::setupFXPedals()
     fxViewport.setViewedComponent(&fxContainer, false);
     addAndMakeVisible(fxViewport);
 
-    vst3Pedal = std::make_unique<FXPedalComponent>(
-        "VST3 HOST", juce::Colour(0xff20262c), "", "", "");
-    juce::Slider* vst3HiddenControls[] = {
-        &vst3Pedal->knob1, &vst3Pedal->knob2, &vst3Pedal->knob3,
-        &vst3Pedal->knob4, &vst3Pedal->knob5, &vst3Pedal->knob6,
-        &vst3Pedal->knob7, &vst3Pedal->knob8, &vst3Pedal->knob9
-    };
-    for (auto* control : vst3HiddenControls)
-        control->setVisible(false);
-    vst3Pedal->onBtn.onClick = [this]()
+    for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
     {
-        if (!effectsChain.hasExternalPlugin())
+        auto& vstPedal = vst3Pedals[(size_t) slot];
+        vstPedal = std::make_unique<FXPedalComponent>(
+            "VST3 HOST", juce::Colour(0xff20262c), "", "", "");
+        for (auto* control : { &vstPedal->knob1, &vstPedal->knob2, &vstPedal->knob3,
+                               &vstPedal->knob4, &vstPedal->knob5, &vstPedal->knob6,
+                               &vstPedal->knob7, &vstPedal->knob8, &vstPedal->knob9 })
+            control->setVisible(false);
+        vstPedal->onBtn.onClick = [this, slot]()
         {
-            vst3Pedal->onBtn.setToggleState(false, juce::dontSendNotification);
-            updateExternalVstUi();
-            return;
-        }
-
-        effectsChain.setExternalPluginEnabled(vst3Pedal->onBtn.getToggleState());
-        updateExternalVstUi();
-    };
-    vst3Pedal->onZoomRequest = [this](FXPedalComponent& pedal)
-    {
-        toggleFxPedalFocus(pedal);
-    };
-    fxContainer.addAndMakeVisible(vst3Pedal.get());
+            if (!effectsChain.hasExternalPlugin(slot))
+            {
+                vst3Pedals[(size_t) slot]->onBtn.setToggleState(false, juce::dontSendNotification);
+                updateExternalVstUi(slot);
+                return;
+            }
+            effectsChain.setExternalPluginEnabled(vst3Pedals[(size_t) slot]->onBtn.getToggleState(), slot);
+            updateExternalVstUi(slot);
+        };
+        vstPedal->onDragStart = [this](FXPedalComponent& pedal, const juce::MouseEvent& e) { beginFxPedalDrag(pedal, e); };
+        vstPedal->onDragMove = [this](FXPedalComponent& pedal, const juce::MouseEvent& e) { updateFxPedalDrag(pedal, e); };
+        vstPedal->onDragEnd = [this](FXPedalComponent& pedal, const juce::MouseEvent& e) { endFxPedalDrag(pedal, e); };
+        vstPedal->onZoomRequest = [this](FXPedalComponent& pedal) { toggleFxPedalFocus(pedal); };
+        fxContainer.addAndMakeVisible(vstPedal.get());
+    }
 
     for (int i = 0; i < kNumFxPedals; ++i)
     {
         auto& d = defs[i];
-        fxOrder[(size_t) i] = i;
         fxPedals[i] = std::make_unique<FXPedalComponent>(
             d.name, juce::Colour(d.col), d.l1, d.l2, d.l3);
         fxPedals[i]->onDragStart = [this](FXPedalComponent& pedal, const juce::MouseEvent& e)
@@ -897,6 +944,11 @@ void MainComponent::setupFXPedals()
         };
         fxContainer.addAndMakeVisible(fxPedals[i].get());
     }
+    fxOrder[0] = kNumFxPedals;
+    for (int i = 0; i < kNumFxPedals; ++i)
+        fxOrder[(size_t) i + 1] = i;
+    for (int slot = 1; slot < kMaxVst3Pedals; ++slot)
+        fxOrder[(size_t) kNumFxPedals + slot] = kNumFxPedals + slot;
     effectsChain.setPedalOrder(fxOrder);
 
     auto cfg = [](juce::Slider& s, double lo, double hi, double val) {
@@ -1387,8 +1439,28 @@ int MainComponent::findFxPedalIndex(const FXPedalComponent& pedal) const
     return -1;
 }
 
+int MainComponent::findChainItemId(const FXPedalComponent& pedal) const
+{
+    const int internal = findFxPedalIndex(pedal);
+    if (internal >= 0)
+        return internal;
+    for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
+        if (vst3Pedals[(size_t) slot].get() == &pedal)
+            return kNumFxPedals + slot;
+    return -1;
+}
+
+FXPedalComponent* MainComponent::getChainItemPedal(int chainItem) const
+{
+    if (juce::isPositiveAndBelow(chainItem, kNumFxPedals))
+        return fxPedals[chainItem].get();
+    const int slot = chainItem - kNumFxPedals;
+    return juce::isPositiveAndBelow(slot, kMaxVst3Pedals) ? vst3Pedals[(size_t) slot].get() : nullptr;
+}
+
 int MainComponent::fxPedalBodyWidth(int pedalIndex) const
 {
+    if (pedalIndex >= kNumFxPedals) return kVst3PedalBodyWidth;
     if (pedalIndex == 1) return 180;
     if (pedalIndex == 2) return 245;
     if (pedalIndex == 9) return 245;
@@ -1418,9 +1490,9 @@ void MainComponent::revealFxPedal(int pedalIndex)
 
 void MainComponent::focusFxPedalForSnapshot(int pedalIndex)
 {
-    if (pedalIndex == -1 && vst3Pedal != nullptr)
+    if (pedalIndex == -1 && vst3Pedals[0] != nullptr)
     {
-        toggleFxPedalFocus(*vst3Pedal);
+        toggleFxPedalFocus(*vst3Pedals[0]);
         return;
     }
 
@@ -1430,7 +1502,7 @@ void MainComponent::focusFxPedalForSnapshot(int pedalIndex)
 
 void MainComponent::setVst3DisplayTextForSnapshot(const juce::String& text)
 {
-    lblVst3Status.setDisplayText(text);
+    lblVst3Status[0].setDisplayText(text);
 }
 
 void MainComponent::toggleFxPedalFocus(FXPedalComponent& pedal)
@@ -1444,21 +1516,20 @@ void MainComponent::toggleFxPedalFocus(FXPedalComponent& pedal)
     if (fxPedalFocusOverlay.getPedal() != nullptr)
         closeFxPedalFocus();
 
-    int pedalIndex = findFxPedalIndex(pedal);
-    if (&pedal == vst3Pedal.get())
-        pedalIndex = -1;
-    else if (pedalIndex < 0)
+    const int pedalIndex = findChainItemId(pedal);
+    if (pedalIndex < 0)
         return;
 
     if (draggingFxPedal >= 0)
     {
-        fxPedals[draggingFxPedal]->setDragHintVisible(false);
+        if (auto* dragged = getChainItemPedal(draggingFxPedal))
+            dragged->setDragHintVisible(false);
         draggingFxPedal = -1;
         dragInsertSlot = -1;
     }
 
     focusedFxPedalIndex = pedalIndex;
-    const int compactWidth = pedalIndex < 0 ? kVst3PedalBodyWidth : fxPedalBodyWidth(pedalIndex);
+    const int compactWidth = fxPedalBodyWidth(pedalIndex);
     const int compactHeight = juce::jmax(1, fxContainer.getHeight() - 8);
     fxPedalFocusOverlay.setBounds(getLocalBounds());
     fxPedalFocusOverlay.showPedal(pedal, compactWidth, compactHeight);
@@ -1486,30 +1557,30 @@ void MainComponent::closeFxPedalFocus()
 
 int MainComponent::fxSlotStartX(int slot) const
 {
-    int x = kVst3PedalPitch;
-    for (int i = 0; i < juce::jlimit(0, kNumFxPedals, slot); ++i)
+    int x = 10;
+    for (int i = 0; i < juce::jlimit(0, kChainItemCount, slot); ++i)
         x += fxPedalPitch(fxOrder[(size_t) i]);
     return x;
 }
 
 int MainComponent::fxSlotForX(int x) const
 {
-    for (int slot = 0; slot < kNumFxPedals; ++slot)
+    for (int slot = 0; slot < kChainItemCount; ++slot)
     {
         const int start = fxSlotStartX(slot);
         const int end = start + fxPedalPitch(fxOrder[(size_t) slot]);
         if (x < (start + end) / 2)
             return slot;
     }
-    return kNumFxPedals - 1;
+    return kChainItemCount - 1;
 }
 
 void MainComponent::moveFxPedalToSlot(int pedalIndex, int targetSlot)
 {
-    targetSlot = juce::jlimit(0, kNumFxPedals - 1, targetSlot);
+    targetSlot = juce::jlimit(0, kChainItemCount - 1, targetSlot);
 
     int currentSlot = -1;
-    for (int i = 0; i < kNumFxPedals; ++i)
+    for (int i = 0; i < kChainItemCount; ++i)
     {
         if (fxOrder[(size_t) i] == pedalIndex)
         {
@@ -1538,7 +1609,7 @@ void MainComponent::moveFxPedalToSlot(int pedalIndex, int targetSlot)
 
 void MainComponent::beginFxPedalDrag(FXPedalComponent& pedal, const juce::MouseEvent& e)
 {
-    draggingFxPedal = findFxPedalIndex(pedal);
+    draggingFxPedal = findChainItemId(pedal);
     if (draggingFxPedal < 0)
         return;
 
@@ -1550,7 +1621,7 @@ void MainComponent::beginFxPedalDrag(FXPedalComponent& pedal, const juce::MouseE
 
 void MainComponent::updateFxPedalDrag(FXPedalComponent& pedal, const juce::MouseEvent& e)
 {
-    if (draggingFxPedal != findFxPedalIndex(pedal))
+    if (draggingFxPedal != findChainItemId(pedal))
         return;
 
     auto relativeEvent = e.getEventRelativeTo(&fxContainer);
@@ -1558,8 +1629,8 @@ void MainComponent::updateFxPedalDrag(FXPedalComponent& pedal, const juce::Mouse
 
     auto bounds = pedal.getBounds();
     bounds.setCentre((int) relativeEvent.position.x, bounds.getCentreY());
-    bounds.setX(juce::jlimit(kVst3PedalPitch + 5,
-                             juce::jmax(kVst3PedalPitch + 5,
+    bounds.setX(juce::jlimit(5,
+                             juce::jmax(5,
                                         fxContainer.getWidth() - bounds.getWidth() - 5),
                              bounds.getX()));
     pedal.setBounds(bounds);
@@ -1567,7 +1638,7 @@ void MainComponent::updateFxPedalDrag(FXPedalComponent& pedal, const juce::Mouse
 
 void MainComponent::endFxPedalDrag(FXPedalComponent& pedal, const juce::MouseEvent& e)
 {
-    const int pedalIndex = findFxPedalIndex(pedal);
+    const int pedalIndex = findChainItemId(pedal);
     if (draggingFxPedal == pedalIndex && pedalIndex >= 0)
     {
         auto relativeEvent = e.getEventRelativeTo(&fxContainer);
@@ -1583,6 +1654,9 @@ void MainComponent::endFxPedalDrag(FXPedalComponent& pedal, const juce::MouseEve
 
 void MainComponent::layoutVst3PedalControls(FXPedalComponent& pedal)
 {
+    const int slot = findChainItemId(pedal) - kNumFxPedals;
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
+        return;
     auto body = pedal.getLocalBounds().toFloat().reduced(3.0f);
     const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / 1.20f);
     body = { body.getX(), body.getCentreY() - bodyHeight * 0.5f,
@@ -1595,7 +1669,7 @@ void MainComponent::layoutVst3PedalControls(FXPedalComponent& pedal)
                                                 body.getY() + body.getHeight() * 0.155f,
                                                 body.getWidth() * 0.664f,
                                                 body.getHeight() * 0.334f);
-    lblVst3Status.setBounds(screen.toNearestInt());
+    lblVst3Status[(size_t) slot].setBounds(screen.toNearestInt());
 
     const int buttonGap = juce::jmax(3, juce::roundToInt(body.getWidth() * 0.020f));
     const int contentX = juce::roundToInt(body.getX() + body.getWidth() * 0.090f);
@@ -1603,11 +1677,11 @@ void MainComponent::layoutVst3PedalControls(FXPedalComponent& pedal)
     const int buttonY = juce::roundToInt(body.getY() + body.getHeight() * 0.025f);
     const int buttonH = juce::jmax(18, juce::roundToInt(body.getHeight() * 0.090f));
     const int buttonW = (contentW - buttonGap * 2) / 3;
-    btnLoadVst3.setBounds(contentX, buttonY, buttonW, buttonH);
-    btnEditVst3.setBounds(contentX + buttonW + buttonGap, buttonY, buttonW, buttonH);
-    btnUnloadVst3.setBounds(contentX + (buttonW + buttonGap) * 2, buttonY,
+    btnLoadVst3[(size_t) slot].setBounds(contentX, buttonY, buttonW, buttonH);
+    btnEditVst3[(size_t) slot].setBounds(contentX + buttonW + buttonGap, buttonY, buttonW, buttonH);
+    btnUnloadVst3[(size_t) slot].setBounds(contentX + (buttonW + buttonGap) * 2, buttonY,
                             contentW - buttonW * 2 - buttonGap * 2, buttonH);
-    btnBypassVst3.setBounds(0, 0, 0, 0);
+    btnBypassVst3[(size_t) slot].setBounds(0, 0, 0, 0);
 }
 
 void MainComponent::styleVstButton(juce::TextButton& button, juce::Colour accent)
@@ -1617,23 +1691,26 @@ void MainComponent::styleVstButton(juce::TextButton& button, juce::Colour accent
     button.setColour(juce::TextButton::textColourOffId, LnfC::TextHi);
 }
 
-void MainComponent::loadExternalVst3Plugin()
+void MainComponent::loadExternalVst3Plugin(int slot)
 {
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
+        return;
     juce::File defaultFolder = juce::File::getSpecialLocation(juce::File::globalApplicationsDirectory)
         .getChildFile("Common Files")
         .getChildFile("VST3");
 
-    vst3FileChooser = std::make_unique<juce::FileChooser>("Seleccionar plugin VST3",
+    auto& fileChooser = vst3FileChoosers[(size_t) slot];
+    fileChooser = std::make_unique<juce::FileChooser>("Seleccionar plugin VST3",
                                                           defaultFolder.exists() ? defaultFolder : juce::File(),
                                                           "*.vst3");
 
     const auto chooserFlags = juce::FileBrowserComponent::openMode
                             | juce::FileBrowserComponent::canSelectFiles;
 
-    vst3FileChooser->launchAsync(chooserFlags, [this](const juce::FileChooser& chooser)
+    fileChooser->launchAsync(chooserFlags, [this, slot](const juce::FileChooser& chooser)
     {
         const auto selectedFile = chooser.getResult();
-        vst3FileChooser.reset();
+        vst3FileChoosers[(size_t) slot].reset();
 
         if (selectedFile == juce::File())
             return;
@@ -1642,45 +1719,50 @@ void MainComponent::loadExternalVst3Plugin()
         juce::String errorMessage;
         if (!effectsChain.prepareExternalVst3(selectedFile, candidate, errorMessage))
         {
-            updateExternalVstUi();
-            lblVst3Status.setDisplayText(errorMessage);
+            updateExternalVstUi(slot);
+            lblVst3Status[(size_t) slot].setDisplayText(errorMessage);
             return;
         }
 
-        closeExternalVst3Editor();
+        closeExternalVst3Editor(slot);
         EffectsChain::PreparedExternalPlugin retired;
         {
             const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
-            retired = effectsChain.commitExternalPlugin(std::move(candidate));
+            retired = effectsChain.commitExternalPlugin(std::move(candidate), slot);
         }
 
-        updateExternalVstUi();
+        updateExternalVstUi(slot);
     });
 }
 
-void MainComponent::unloadExternalVst3Plugin()
+void MainComponent::unloadExternalVst3Plugin(int slot)
 {
-    closeExternalVst3Editor();
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
+        return;
+    closeExternalVst3Editor(slot);
 
     EffectsChain::PreparedExternalPlugin retired;
     {
         const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
-        retired = effectsChain.detachExternalPlugin();
+        retired = effectsChain.detachExternalPlugin(slot);
     }
 
-    updateExternalVstUi();
+    updateExternalVstUi(slot);
 }
 
-void MainComponent::openExternalVst3Editor()
+void MainComponent::openExternalVst3Editor(int slot)
 {
-    auto* plugin = effectsChain.getExternalPluginInstance();
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
+        return;
+    auto* plugin = effectsChain.getExternalPluginInstance(slot);
     if (plugin == nullptr || !plugin->hasEditor())
         return;
 
-    if (vst3EditorWindow != nullptr)
+    auto& editorWindow = vst3EditorWindows[(size_t) slot];
+    if (editorWindow != nullptr)
     {
-        vst3EditorWindow->toFront(true);
-        vst3EditorWindow->setVisible(true);
+        editorWindow->toFront(true);
+        editorWindow->setVisible(true);
         return;
     }
 
@@ -1688,49 +1770,56 @@ void MainComponent::openExternalVst3Editor()
     if (editor == nullptr)
         return;
 
-    vst3EditorWindow = std::make_unique<ExternalPluginEditorWindow>("VST3 - " + effectsChain.getExternalPluginName(),
+    editorWindow = std::make_unique<ExternalPluginEditorWindow>("VST3 - " + effectsChain.getExternalPluginName(slot),
                                                                     std::move(editor));
-    vst3EditorWindow->setVisible(true);
+    editorWindow->setVisible(true);
 }
 
-void MainComponent::closeExternalVst3Editor()
+void MainComponent::closeExternalVst3Editor(int slot)
 {
-    vst3EditorWindow.reset();
-}
-
-void MainComponent::updateExternalVstUi()
-{
-    const bool hasPlugin = effectsChain.hasExternalPlugin();
-    const bool pluginEnabled = effectsChain.isExternalPluginEnabled();
-    const auto pluginName = effectsChain.getExternalPluginName();
-
-    btnUnloadVst3.setEnabled(hasPlugin);
-    btnEditVst3.setEnabled(hasPlugin);
-    btnBypassVst3.setEnabled(hasPlugin);
-    btnBypassVst3.setToggleState(pluginEnabled, juce::dontSendNotification);
-    btnBypassVst3.setButtonText(pluginEnabled ? "ENGINE ACTIVE" : "ENGINE BYPASS");
-    if (vst3Pedal != nullptr)
+    if (slot < 0)
     {
-        vst3Pedal->onBtn.setToggleState(hasPlugin && pluginEnabled, juce::dontSendNotification);
-        vst3Pedal->repaint();
+        for (auto& editor : vst3EditorWindows)
+            editor.reset();
     }
+    else if (juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
+        vst3EditorWindows[(size_t) slot].reset();
+}
 
-    if (!hasPlugin)
-        lblVst3Status.setDisplayText("SIN VST");
-    else if (pluginEnabled)
-        lblVst3Status.setDisplayText(pluginName + " / LAT "
-                                     + juce::String(effectsChain.getActiveExternalPluginLatencySamples())
-                                     + " SMP");
-    else
-        lblVst3Status.setDisplayText("BYPASS - " + pluginName);
-
-    lblVst3Status.setColour(juce::Label::textColourId,
-                            !hasPlugin ? LnfC::TextDim
-                                       : (pluginEnabled ? juce::Colour(0xff87edf2)
-                                                        : LnfC::OvdAmber));
-    lblVst3Status.setColour(juce::Label::outlineColourId,
-                            (pluginEnabled ? juce::Colour(0xff55dce5)
-                                           : LnfC::OvdAmber).withAlpha(hasPlugin ? 0.52f : 0.20f));
+void MainComponent::updateExternalVstUi(int requestedSlot)
+{
+    const int first = requestedSlot < 0 ? 0 : requestedSlot;
+    const int last = requestedSlot < 0 ? kMaxVst3Pedals : requestedSlot + 1;
+    for (int slot = first; slot < last; ++slot)
+    {
+        const bool hasPlugin = effectsChain.hasExternalPlugin(slot);
+        const bool pluginEnabled = effectsChain.isExternalPluginEnabled(slot);
+        const auto pluginName = effectsChain.getExternalPluginName(slot);
+        btnUnloadVst3[(size_t) slot].setEnabled(hasPlugin);
+        btnEditVst3[(size_t) slot].setEnabled(hasPlugin);
+        btnBypassVst3[(size_t) slot].setEnabled(hasPlugin);
+        btnBypassVst3[(size_t) slot].setToggleState(pluginEnabled, juce::dontSendNotification);
+        btnBypassVst3[(size_t) slot].setButtonText(pluginEnabled ? "ENGINE ACTIVE" : "ENGINE BYPASS");
+        if (auto* pedal = vst3Pedals[(size_t) slot].get())
+        {
+            pedal->onBtn.setToggleState(hasPlugin && pluginEnabled, juce::dontSendNotification);
+            pedal->repaint();
+        }
+        auto& status = lblVst3Status[(size_t) slot];
+        if (!hasPlugin)
+            status.setDisplayText("SIN VST");
+        else if (pluginEnabled)
+            status.setDisplayText(pluginName + " / LAT "
+                                  + juce::String(effectsChain.getExternalPluginReportedLatencySamples(slot))
+                                  + " SMP");
+        else
+            status.setDisplayText("BYPASS - " + pluginName);
+        status.setColour(juce::Label::textColourId,
+                         !hasPlugin ? LnfC::TextDim : (pluginEnabled ? juce::Colour(0xff87edf2) : LnfC::OvdAmber));
+        status.setColour(juce::Label::outlineColourId,
+                         (pluginEnabled ? juce::Colour(0xff55dce5) : LnfC::OvdAmber)
+                            .withAlpha(hasPlugin ? 0.52f : 0.20f));
+    }
     updateRecordingLatencyCompensation();
 }
 
@@ -1831,21 +1920,25 @@ bool MainComponent::saveCurrentSessionToFile(const juce::File& sessionFile,
     if (!captureLooperSnapshotIncrementally(looperSnapshot, errorMessage))
         return false;
 
-    juce::AudioPluginInstance* suspendedPlugin = nullptr;
+    std::array<juce::AudioPluginInstance*, kMaxVst3Pedals> suspendedPlugins{};
     {
         const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
-        suspendedPlugin = effectsChain.getExternalPluginInstance();
-        if (suspendedPlugin != nullptr)
-            suspendedPlugin->suspendProcessing(true);
+        for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
+            if ((suspendedPlugins[(size_t) slot] = effectsChain.getExternalPluginInstance(slot)) != nullptr)
+                suspendedPlugins[(size_t) slot]->suspendProcessing(true);
     }
 
-    effectsChain.copyExternalPluginState(vstState);
+    std::array<juce::MemoryBlock, kMaxVst3Pedals> states;
+    for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
+        effectsChain.copyExternalPluginState(states[(size_t) slot], slot);
+    vstState = packVstStates(states);
 
-    if (suspendedPlugin != nullptr)
     {
         const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
-        if (effectsChain.getExternalPluginInstance() == suspendedPlugin)
-            suspendedPlugin->suspendProcessing(false);
+        for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
+            if (suspendedPlugins[(size_t) slot] != nullptr
+                && effectsChain.getExternalPluginInstance(slot) == suspendedPlugins[(size_t) slot])
+                suspendedPlugins[(size_t) slot]->suspendProcessing(false);
     }
 
     const auto sessionTree = createSessionTree(looperSnapshot, vstState);
@@ -2087,11 +2180,17 @@ juce::ValueTree MainComponent::createSessionTree(const LooperEngine::SessionSnap
         fx.addChild(pedal, -1, nullptr);
     }
 
-    juce::ValueTree vst("VST");
-    vst.setProperty("path", effectsChain.getExternalPluginPath(), nullptr);
-    vst.setProperty("enabled", effectsChain.isExternalPluginEnabled(), nullptr);
-    vst.setProperty("hasState", vstState.getSize() > 0, nullptr);
-    fx.addChild(vst, -1, nullptr);
+    for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
+    {
+        juce::ValueTree vst("VST");
+        vst.setProperty("index", slot, nullptr);
+        vst.setProperty("slot", (int) (std::find(fxOrder.begin(), fxOrder.end(), kNumFxPedals + slot)
+                                        - fxOrder.begin()), nullptr);
+        vst.setProperty("path", effectsChain.getExternalPluginPath(slot), nullptr);
+        vst.setProperty("enabled", effectsChain.isExternalPluginEnabled(slot), nullptr);
+        vst.setProperty("hasState", vstState.getSize() > 0, nullptr);
+        fx.addChild(vst, -1, nullptr);
+    }
     root.addChild(fx, -1, nullptr);
 
     return root;
@@ -2127,19 +2226,31 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
     const auto global = sessionTree.getChildWithName("GLOBAL");
     const auto fx = sessionTree.getChildWithName("FX");
     const auto looperNode = sessionTree.getChildWithName("LOOPER");
-    const auto vst = fx.getChildWithName("VST");
-
-    const juce::String pluginPath = vst.getProperty("path").toString();
-    const bool pluginEnabled = (bool) vst.getProperty("enabled", true);
-    EffectsChain::PreparedExternalPlugin candidate;
-    if (pluginPath.isNotEmpty())
+    const auto vstStates = unpackVstStates(vstState);
+    std::array<juce::String, kMaxVst3Pedals> pluginPaths;
+    std::array<bool, kMaxVst3Pedals> pluginEnabled{};
+    std::array<EffectsChain::PreparedExternalPlugin, kMaxVst3Pedals> candidates;
+    int vstNodeCount = 0;
+    for (int i = 0; i < fx.getNumChildren(); ++i)
     {
-        juce::String pluginError;
-        if (!effectsChain.prepareExternalVst3(juce::File(pluginPath), candidate,
-                                              pluginError, &vstState))
+        const auto node = fx.getChild(i);
+        if (!node.hasType("VST"))
+            continue;
+        const int slot = juce::jlimit(0, kMaxVst3Pedals - 1,
+                                      (int) node.getProperty("index", vstNodeCount));
+        ++vstNodeCount;
+        pluginPaths[(size_t) slot] = node.getProperty("path").toString();
+        pluginEnabled[(size_t) slot] = (bool) node.getProperty("enabled", true);
+        if (pluginPaths[(size_t) slot].isNotEmpty())
         {
-            errorMessage = pluginError;
-            return false;
+            juce::String pluginError;
+            if (!effectsChain.prepareExternalVst3(juce::File(pluginPaths[(size_t) slot]),
+                                                  candidates[(size_t) slot], pluginError,
+                                                  &vstStates[(size_t) slot]))
+            {
+                errorMessage = "VST " + juce::String(slot + 1) + ": " + pluginError;
+                return false;
+            }
         }
     }
     auto preparedLooper = looper.prepareSessionRestore(looperSnapshot);
@@ -2147,30 +2258,45 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
     setSlider(masterKnob, (double) global.getProperty("masterVolume", 0.85));
     outputMono.store((bool) global.getProperty("outputMono", true), std::memory_order_relaxed);
     updateOutputModeButton();
-    std::array<int, kNumFxPedals> loadedOrder{};
-    loadedOrder.fill(0);
-    std::array<bool, kNumFxPedals> seen{};
+    const bool legacySingleVst = vstNodeCount <= 1;
+    std::array<int, kChainItemCount> loadedOrder{};
+    loadedOrder.fill(-1);
+    std::array<bool, kChainItemCount> seenSlots{};
+    std::array<bool, kChainItemCount> seenItems{};
     for (int i = 0; i < fx.getNumChildren(); ++i)
     {
         const auto pedal = fx.getChild(i);
-        if (!pedal.hasType("PEDAL"))
+        int item = -1;
+        int desiredSlot = -1;
+        if (pedal.hasType("PEDAL"))
+        {
+            item = juce::jlimit(0, kNumFxPedals - 1, (int) pedal.getProperty("index", 0));
+            desiredSlot = (int) pedal.getProperty("slot", item) + (legacySingleVst ? 1 : 0);
+        }
+        else if (pedal.hasType("VST"))
+        {
+            const int vstIndex = juce::jlimit(0, kMaxVst3Pedals - 1,
+                                               (int) pedal.getProperty("index", 0));
+            item = kNumFxPedals + vstIndex;
+            desiredSlot = legacySingleVst ? 0 : (int) pedal.getProperty("slot", item);
+        }
+        if (item < 0 || seenItems[(size_t) item])
             continue;
-
-        const int pedalIndex = juce::jlimit(0, kNumFxPedals - 1, (int) pedal.getProperty("index", 0));
-        int slot = (int) pedal.getProperty("slot", pedalIndex);
-        slot = juce::jlimit(0, kNumFxPedals - 1, slot);
-        while (seen[(size_t) slot])
-            slot = (slot + 1) % kNumFxPedals;
-        loadedOrder[(size_t) slot] = pedalIndex;
-        seen[(size_t) slot] = true;
+        desiredSlot = juce::jlimit(0, kChainItemCount - 1, desiredSlot);
+        while (seenSlots[(size_t) desiredSlot])
+            desiredSlot = (desiredSlot + 1) % kChainItemCount;
+        loadedOrder[(size_t) desiredSlot] = item;
+        seenSlots[(size_t) desiredSlot] = true;
+        seenItems[(size_t) item] = true;
     }
-    for (int slot = 0, nextPedal = 0; slot < kNumFxPedals; ++slot)
+    for (int slot = 0, nextItem = 0; slot < kChainItemCount; ++slot)
     {
-        if (seen[(size_t) slot])
+        if (seenSlots[(size_t) slot])
             continue;
-        while (nextPedal < kNumFxPedals && std::find(loadedOrder.begin(), loadedOrder.end(), nextPedal) != loadedOrder.end())
-            ++nextPedal;
-        loadedOrder[(size_t) slot] = juce::jlimit(0, kNumFxPedals - 1, nextPedal);
+        while (nextItem < kChainItemCount && seenItems[(size_t) nextItem])
+            ++nextItem;
+        loadedOrder[(size_t) slot] = juce::jlimit(0, kChainItemCount - 1, nextItem);
+        seenItems[(size_t) loadedOrder[(size_t) slot]] = true;
     }
     fxOrder = loadedOrder;
     refreshFxUiOrder();
@@ -2239,7 +2365,7 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
     setToggle(btnRhythmCountInToggle, (bool) fx.getProperty("rhythmCountInToggle", true));
 
     closeExternalVst3Editor();
-    EffectsChain::PreparedExternalPlugin retired;
+    std::array<EffectsChain::PreparedExternalPlugin, kMaxVst3Pedals> retired;
 
     {
         const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
@@ -2249,14 +2375,16 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
             return false;
         }
 
-        if (pluginPath.isNotEmpty())
+        for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
         {
-            retired = effectsChain.commitExternalPlugin(std::move(candidate));
-            effectsChain.setExternalPluginEnabled(pluginEnabled);
-        }
-        else
-        {
-            retired = effectsChain.detachExternalPlugin();
+            if (pluginPaths[(size_t) slot].isNotEmpty())
+            {
+                retired[(size_t) slot] = effectsChain.commitExternalPlugin(
+                    std::move(candidates[(size_t) slot]), slot);
+                effectsChain.setExternalPluginEnabled(pluginEnabled[(size_t) slot], slot);
+            }
+            else
+                retired[(size_t) slot] = effectsChain.detachExternalPlugin(slot);
         }
 
     }
@@ -2718,7 +2846,7 @@ bool MainComponent::loadExternalVst3ForSnapshot(const juce::File& pluginFile, bo
     juce::String error;
     if (!effectsChain.prepareExternalVst3(pluginFile, candidate, error))
     {
-        lblVst3Status.setDisplayText(error);
+        lblVst3Status[0].setDisplayText(error);
         audioDeviceController.log("Diagnostico VST3 fallo: " + error);
         return false;
     }
@@ -3295,8 +3423,8 @@ void MainComponent::resized()
     fxViewport.setBounds(fullX + 8, fxPanY, fxPanW - 4,
                          juce::jmax(0, fxH - kFxViewportTopInset - kFxViewportBottomInset));
 
-    int totalPedalWidth = 10 + kVst3PedalPitch;
-    for (int slot = 0; slot < kNumFxPedals; ++slot)
+    int totalPedalWidth = 10;
+    for (int slot = 0; slot < kChainItemCount; ++slot)
         totalPedalWidth += fxPedalPitch(fxOrder[(size_t) slot]);
     fxContainer.setSize(totalPedalWidth, fxViewport.getHeight());
 
@@ -3304,16 +3432,25 @@ void MainComponent::resized()
     if (focusedFxPedalIndex != -2)
         fxPedalFocusOverlay.resized();
 
-    if (vst3Pedal != nullptr)
+    for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
     {
-        if (focusedFxPedalIndex != -1)
-            vst3Pedal->setBounds(14, 4, kVst3PedalBodyWidth, fxContainer.getHeight() - 8);
-        layoutVst3PedalControls(*vst3Pedal);
+        const int chainItem = kNumFxPedals + slot;
+        auto* pedal = vst3Pedals[(size_t) slot].get();
+        const auto found = std::find(fxOrder.begin(), fxOrder.end(), chainItem);
+        if (pedal != nullptr && found != fxOrder.end())
+        {
+            const int orderSlot = (int) std::distance(fxOrder.begin(), found);
+            if (focusedFxPedalIndex != chainItem && draggingFxPedal != chainItem)
+                pedal->setBounds(fxSlotStartX(orderSlot) + 14, 4, kVst3PedalBodyWidth, fxContainer.getHeight() - 8);
+            layoutVst3PedalControls(*pedal);
+        }
     }
 
-    for (int slot = 0; slot < kNumFxPedals; ++slot)
+    for (int slot = 0; slot < kChainItemCount; ++slot)
     {
         const int pedalIndex = fxOrder[(size_t) slot];
+        if (pedalIndex >= kNumFxPedals)
+            continue;
         if (pedalIndex == draggingFxPedal || pedalIndex == focusedFxPedalIndex)
             continue;
 

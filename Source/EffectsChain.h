@@ -27,6 +27,7 @@ public:
 
         std::unique_ptr<juce::AudioPluginInstance> instance;
         juce::AudioBuffer<float> scratchBuffer;
+        juce::AudioBuffer<float> outputBuffer;
         juce::MidiBuffer midiBuffer;
         int inputChannels{ 0 };
         int outputChannels{ 0 };
@@ -38,6 +39,8 @@ public:
 
     static constexpr int kFreezeMaxLayers = 5;
     static constexpr int kPedalCount = 13;
+    static constexpr int kMaxExternalPlugins = 4;
+    static constexpr int kChainItemCount = kPedalCount + kMaxExternalPlugins;
 
     enum PedalId
     {
@@ -99,28 +102,25 @@ public:
                              PreparedExternalPlugin& candidate,
                              juce::String& errorMessage,
                              const juce::MemoryBlock* stateToRestore = nullptr);
-    PreparedExternalPlugin commitExternalPlugin(PreparedExternalPlugin&& candidate) noexcept;
-    PreparedExternalPlugin detachExternalPlugin() noexcept;
-    bool hasExternalPlugin() const { return externalPluginInstance != nullptr; }
-    void setExternalPluginEnabled(bool shouldBeEnabled) { externalPluginEnabled.store(shouldBeEnabled); }
-    bool isExternalPluginEnabled() const { return externalPluginEnabled.load() && externalPluginInstance != nullptr; }
-    juce::String getExternalPluginName() const { return externalPluginName; }
-    juce::String getExternalPluginPath() const { return externalPluginPath; }
-    juce::AudioPluginInstance* getExternalPluginInstance() const { return externalPluginInstance.get(); }
-    int getExternalPluginReportedLatencySamples() const { return externalPluginLatencySamples.load(); }
-    int getActiveExternalPluginLatencySamples() const
-    {
-        return isExternalPluginEnabled() ? externalPluginLatencySamples.load() : 0;
-    }
+    PreparedExternalPlugin commitExternalPlugin(PreparedExternalPlugin&& candidate, int slot = 0) noexcept;
+    PreparedExternalPlugin detachExternalPlugin(int slot = 0) noexcept;
+    bool hasExternalPlugin(int slot = 0) const;
+    void setExternalPluginEnabled(bool shouldBeEnabled, int slot = 0);
+    bool isExternalPluginEnabled(int slot = 0) const;
+    juce::String getExternalPluginName(int slot = 0) const;
+    juce::String getExternalPluginPath(int slot = 0) const;
+    juce::AudioPluginInstance* getExternalPluginInstance(int slot = 0) const;
+    int getExternalPluginReportedLatencySamples(int slot = 0) const;
+    int getActiveExternalPluginLatencySamples() const;
     bool consumeExternalPluginLatencyRefreshRequest()
     {
         return externalPluginLatencyRefreshRequested.exchange(false);
     }
     void refreshExternalPluginLatency();
-    bool copyExternalPluginState(juce::MemoryBlock& state) const;
+    bool copyExternalPluginState(juce::MemoryBlock& state, int slot = 0) const;
     bool restoreExternalPluginState(const juce::MemoryBlock& state, juce::String& errorMessage);
 
-    void setPedalOrder(const std::array<int, kPedalCount>& order);
+    void setPedalOrder(const std::array<int, kChainItemCount>& order);
 
     // --- SETTERS ATÓMICOS CONECTADOS A LA INTERFAZ GRÁFICA ---
     void setNoiseGateEnabled(bool b) { noiseGateEnabled.store(b); }
@@ -384,17 +384,18 @@ private:
     void applyPendingRhythmSampleBank(int styleIndex, bool metronomeMode) noexcept;
     void run() override;
     static RhythmSampleSlot sampleSlotForInstrument(DrumInstrument instrument);
-    void processExternalPluginBlock(juce::AudioBuffer<float>& buffer, int startSample, int numSamples);
-    void prepareExternalPluginScratchBuffer();
+    void processExternalPluginSample(int slot, int channel, int channels, float& sample);
+    void prepareExternalPluginScratchBuffer(int slot);
     void audioProcessorParameterChanged(juce::AudioProcessor*, int, float) override {}
     void audioProcessorChanged(juce::AudioProcessor*,
                                const juce::AudioProcessorListener::ChangeDetails& details) override;
     // --- VARIABLES ATÓMICAS DE CONTROL DE ESTADO ---
-    // Los 13 ids caben en 4 bits cada uno. Publicar toda la permutacion en una
-    // sola operacion evita que el hilo de audio vea un orden a medio actualizar.
-    std::atomic<uint64_t> packedPedalOrder{ 0 };
-    std::atomic<bool> externalPluginEnabled{ true };
-    std::atomic<int> externalPluginLatencySamples{ 0 };
+    // Los 17 ids usan 5 bits. Dos palabras y un contador de secuencia permiten
+    // publicar la permutacion sin bloquear el callback de audio.
+    std::atomic<uint64_t> packedPedalOrderLow{ 0 };
+    std::atomic<uint64_t> packedPedalOrderHigh{ 0 };
+    std::atomic<uint32_t> pedalOrderSequence{ 0 };
+    std::array<int, kChainItemCount> audioPedalOrder{}; // solo lo escribe el hilo de audio
     std::atomic<bool> externalPluginLatencyRefreshRequested{ false };
 
     std::atomic<bool> noiseGateEnabled{ false };
@@ -549,13 +550,23 @@ private:
     static constexpr int kFreezeBufLen = 192000;
 
     juce::AudioPluginFormatManager pluginFormatManager;
-    std::unique_ptr<juce::AudioPluginInstance> externalPluginInstance;
-    juce::AudioBuffer<float> externalPluginScratchBuffer;
-    juce::MidiBuffer externalPluginMidiBuffer;
-    int externalPluginInputChannels{ 0 };
-    int externalPluginOutputChannels{ 0 };
-    juce::String externalPluginName;
-    juce::String externalPluginPath;
+    struct ExternalPluginSlot
+    {
+        std::unique_ptr<juce::AudioPluginInstance> instance;
+        juce::AudioBuffer<float> scratchBuffer;
+        juce::AudioBuffer<float> outputBuffer;
+        juce::MidiBuffer midiBuffer;
+        int inputChannels{ 0 };
+        int outputChannels{ 0 };
+        int streamPosition{ 0 };
+        bool outputReady{ false };
+        bool streamWasEnabled{ false };
+        juce::String name;
+        juce::String path;
+        std::atomic<bool> enabled{ true };
+        std::atomic<int> latencySamples{ 0 };
+    };
+    std::array<ExternalPluginSlot, kMaxExternalPlugins> externalPlugins;
     juce::AudioBuffer<float> delayBuffer;
     juce::AudioBuffer<float> chorusBuffer;
     juce::AudioBuffer<float> pitchBuffer;
