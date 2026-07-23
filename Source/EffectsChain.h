@@ -95,6 +95,10 @@ public:
     void processBlock(juce::AudioBuffer<float>& recordableInput,
                       juce::AudioBuffer<float>& rhythmMonitor,
                       int startSample, int numSamples);
+    // Publica el transporte del looper para los VST3 sincronizados al host.
+    // Debe llamarse desde el callback de audio inmediatamente antes de processBlock().
+    void setExternalPluginTransport(float bpm, int beatsPerBar,
+                                    bool isPlaying, bool isRecording) noexcept;
     void reset();
     bool loadExternalVst3(const juce::File& pluginFile, juce::String& errorMessage);
     void unloadExternalPlugin();
@@ -550,6 +554,19 @@ private:
     static constexpr int kFreezeBufLen = 192000;
 
     juce::AudioPluginFormatManager pluginFormatManager;
+    class ExternalPluginPlayHead final : public juce::AudioPlayHead
+    {
+    public:
+        juce::Optional<PositionInfo> getPosition() const override;
+
+        std::atomic<double> sampleRate{ 44100.0 };
+        std::atomic<double> bpm{ 120.0 };
+        std::atomic<int> beatsPerBar{ 4 };
+        std::atomic<juce::int64> timeInSamples{ 0 };
+        std::atomic<bool> isPlaying{ false };
+        std::atomic<bool> isRecording{ false };
+    };
+    ExternalPluginPlayHead externalPluginPlayHead;
     struct ExternalPluginSlot
     {
         std::unique_ptr<juce::AudioPluginInstance> instance;

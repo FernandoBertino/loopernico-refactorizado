@@ -8,6 +8,40 @@ Ultima actualizacion: 2026-07-22 19:13 (America/Buenos_Aires)
 2. Verificar `git status --short --branch` y preservar cambios locales.
 3. Actualizar este traspaso despues de avances materiales o antes de detener una tarea incompleta.
 
+## Tarea terminada: transporte y tempo para VST3 de baterias
+
+Fernando detecto que BFD Player VST3 mostraba tempo 1 dentro de Loopernico y no
+avanzaba los grooves. La causa comprobada era que el host procesaba el audio VST3
+sin proveerle un `AudioPlayHead`; por eso el plugin no recibia BPM, compas ni
+estado de transporte.
+
+### Implementacion
+
+- Cada VST3 recibe un playhead estable con BPM, compas 4/4, posicion en samples,
+  PPQ, reproduccion y grabacion. El BPM proviene exclusivamente del looper, no
+  del tempo independiente de Rhythm Box.
+- Se agrego en la franja superior del looper `TEMPO`, editable con botones +/-
+  entre 20 y 300 BPM, y un boton `TAP`. El valor inicial es 120 BPM y al abrir
+  una sesion se actualiza al BPM restaurado por dicha sesion.
+- El playhead VST3 se publica por bloque de audio sin asignaciones, disco ni
+  bloqueos en el callback.
+
+### Verificacion y despliegue
+
+- Build final `Release | x64` con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`:
+  correcto, sin errores ni advertencias nuevas del codigo.
+- Prueba de humo del EXE de build, del candidato de despliegue y de
+  `Builds/LocalDeployment/Current`: los tres abrieron y permanecieron estables.
+- `Current`: SHA-256 `B5C9735C43C0C8BE86E3DF91132104A5DEE908C37B37AE238EAE5A85E941F764`.
+- `Previous`: SHA-256 `0170EBFF44A29260703DF2AC193C03F0F29ED515C288B45FC7FC76868CA2F5C9`;
+  hay exactamente dos EXE desplegados.
+- Acceso directo recreado hacia `Current`, con directorio de trabajo e icono
+  correctos. Asociacion `.loopernico` comprobada: `Loopernico.Session`, tipo
+  `Archivo de Loopernico`, comando hacia `Current` e icono de sesion correcto.
+- Limite real: la visualizacion exacta de `120` y el disparo de un groove en BFD
+  requieren abrir BFD Player y probarlo interactivamente; el transporte que el
+  VST3 consulta ya entrega ese valor por construccion.
+
 ## Tarea terminada: entrada mono duplicada para afinadores VST3
 
 Fernando informo que los efectos de los VST3 funcionaban, pero sus afinadores

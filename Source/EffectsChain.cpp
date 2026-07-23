@@ -210,6 +210,7 @@ bool EffectsChain::prepareExternalVst3(const juce::File& pluginFile,
         return false;
 
     prepared.instance->enableAllBuses();
+    prepared.instance->setPlayHead(&externalPluginPlayHead);
     prepared.instance->setRateAndBufferSizeDetails(sampleRate_, maxBlockSize_);
     prepared.instance->prepareToPlay(sampleRate_, maxBlockSize_);
     prepared.instance->reset();
@@ -1165,10 +1166,43 @@ void EffectsChain::processExternalPluginSample(int slotIndex, int channel, int c
     }
 }
 
+juce::Optional<juce::AudioPlayHead::PositionInfo> EffectsChain::ExternalPluginPlayHead::getPosition() const
+{
+    const double currentSampleRate = juce::jmax(1.0, sampleRate.load(std::memory_order_relaxed));
+    const double currentBpm = juce::jlimit(20.0, 300.0, bpm.load(std::memory_order_relaxed));
+    const int currentBeatsPerBar = juce::jmax(1, beatsPerBar.load(std::memory_order_relaxed));
+    const juce::int64 currentSamples = juce::jmax<juce::int64>(0, timeInSamples.load(std::memory_order_relaxed));
+    const double ppqPosition = (double) currentSamples * currentBpm / (currentSampleRate * 60.0);
+
+    PositionInfo position;
+    position.setTimeInSamples(currentSamples);
+    position.setTimeInSeconds((double) currentSamples / currentSampleRate);
+    position.setBpm(currentBpm);
+    position.setTimeSignature(TimeSignature{ currentBeatsPerBar, 4 });
+    position.setPpqPosition(ppqPosition);
+    position.setPpqPositionOfLastBarStart(std::floor(ppqPosition / (double) currentBeatsPerBar)
+                                          * (double) currentBeatsPerBar);
+    position.setBarCount((juce::int64) std::floor(ppqPosition / (double) currentBeatsPerBar));
+    position.setIsPlaying(isPlaying.load(std::memory_order_relaxed));
+    position.setIsRecording(isRecording.load(std::memory_order_relaxed));
+    return position;
+}
+
+void EffectsChain::setExternalPluginTransport(float tempoBpm, int numerator,
+                                              bool transportPlaying, bool transportRecording) noexcept
+{
+    externalPluginPlayHead.bpm.store(juce::jlimit(20.0, 300.0, (double) tempoBpm), std::memory_order_relaxed);
+    externalPluginPlayHead.beatsPerBar.store(juce::jmax(1, numerator), std::memory_order_relaxed);
+    externalPluginPlayHead.isPlaying.store(transportPlaying, std::memory_order_relaxed);
+    externalPluginPlayHead.isRecording.store(transportRecording, std::memory_order_relaxed);
+}
+
 void EffectsChain::prepare(double sampleRate, int maxBlockSize)
 {
     sampleRate_ = sampleRate;
     maxBlockSize_ = juce::jmax(16, maxBlockSize);
+    externalPluginPlayHead.sampleRate.store(sampleRate_, std::memory_order_relaxed);
+    externalPluginPlayHead.timeInSamples.store(0, std::memory_order_relaxed);
 
     delayBuffer.setSize(2, (int)(sampleRate_ * 3.0));
     chorusBuffer.setSize(2, juce::jmax(1024, (int)(sampleRate_ * 0.08)));
@@ -3331,4 +3365,5 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
         }
     }
 
+    externalPluginPlayHead.timeInSamples.fetch_add(numSamples, std::memory_order_relaxed);
 }

@@ -572,6 +572,28 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
     sldSilenceThreshold.onValueChange = [this]() { looper.setSilenceThresholdDb((float)sldSilenceThreshold.getValue()); };
     addAndMakeVisible(sldSilenceThreshold);
 
+    lblLooperTempo.setText("TEMPO:", juce::dontSendNotification);
+    lblLooperTempo.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
+    lblLooperTempo.setColour(juce::Label::textColourId, LnfC::TextDim);
+    lblLooperTempo.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(lblLooperTempo);
+
+    sldLooperTempo.setSliderStyle(juce::Slider::IncDecButtons);
+    sldLooperTempo.setRange(20.0, 300.0, 1.0);
+    sldLooperTempo.setValue(looper.getBpm(), juce::dontSendNotification);
+    sldLooperTempo.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 72, 18);
+    sldLooperTempo.setTextValueSuffix(" BPM");
+    sldLooperTempo.onValueChange = [this]() { looper.setBpm((float) sldLooperTempo.getValue()); };
+    addAndMakeVisible(sldLooperTempo);
+
+    styleHeaderButton(btnLooperTap, LnfC::OvdAmber);
+    btnLooperTap.onClick = [this]()
+    {
+        looper.tapTempo();
+        sldLooperTempo.setValue(looper.getBpm(), juce::dontSendNotification);
+    };
+    addAndMakeVisible(btnLooperTap);
+
     masterKnob.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     masterKnob.setRange(0.0, 1.0, 0.01);
     masterKnob.setValue(0.85);
@@ -2418,6 +2440,7 @@ void MainComponent::refreshTrackUiFromLooper()
     }
 
     sldSilenceThreshold.setValue(looper.getSilenceThresholdDb(), juce::dontSendNotification);
+    sldLooperTempo.setValue(looper.getBpm(), juce::dontSendNotification);
 }
 
 void MainComponent::refreshFxUiOrder()
@@ -2736,6 +2759,13 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buf)
         if (peak > prev) inputVU.store(peak, std::memory_order_relaxed);
     }
 
+    const auto looperTransportState = looper.getState();
+    const bool looperIsRecording = looperTransportState == LooperEngine::State::RecordingBase
+                                || looperTransportState == LooperEngine::State::RecordingLayer;
+    const bool looperIsPlaying = looperIsRecording
+                              || looperTransportState == LooperEngine::State::Playing;
+    effectsChain.setExternalPluginTransport(looper.getBpm(), looper.getBeatsPerBar(),
+                                            looperIsPlaying, looperIsRecording);
     effectsChain.processBlock(processedInputBuffer, rhythmMonitorBuffer, 0, buf.numSamples);
 
     if (monoOutput)
@@ -3523,8 +3553,11 @@ void MainComponent::resized()
         fxPedalFocusOverlay.toFront(false);
 
     lblSilenceThreshold.setBounds(fullX + 24, mY + 5, 100, 18);
-    sldSilenceThreshold.setBounds(fullX + 126, mY + 5, 420, 18);
-    lblAudioStatus.setBounds(fullX + 560, mY + 5, fullW - 580, 18);
+    sldSilenceThreshold.setBounds(fullX + 126, mY + 5, 300, 18);
+    lblLooperTempo.setBounds(fullX + 438, mY + 5, 58, 18);
+    sldLooperTempo.setBounds(fullX + 502, mY + 5, 126, 18);
+    btnLooperTap.setBounds(fullX + 638, mY + 5, 50, 18);
+    lblAudioStatus.setBounds(fullX + 700, mY + 5, fullW - 720, 18);
 
     if (audioSettingsPanel != nullptr)
     {

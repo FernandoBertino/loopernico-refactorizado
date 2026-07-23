@@ -249,6 +249,9 @@ private:
     juce::TextButton      btnExportTracks{"EXPORTAR PISTAS"};
     juce::TextButton      btnAudioSettings{"AUDIO"};
     juce::Label           lblAudioStatus;
+    juce::Label           lblLooperTempo;
+    juce::Slider          sldLooperTempo;
+    juce::TextButton      btnLooperTap{"TAP"};
     juce::Viewport   trackViewport;
     juce::Component  trackContainer;
     std::vector<std::unique_ptr<TrackComponent>> visualTracks;
