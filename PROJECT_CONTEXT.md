@@ -20,9 +20,14 @@ otros VST de bateria.
 - Se agregaron pruebas deterministas para defaults, personalizacion y rechazos.
 - Release x64 y humo de `Current` correctos. `Current` SHA-256:
   `3072C1A9C24989B90C7009DD517F030A38609BA6EDF247CD84A9373215DFEA1F`.
-- Proximo paso concreto: exponer el mapa en una pequena pantalla de
-  configuracion y definir el modelo de eventos de un patron, aun sin emitir
-  MIDI al VST hasta verificar la edicion.
+- Se agrego el boton `MAPA` a cada host VST3. Abre una ventana de configuracion
+  con las seis notas y un canal MIDI global, permite guardar cambios o
+  restablecer General MIDI, y aun no emite notas al plugin.
+- Release x64 y humo de build/`Current` correctos. `Current` SHA-256:
+  `F364E636C1C662FA89E9C939836EEC6FB610ADB6798ADAD9FAC7CFB68ECA0858`.
+- Proximo paso concreto: definir el modelo de eventos de un patron y luego
+  construir la grilla, manteniendo el envio MIDI desactivado hasta verificar la
+  edicion.
 
 ## Tarea terminada: transporte y tempo para VST3 de baterias
 

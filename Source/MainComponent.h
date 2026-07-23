@@ -359,6 +359,7 @@ private:
     void loadExternalVst3Plugin(int slot = 0);
     void unloadExternalVst3Plugin(int slot = 0);
     void openExternalVst3Editor(int slot = 0);
+    void openExternalVst3DrumMapEditor(int slot = 0);
     void closeExternalVst3Editor(int slot = -1);
     void updateExternalVstUi(int slot = -1);
     void saveSessionToFile();
@@ -382,6 +383,7 @@ private:
     std::array<juce::TextButton, kMaxVst3Pedals> btnLoadVst3;
     std::array<juce::TextButton, kMaxVst3Pedals> btnUnloadVst3;
     std::array<juce::TextButton, kMaxVst3Pedals> btnEditVst3;
+    std::array<juce::TextButton, kMaxVst3Pedals> btnMapVst3;
     std::array<juce::TextButton, kMaxVst3Pedals> btnBypassVst3;
     std::array<TonexDisplayLabel, kMaxVst3Pedals> lblVst3Status;
     std::array<std::unique_ptr<juce::FileChooser>, kMaxVst3Pedals> vst3FileChoosers;

@@ -625,13 +625,16 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
         btnLoadVst3[(size_t) slot].setButtonText("CARGAR");
         btnUnloadVst3[(size_t) slot].setButtonText("QUITAR");
         btnEditVst3[(size_t) slot].setButtonText("ABRIR");
+        btnMapVst3[(size_t) slot].setButtonText("MAPA");
         btnBypassVst3[(size_t) slot].setButtonText("VST3 ON");
         styleVstButton(btnLoadVst3[(size_t) slot], LnfC::OvdAmber);
         styleVstButton(btnUnloadVst3[(size_t) slot], juce::Colour(0xff9c4630));
         styleVstButton(btnEditVst3[(size_t) slot], LnfC::Accent);
+        styleVstButton(btnMapVst3[(size_t) slot], juce::Colour(0xffb36bff));
         styleVstButton(btnBypassVst3[(size_t) slot], juce::Colour(0xff2f7d53));
         for (auto* button : { &btnLoadVst3[(size_t) slot], &btnUnloadVst3[(size_t) slot],
-                              &btnEditVst3[(size_t) slot], &btnBypassVst3[(size_t) slot] })
+                              &btnEditVst3[(size_t) slot], &btnMapVst3[(size_t) slot],
+                              &btnBypassVst3[(size_t) slot] })
         {
             button->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff111820));
             button->setColour(juce::TextButton::textColourOnId, juce::Colours::white);
@@ -640,6 +643,7 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
         btnLoadVst3[(size_t) slot].onClick = [this, slot]() { loadExternalVst3Plugin(slot); };
         btnUnloadVst3[(size_t) slot].onClick = [this, slot]() { unloadExternalVst3Plugin(slot); };
         btnEditVst3[(size_t) slot].onClick = [this, slot]() { openExternalVst3Editor(slot); };
+        btnMapVst3[(size_t) slot].onClick = [this, slot]() { openExternalVst3DrumMapEditor(slot); };
         btnBypassVst3[(size_t) slot].onClick = [this, slot]()
         {
             effectsChain.setExternalPluginEnabled(btnBypassVst3[(size_t) slot].getToggleState(), slot);
@@ -661,6 +665,7 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
             pedal->addAndMakeVisible(btnLoadVst3[(size_t) slot]);
             pedal->addAndMakeVisible(btnUnloadVst3[(size_t) slot]);
             pedal->addAndMakeVisible(btnEditVst3[(size_t) slot]);
+            pedal->addAndMakeVisible(btnMapVst3[(size_t) slot]);
             pedal->addChildComponent(btnBypassVst3[(size_t) slot]);
             pedal->addAndMakeVisible(status);
             pedal->onResized = [this](FXPedalComponent& resizedPedal) { layoutVst3PedalControls(resizedPedal); };
@@ -1698,11 +1703,12 @@ void MainComponent::layoutVst3PedalControls(FXPedalComponent& pedal)
     const int contentW = juce::roundToInt(body.getWidth() * 0.820f);
     const int buttonY = juce::roundToInt(body.getY() + body.getHeight() * 0.025f);
     const int buttonH = juce::jmax(18, juce::roundToInt(body.getHeight() * 0.090f));
-    const int buttonW = (contentW - buttonGap * 2) / 3;
+    const int buttonW = (contentW - buttonGap * 3) / 4;
     btnLoadVst3[(size_t) slot].setBounds(contentX, buttonY, buttonW, buttonH);
     btnEditVst3[(size_t) slot].setBounds(contentX + buttonW + buttonGap, buttonY, buttonW, buttonH);
-    btnUnloadVst3[(size_t) slot].setBounds(contentX + (buttonW + buttonGap) * 2, buttonY,
-                            contentW - buttonW * 2 - buttonGap * 2, buttonH);
+    btnMapVst3[(size_t) slot].setBounds(contentX + (buttonW + buttonGap) * 2, buttonY, buttonW, buttonH);
+    btnUnloadVst3[(size_t) slot].setBounds(contentX + (buttonW + buttonGap) * 3, buttonY,
+                            contentW - buttonW * 3 - buttonGap * 3, buttonH);
     btnBypassVst3[(size_t) slot].setBounds(0, 0, 0, 0);
 }
 
@@ -1797,6 +1803,76 @@ void MainComponent::openExternalVst3Editor(int slot)
     editorWindow->setVisible(true);
 }
 
+void MainComponent::openExternalVst3DrumMapEditor(int slot)
+{
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals)
+        || !effectsChain.hasExternalPlugin(slot))
+        return;
+
+    static constexpr LoopernicoMidi::DrumLane lanes[] = {
+        LoopernicoMidi::DrumLane::Kick,
+        LoopernicoMidi::DrumLane::Snare,
+        LoopernicoMidi::DrumLane::ClosedHiHat,
+        LoopernicoMidi::DrumLane::OpenHiHat,
+        LoopernicoMidi::DrumLane::Crash,
+        LoopernicoMidi::DrumLane::Ride
+    };
+    static constexpr const char* names[] = {
+        "kick", "snare", "closed_hihat", "open_hihat", "crash", "ride"
+    };
+    static constexpr const char* labels[] = {
+        "KICK", "SNARE", "HI-HAT CERRADO", "HI-HAT ABIERTO", "CRASH", "RIDE"
+    };
+
+    auto* alert = new juce::AlertWindow("MAPA MIDI - " + effectsChain.getExternalPluginName(slot),
+                                        "Elegí la nota MIDI para cada instrumento.",
+                                        juce::AlertWindow::NoIcon,
+                                        this);
+    juce::StringArray noteItems;
+    for (int note = 0; note <= 127; ++note)
+        noteItems.add(juce::String(note));
+
+    const auto& map = effectsChain.getExternalPluginDrumMap(slot);
+    for (int i = 0; i < 6; ++i)
+    {
+        alert->addComboBox(names[i], noteItems, labels[i]);
+        if (auto* combo = alert->getComboBoxComponent(names[i]))
+            combo->setSelectedId(map.getNote(lanes[i]) + 1, juce::dontSendNotification);
+    }
+
+    juce::StringArray channelItems;
+    for (int channel = 1; channel <= 16; ++channel)
+        channelItems.add(juce::String(channel));
+    alert->addComboBox("channel", channelItems, "CANAL MIDI");
+    if (auto* combo = alert->getComboBoxComponent("channel"))
+        combo->setSelectedId(map.getChannel(LoopernicoMidi::DrumLane::Kick), juce::dontSendNotification);
+
+    alert->addButton("GUARDAR", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    alert->addButton("RESTABLECER GM", 2);
+    alert->addButton("CANCELAR", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    alert->enterModalState(true,
+                           juce::ModalCallbackFunction::create([this, alert, slot](int result)
+    {
+        if (result == 1 || result == 2)
+        {
+            if (result == 2)
+                effectsChain.resetExternalPluginDrumMap(slot);
+            else
+            {
+                for (int i = 0; i < 6; ++i)
+                    if (auto* combo = alert->getComboBoxComponent(names[i]))
+                        effectsChain.setExternalPluginDrumNote(slot, lanes[i], combo->getSelectedId() - 1);
+
+                if (auto* combo = alert->getComboBoxComponent("channel"))
+                    for (const auto lane : lanes)
+                        effectsChain.setExternalPluginDrumChannel(slot, lane, combo->getSelectedId());
+            }
+        }
+        delete alert;
+    }), false);
+    alert->centreAroundComponent(vst3Pedals[(size_t) slot].get(), 460, 390);
+}
+
 void MainComponent::closeExternalVst3Editor(int slot)
 {
     if (slot < 0)
@@ -1819,6 +1895,7 @@ void MainComponent::updateExternalVstUi(int requestedSlot)
         const auto pluginName = effectsChain.getExternalPluginName(slot);
         btnUnloadVst3[(size_t) slot].setEnabled(hasPlugin);
         btnEditVst3[(size_t) slot].setEnabled(hasPlugin);
+        btnMapVst3[(size_t) slot].setEnabled(hasPlugin);
         btnBypassVst3[(size_t) slot].setEnabled(hasPlugin);
         btnBypassVst3[(size_t) slot].setToggleState(pluginEnabled, juce::dontSendNotification);
         btnBypassVst3[(size_t) slot].setButtonText(pluginEnabled ? "ENGINE ACTIVE" : "ENGINE BYPASS");
