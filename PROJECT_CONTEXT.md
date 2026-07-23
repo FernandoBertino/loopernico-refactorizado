@@ -23,11 +23,12 @@ otros VST de bateria.
 - Se agrego el boton `MAPA` a cada host VST3. Abre una ventana de configuracion
   con las seis notas y un canal MIDI global, permite guardar cambios o
   restablecer General MIDI, y aun no emite notas al plugin.
+- Se agrego `Source/DrumMidiPattern.h`: patrones de 1 a 4 compases, 16 pasos
+  por compas, velocidad 0-127 por carril y limpieza segura al reducir longitud.
 - Release x64 y humo de build/`Current` correctos. `Current` SHA-256:
-  `F364E636C1C662FA89E9C939836EEC6FB610ADB6798ADAD9FAC7CFB68ECA0858`.
-- Proximo paso concreto: definir el modelo de eventos de un patron y luego
-  construir la grilla, manteniendo el envio MIDI desactivado hasta verificar la
-  edicion.
+  `75E2A22BD08A59D9FC3E2CF8058891B69BDB00B4FF6B53201CD996ADB7F51E6D`.
+- Proximo paso concreto: construir la grilla visual sobre este modelo,
+  manteniendo el envio MIDI desactivado hasta verificar la edicion.
 
 ## Tarea terminada: transporte y tempo para VST3 de baterias
 

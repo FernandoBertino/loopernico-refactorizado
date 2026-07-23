@@ -1,5 +1,6 @@
 #include "LatencyCompensation.h"
 #include "DrumMidiMap.h"
+#include "DrumMidiPattern.h"
 
 #include <limits>
 #include <vector>
@@ -139,9 +140,25 @@ namespace LoopernicoLatency
         expect("mapa rechaza canal fuera de rango", 0,
                drumMap.setChannel(LoopernicoMidi::DrumLane::Kick, 17) ? 1 : 0);
 
+        LoopernicoMidi::DrumMidiPattern pattern;
+        expect("patron inicia en un compas", 1, pattern.getBars());
+        expect("patron inicia vacio", 0, pattern.countActiveSteps());
+        expect("patron acepta velocidad", 1,
+               pattern.setVelocity(LoopernicoMidi::DrumLane::Kick, 0, 110) ? 1 : 0);
+        expect("patron conserva velocidad", 110,
+               pattern.getVelocity(LoopernicoMidi::DrumLane::Kick, 0));
+        pattern.setBars(4);
+        expect("patron permite cuatro compases", 4, pattern.getBars());
+        pattern.setVelocity(LoopernicoMidi::DrumLane::Kick, 32, 90);
+        expect("patron rechaza paso fuera de rango", 0,
+               pattern.setVelocity(LoopernicoMidi::DrumLane::Snare, 64, 100) ? 1 : 0);
+        pattern.setBars(1);
+        expect("patron limpia pasos fuera al reducir", 0,
+               pattern.getVelocity(LoopernicoMidi::DrumLane::Kick, 32));
+
         if (failures.empty())
         {
-            report = "OK: 20 pruebas deterministas de compensacion, buses y mapa MIDI pasaron; "
+            report = "OK: 27 pruebas deterministas de compensacion, buses y patron MIDI pasaron; "
                      "el rhythm entra al looper sin duplicarse en monitoreo.";
             return true;
         }
