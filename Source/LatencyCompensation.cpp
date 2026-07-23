@@ -1,4 +1,5 @@
 #include "LatencyCompensation.h"
+#include "DrumMidiMap.h"
 
 #include <limits>
 #include <vector>
@@ -126,9 +127,21 @@ namespace LoopernicoLatency
         expect("mezcla final limita antes del master", 500,
                juce::roundToInt(mixOutputSample(0.8f, 0.6f, 0.5f) * 1000.0f));
 
+        LoopernicoMidi::DrumNoteMap drumMap;
+        expect("mapa GM kick", 36, drumMap.getNote(LoopernicoMidi::DrumLane::Kick));
+        expect("mapa GM canal", 10, drumMap.getChannel(LoopernicoMidi::DrumLane::Snare));
+        expect("mapa acepta nota personalizada", 1,
+               drumMap.setNote(LoopernicoMidi::DrumLane::Kick, 35) ? 1 : 0);
+        expect("mapa conserva nota personalizada", 35,
+               drumMap.getNote(LoopernicoMidi::DrumLane::Kick));
+        expect("mapa rechaza nota fuera de rango", 0,
+               drumMap.setNote(LoopernicoMidi::DrumLane::Kick, 128) ? 1 : 0);
+        expect("mapa rechaza canal fuera de rango", 0,
+               drumMap.setChannel(LoopernicoMidi::DrumLane::Kick, 17) ? 1 : 0);
+
         if (failures.empty())
         {
-            report = "OK: 14 pruebas deterministas de compensacion y buses pasaron; "
+            report = "OK: 20 pruebas deterministas de compensacion, buses y mapa MIDI pasaron; "
                      "el rhythm entra al looper sin duplicarse en monitoreo.";
             return true;
         }

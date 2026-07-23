@@ -370,6 +370,31 @@ juce::AudioPluginInstance* EffectsChain::getExternalPluginInstance(int slot) con
         ? externalPlugins[(size_t) slot].instance.get() : nullptr;
 }
 
+const LoopernicoMidi::DrumNoteMap& EffectsChain::getExternalPluginDrumMap(int slot) const
+{
+    static const LoopernicoMidi::DrumNoteMap defaultMap;
+    return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)
+        ? externalPluginDrumMaps[(size_t) slot] : defaultMap;
+}
+
+bool EffectsChain::setExternalPluginDrumNote(int slot, LoopernicoMidi::DrumLane lane, int midiNote)
+{
+    return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)
+        && externalPluginDrumMaps[(size_t) slot].setNote(lane, midiNote);
+}
+
+bool EffectsChain::setExternalPluginDrumChannel(int slot, LoopernicoMidi::DrumLane lane, int midiChannel)
+{
+    return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)
+        && externalPluginDrumMaps[(size_t) slot].setChannel(lane, midiChannel);
+}
+
+void EffectsChain::resetExternalPluginDrumMap(int slot)
+{
+    if (juce::isPositiveAndBelow(slot, kMaxExternalPlugins))
+        externalPluginDrumMaps[(size_t) slot].resetGeneralMidi();
+}
+
 int EffectsChain::getExternalPluginReportedLatencySamples(int slot) const
 {
     return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)

@@ -8,6 +8,22 @@ Ultima actualizacion: 2026-07-22 19:13 (America/Buenos_Aires)
 2. Verificar `git status --short --branch` y preservar cambios locales.
 3. Actualizar este traspaso despues de avances materiales o antes de detener una tarea incompleta.
 
+## Avance en curso: base de mapa MIDI para secuenciador de baterias
+
+Fernando pidio comenzar por pasos pequenos la futura grilla MIDI para BFD y
+otros VST de bateria.
+
+- Se agrego `Source/DrumMidiMap.h` con carriles semanticos para kick, snare,
+  hi-hat cerrado/abierto, crash y ride.
+- Cada slot VST3 ya posee un mapa independiente, con General MIDI por defecto,
+  canal 10 y validacion de notas 0-127/canales 1-16.
+- Se agregaron pruebas deterministas para defaults, personalizacion y rechazos.
+- Release x64 y humo de `Current` correctos. `Current` SHA-256:
+  `3072C1A9C24989B90C7009DD517F030A38609BA6EDF247CD84A9373215DFEA1F`.
+- Proximo paso concreto: exponer el mapa en una pequena pantalla de
+  configuracion y definir el modelo de eventos de un patron, aun sin emitir
+  MIDI al VST hasta verificar la edicion.
+
 ## Tarea terminada: transporte y tempo para VST3 de baterias
 
 Fernando detecto que BFD Player VST3 mostraba tempo 1 dentro de Loopernico y no

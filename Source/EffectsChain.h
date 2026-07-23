@@ -4,6 +4,7 @@
 #include <array>
 #include <vector>
 #include "EQProcessor.h"
+#include "DrumMidiMap.h"
 
 class EffectsChain : private juce::Thread,
                      private juce::AudioProcessorListener
@@ -114,6 +115,10 @@ public:
     juce::String getExternalPluginName(int slot = 0) const;
     juce::String getExternalPluginPath(int slot = 0) const;
     juce::AudioPluginInstance* getExternalPluginInstance(int slot = 0) const;
+    const LoopernicoMidi::DrumNoteMap& getExternalPluginDrumMap(int slot = 0) const;
+    bool setExternalPluginDrumNote(int slot, LoopernicoMidi::DrumLane lane, int midiNote);
+    bool setExternalPluginDrumChannel(int slot, LoopernicoMidi::DrumLane lane, int midiChannel);
+    void resetExternalPluginDrumMap(int slot = 0);
     int getExternalPluginReportedLatencySamples(int slot = 0) const;
     int getActiveExternalPluginLatencySamples() const;
     bool consumeExternalPluginLatencyRefreshRequest()
@@ -567,6 +572,7 @@ private:
         std::atomic<bool> isRecording{ false };
     };
     ExternalPluginPlayHead externalPluginPlayHead;
+    std::array<LoopernicoMidi::DrumNoteMap, kMaxExternalPlugins> externalPluginDrumMaps;
     struct ExternalPluginSlot
     {
         std::unique_ptr<juce::AudioPluginInstance> instance;
