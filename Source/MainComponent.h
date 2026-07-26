@@ -230,6 +230,15 @@ private:
         int baseHeight = 1;
     };
 
+    class MidiMenuSurface final : public juce::Component
+    {
+    public:
+        std::function<void()> onEscape;
+
+        void paint(juce::Graphics& g) override;
+        bool keyPressed(const juce::KeyPress& key) override;
+    };
+
     LoopernicoLAF lnf;
     juce::Image rackSurfaceTexture;
     juce::Image brandWordmark;
@@ -274,6 +283,9 @@ private:
 
     juce::ComboBox   midiDeviceSelector, midiActionSelector, midiMessageTypeSelector;
     juce::Slider     midiNumberSelector;
+    MidiMenuSurface  midiMenuSurface;
+    juce::TextButton btnMidiMenu{"MIDI +"};
+    bool             midiMenuExpanded = false;
     juce::TextButton btnMidiLearn{"MAP MIDI"};
     juce::TextButton btnMidiClear{"BORRAR"};
     juce::TextButton btnMidiSave{"GUARDAR MIDI"};
@@ -336,6 +348,7 @@ private:
     void toggleFxPedalFocus(FXPedalComponent& pedal);
     void closeFxPedalFocus();
     void updateOutputModeButton();
+    void setMidiMenuExpanded(bool expanded);
     void updateLoopEditButtons();
     void layoutVst3PedalControls(FXPedalComponent& pedal);
     void styleVstButton(juce::TextButton& button, juce::Colour accent);

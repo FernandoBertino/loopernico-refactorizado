@@ -28,6 +28,8 @@ namespace
     constexpr int kMidiClearWidth = 64;
     constexpr int kMidiSaveWidth = 108;
     constexpr int kMidiControlGap = 8;
+    constexpr int kMidiMenuWidth = 910;
+    constexpr int kMidiMenuHeight = 94;
     constexpr int kMultiVstStateMagic = 0x56535434; // VST4
 
     juce::String serializeDrumPattern(const LoopernicoMidi::DrumMidiPattern& pattern)
@@ -562,6 +564,33 @@ bool MainComponent::FXPedalFocusOverlay::keyPressed(const juce::KeyPress& key)
     return false;
 }
 
+void MainComponent::MidiMenuSurface::paint(juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat().reduced(0.5f);
+    g.setColour(juce::Colour(0xff141a21).withAlpha(0.98f));
+    g.fillRoundedRectangle(bounds, 7.0f);
+    g.setColour(LnfC::Accent.withAlpha(0.42f));
+    g.drawRoundedRectangle(bounds, 7.0f, 1.0f);
+    g.setColour(LnfC::TextDim);
+    g.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
+    g.drawText("CONFIGURACION MIDI", 14, 7, 180, 16, juce::Justification::centredLeft, false);
+    g.setColour(juce::Colours::white.withAlpha(0.42f));
+    g.setFont(juce::Font(juce::FontOptions(9.0f)));
+    g.drawText("ESC para cerrar", getWidth() - 110, 7, 94, 16, juce::Justification::centredRight, false);
+}
+
+bool MainComponent::MidiMenuSurface::keyPressed(const juce::KeyPress& key)
+{
+    if (key == juce::KeyPress::escapeKey)
+    {
+        if (onEscape != nullptr)
+            onEscape();
+        return true;
+    }
+
+    return false;
+}
+
 MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
 {
     setLookAndFeel(&lnf);
@@ -708,6 +737,8 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
     btnLoadSession.onClick = [this]() { loadSessionFromFile(); };
     btnExportMix.onClick = [this]() { exportMixToFile(); };
     btnExportTracks.onClick = [this]() { exportTracksToFolder(); };
+    btnAudioSettings.setButtonText("CONFIGURACION");
+    btnAudioSettings.setTooltip("Abrir configuracion de audio");
     btnAudioSettings.onClick = [this]() { showAudioSettings(); };
     styleHeaderButton(btnAudioSettings, LnfC::Accent);
     addAndMakeVisible(btnSaveSession);
@@ -726,9 +757,18 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
     addChildComponent(fxPedalFocusOverlay);
 
     // MIDI
+    btnMidiMenu.setTooltip("Mostrar u ocultar la configuracion MIDI");
+    styleVstButton(btnMidiMenu, LnfC::Accent);
+    btnMidiMenu.onClick = [this]() { setMidiMenuExpanded(!midiMenuExpanded); };
+    addAndMakeVisible(btnMidiMenu);
+
+    midiMenuSurface.onEscape = [this]() { setMidiMenuExpanded(false); };
+    midiMenuSurface.setWantsKeyboardFocus(true);
+    addAndMakeVisible(midiMenuSurface);
+
     midiDeviceSelector.setTextWhenNoChoicesAvailable("No MIDI Devices");
     refreshMidiInputSelector();
-    addAndMakeVisible(midiDeviceSelector);
+    midiMenuSurface.addAndMakeVisible(midiDeviceSelector);
     midiDeviceSelector.onChange = [this]()
     {
         changeMidiInput(midiDeviceSelector.getSelectedItemIndex());
@@ -743,21 +783,21 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
         updateMidiMappingLabel();
         updateMidiManualControls();
     };
-    addAndMakeVisible(midiActionSelector);
+    midiMenuSurface.addAndMakeVisible(midiActionSelector);
 
     midiMessageTypeSelector.addItem("CC", 1);
     midiMessageTypeSelector.addItem("NOTA", 2);
     midiMessageTypeSelector.addItem("PROGRAM", 3);
     midiMessageTypeSelector.setSelectedId(1);
     midiMessageTypeSelector.onChange = [this]() { applyMidiManualMapping(); };
-    addAndMakeVisible(midiMessageTypeSelector);
+    midiMenuSurface.addAndMakeVisible(midiMessageTypeSelector);
 
     midiNumberSelector.setSliderStyle(juce::Slider::IncDecButtons);
     midiNumberSelector.setRange(0, 127, 1);
     midiNumberSelector.setValue(0);
     midiNumberSelector.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 42, 22);
     midiNumberSelector.onValueChange = [this]() { applyMidiManualMapping(); };
-    addAndMakeVisible(midiNumberSelector);
+    midiMenuSurface.addAndMakeVisible(midiNumberSelector);
 
     styleVstButton(btnMidiClear, juce::Colour(0xffcc4422));
     btnMidiClear.onClick = [this]()
@@ -768,7 +808,7 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
         updateMidiManualControls();
         markMidiConfigurationDirty();
     };
-    addAndMakeVisible(btnMidiClear);
+    midiMenuSurface.addAndMakeVisible(btnMidiClear);
 
     styleVstButton(btnMidiSave, LnfC::PlayGreen);
     btnMidiSave.onClick = [this]()
@@ -780,11 +820,11 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
         lblMidiStatus.setColour(juce::Label::textColourId,
                                 saved ? LnfC::PlayGreen : LnfC::RecRed);
     };
-    addAndMakeVisible(btnMidiSave);
+    midiMenuSurface.addAndMakeVisible(btnMidiSave);
 
     btnMidiLearn.setClickingTogglesState(true);
     btnMidiLearn.setColour(juce::TextButton::buttonOnColourId, LnfC::OvdAmber.darker(0.1f));
-    addAndMakeVisible(btnMidiLearn);
+    midiMenuSurface.addAndMakeVisible(btnMidiLearn);
     btnMidiLearn.onClick = [this]() {
         if (btnMidiLearn.getToggleState()) midiController.startLearn(midiActionSelector.getSelectedId()-1);
         else
@@ -798,9 +838,11 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
     lblMidiStatus.setText("MIDI Input Ready.", juce::dontSendNotification);
     lblMidiStatus.setFont(juce::Font(juce::FontOptions(10.0f)));
     lblMidiStatus.setColour(juce::Label::textColourId, LnfC::TextDim);
+    midiMenuSurface.addAndMakeVisible(lblMidiStatus);
 
     lblMidiMapping.setFont(juce::Font(juce::FontOptions(10.0f)));
     lblMidiMapping.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.88f));
+    midiMenuSurface.addAndMakeVisible(lblMidiMapping);
     changeMidiInput(0);
     loadMidiConfiguration();
     updateMidiMappingLabel();
@@ -1074,6 +1116,7 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
             if (safeThis != nullptr)
                 safeThis->handleMidiDeviceListChanged();
         });
+    setMidiMenuExpanded(false);
     startTimerHz(24);
 }
 
@@ -3170,7 +3213,7 @@ void MainComponent::updateAudioStatusUi()
     {
         lblAudioStatus.setText("AUDIO NO DISPONIBLE - ABRIR AUDIO", juce::dontSendNotification);
         lblAudioStatus.setColour(juce::Label::textColourId, LnfC::RecRed);
-        btnAudioSettings.setButtonText("AUDIO !");
+        btnAudioSettings.setButtonText("CONFIGURACION !");
         return;
     }
 
@@ -3201,7 +3244,7 @@ void MainComponent::updateAudioStatusUi()
     const bool warning = status.usingFallback || status.aggressiveBuffer
                       || (status.xRunsAvailable && status.xRuns > 0);
     lblAudioStatus.setColour(juce::Label::textColourId, warning ? LnfC::OvdAmber : LnfC::PlayGreen);
-    btnAudioSettings.setButtonText(warning ? "AUDIO !" : "AUDIO");
+    btnAudioSettings.setButtonText(warning ? "CONFIGURACION !" : "CONFIGURACION");
 
     if (audioSettingsPanel != nullptr && audioSettingsPanel->isVisible())
         audioSettingsPanel->refresh(latency.pluginSamples);
@@ -3440,6 +3483,19 @@ void MainComponent::updateOutputModeButton()
         track->setMonoDisplay(mono);
 }
 
+void MainComponent::setMidiMenuExpanded(bool expanded)
+{
+    midiMenuExpanded = expanded;
+    midiMenuSurface.setVisible(expanded);
+    btnMidiMenu.setButtonText(expanded ? "MIDI -" : "MIDI +");
+    btnMidiMenu.setToggleState(expanded, juce::dontSendNotification);
+
+    if (expanded)
+        midiMenuSurface.grabKeyboardFocus();
+
+    resized();
+}
+
 void MainComponent::updateLoopEditButtons()
 {
     const auto state = looper.getState();
@@ -3639,9 +3695,9 @@ void MainComponent::resized()
                     { &btnRecConfirm, &btnStopPlay, &btnPauseAll, &btnCancel });
     layoutHeaderRow(leftHeaderZone, 49, 106,
                     { &btnUndo, &btnRedo, &btnReset });
-    layoutHeaderRow(rightHeaderZone, 13, 128,
+    layoutHeaderRow(rightHeaderZone, 13, 144,
                     { &btnSaveSession, &btnLoadSession, &btnAudioSettings });
-    layoutHeaderRow(rightHeaderZone, 49, 128,
+    layoutHeaderRow(rightHeaderZone, 49, 144,
                     { &btnExportMix, &btnExportTracks });
 
     auto vpRect = juce::Rectangle<int>(fullX + 4, mY + kTrackViewportTopInset, fullW - 8,
@@ -3716,7 +3772,6 @@ void MainComponent::resized()
     }
 
     const int footerY = H - outer - sH;
-    const int midiZoneX = kFooterInset;
     const int midiControlsY = footerY + (sH - 24) / 2;
     const int outputZoneX = W - kFooterInset - kFooterOutputZoneWidth;
 
@@ -3725,25 +3780,39 @@ void MainComponent::resized()
     masterKnob.setBounds(outputZoneX + 225, footerY + 3, 34, 34);
     masterVUMeter.setBounds(outputZoneX + 282, midiControlsY, 116, 24);
 
-    midiDeviceSelector.setBounds(midiZoneX, midiControlsY, kMidiDeviceWidth, 24);
-    midiActionSelector.setBounds(midiZoneX + kMidiDeviceWidth + kMidiControlGap,
-                                 midiControlsY, kMidiActionWidth, 24);
-    btnMidiLearn.setBounds(midiZoneX + kMidiDeviceWidth + kMidiControlGap
-                                    + kMidiActionWidth + kMidiControlGap,
-                           midiControlsY, kMidiLearnWidth, 24);
-    const int midiManualX = midiZoneX + kMidiDeviceWidth + kMidiControlGap
-                                      + kMidiActionWidth + kMidiControlGap
-                                      + kMidiLearnWidth + kMidiControlGap;
-    midiMessageTypeSelector.setBounds(midiManualX, midiControlsY, kMidiTypeWidth, 24);
-    midiNumberSelector.setBounds(midiManualX + kMidiTypeWidth + kMidiControlGap,
-                                 midiControlsY, kMidiNumberWidth, 24);
-    const int midiClearX = midiManualX + kMidiTypeWidth + kMidiControlGap
-                                      + kMidiNumberWidth + kMidiControlGap;
-    const int midiSaveX = midiClearX + kMidiClearWidth + kMidiControlGap;
-    btnMidiClear.setBounds(midiClearX, midiControlsY, kMidiClearWidth, 24);
-    btnMidiSave.setBounds(midiSaveX, midiControlsY, kMidiSaveWidth, 24);
+    const int midiButtonWidth = 108;
+    btnMidiMenu.setBounds(kFooterInset, midiControlsY, midiButtonWidth, 24);
 
-    const int loopGroupX = midiSaveX + kMidiSaveWidth + 2;
+    const int midiMenuW = juce::jmin(kMidiMenuWidth, juce::jmax(620, W - kFooterInset * 2));
+    const int midiMenuH = kMidiMenuHeight;
+    midiMenuSurface.setBounds(kFooterInset, juce::jmax(outer, footerY - midiMenuH - 6),
+                              midiMenuW, midiMenuH);
+    if (midiMenuExpanded)
+    {
+        midiDeviceSelector.setBounds(14, 28, kMidiDeviceWidth, 24);
+        midiActionSelector.setBounds(14 + kMidiDeviceWidth + kMidiControlGap, 28,
+                                     kMidiActionWidth, 24);
+        btnMidiLearn.setBounds(14 + kMidiDeviceWidth + kMidiControlGap
+                                   + kMidiActionWidth + kMidiControlGap,
+                               28, kMidiLearnWidth, 24);
+
+        const int mappingX = 14 + kMidiDeviceWidth + kMidiControlGap
+                           + kMidiActionWidth + kMidiControlGap + kMidiLearnWidth + kMidiControlGap;
+        lblMidiMapping.setBounds(mappingX, 29, juce::jmax(120, midiMenuW - mappingX - 14), 22);
+
+        midiMessageTypeSelector.setBounds(14, 60, kMidiTypeWidth, 24);
+        midiNumberSelector.setBounds(14 + kMidiTypeWidth + kMidiControlGap, 60,
+                                     kMidiNumberWidth, 24);
+        const int midiClearX = 14 + kMidiTypeWidth + kMidiControlGap
+                             + kMidiNumberWidth + kMidiControlGap;
+        const int midiSaveX = midiClearX + kMidiClearWidth + kMidiControlGap;
+        btnMidiClear.setBounds(midiClearX, 60, kMidiClearWidth, 24);
+        btnMidiSave.setBounds(midiSaveX, 60, kMidiSaveWidth, 24);
+        lblMidiStatus.setBounds(midiSaveX + kMidiSaveWidth + kMidiControlGap, 63,
+                                juce::jmax(100, midiMenuW - midiSaveX - kMidiSaveWidth - 28), 18);
+    }
+
+    const int loopGroupX = kFooterInset + midiButtonWidth + 8;
     const int loopButtonY = midiControlsY;
     lblLoopEdit.setBounds(loopGroupX, footerY + 4, 74, 12);
     const int loopButtonsX = loopGroupX + 80;

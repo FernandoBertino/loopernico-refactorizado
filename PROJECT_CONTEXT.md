@@ -1,6 +1,60 @@
 # Contexto operativo de Loopernico
 
+## Tarea actual: apariencia de ComboBox y PopupMenu
+
+- Se mejoro exclusivamente `LoopernicoLAF`: controles `ComboBox` con gradiente,
+  esquinas redondeadas, borde reactivo a hover/foco, flecha consistente y estado
+  deshabilitado; los `PopupMenu` ahora tienen fondo con profundidad, borde,
+  filas de 30 px, tipografia jerarquizada, hover, tick, separadores y submenus.
+- No se cambiaron opciones, orden, valores, callbacks ni comportamiento.
+- Release `x64` correcto el 2026-07-26 con la solucion generada por JUCE; el
+  ejecutable permanecio activo y responsivo durante 8 s y cerro con codigo 0.
+- La captura/control visual de Windows agoto el tiempo de espera al lanzar el
+  Release y no expuso una ventana; no se declara una captura interactiva.
+
+### Proximo paso concreto
+
+Confirmar manualmente un `ComboBox` principal y el menu de configuracion MIDI
+en `Builds/VisualStudio2026/x64/Release/App` o en el despliegue diario.
+
 Ultima actualizacion: 2026-07-26 (America/Buenos_Aires)
+
+## Tarea terminada: acceso visible a Configuracion desde la interfaz principal
+
+### Implementacion
+
+- El boton existente que abre `AudioSettingsPanel` ahora se muestra como
+  `CONFIGURACION` en el encabezado principal, con tooltip y el mismo estilo de
+  los controles de sesion.
+- El estado sin audio se indica como `CONFIGURACION !` sin cambiar el flujo de
+  apertura.
+- Se reutilizo la pantalla existente: abre con `showAudioSettings()`, se puede
+  cerrar con `CERRAR ESC` o ESC y no se modificaron sesiones, pedales, efectos,
+  MIDI ni DSP.
+
+### Verificacion y despliegue
+
+- Release `x64` correcto dos veces con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`,
+  codigo 0 y sin errores ni advertencias nuevas visibles.
+- Capturas visuales revisadas:
+  `tmp/config-access-normal-final.png` confirma el boton legible y
+  `tmp/config-access-panel-final.png` confirma el panel centrado y su cierre
+  visible. El ejecutable de Release permanecio activo durante la captura y
+  termino con codigo 0.
+- `Builds/LocalDeployment/Current/Loopernico Refactorizado.exe` fue actualizado
+  y `Previous` conserva la version funcional anterior. Humo de `Current`
+  correcto, con captura y codigo 0.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` apunta a `Current`, conserva el
+  directorio de trabajo y `Assets/Brand/Icons/loopernico-session.ico`.
+- La asociacion `.loopernico` conserva `Loopernico.Session` y el comando hacia
+  `Current`.
+
+### Proximo paso concreto
+
+No queda ningun paso de implementacion pendiente. Confirmar manualmente el
+clic en `CONFIGURACION` y `CERRAR ESC` si se desea una prueba interactiva con
+controlador de ventanas; la ruta de codigo, el build y las capturas son
+correctos.
 
 ## Tarea terminada: cierre y redimensionado de ventanas MAPA/PATRON MIDI
 
