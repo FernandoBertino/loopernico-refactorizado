@@ -85,10 +85,12 @@ EffectsChain::EffectsChain()
 {
     std::array<int, kChainItemCount> initialOrder{};
     initialOrder[0] = kPedalCount;
+    int nextOrderSlot = 1;
     for (int i = 0; i < kPedalCount; ++i)
-        initialOrder[(size_t) i + 1] = i;
+        if (i != RhythmPedal)
+            initialOrder[(size_t) nextOrderSlot++] = i;
     for (int slot = 1; slot < kMaxExternalPlugins; ++slot)
-        initialOrder[(size_t) kPedalCount + slot] = kPedalCount + slot;
+        initialOrder[(size_t) nextOrderSlot++] = kPedalCount + slot;
     audioPedalOrder = initialOrder;
     setPedalOrder(initialOrder);
 
@@ -269,6 +271,12 @@ EffectsChain::PreparedExternalPlugin EffectsChain::commitExternalPlugin(Prepared
     slot.streamPosition = 0;
     slot.outputReady = false;
     slot.streamWasEnabled = false;
+    slot.patternTransportWasPlaying = false;
+    slot.looperTransportWasPlaying = false;
+    slot.patternNoteOffBlocksRemaining = 0;
+    slot.patternOriginSample = 0;
+    slot.patternPlaybackEnabled.store(false, std::memory_order_relaxed);
+    slot.patternStopRequested.store(false, std::memory_order_relaxed);
     if (slot.instance != nullptr)
         slot.instance->addListener(this);
     externalPluginLatencyRefreshRequested.store(false);
@@ -354,6 +362,31 @@ bool EffectsChain::isExternalPluginEnabled(int slot) const
     return hasExternalPlugin(slot) && externalPlugins[(size_t) slot].enabled.load();
 }
 
+bool EffectsChain::isExternalPluginPatternPlaying(int slot) const noexcept
+{
+    return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)
+        && externalPlugins[(size_t) slot].patternPlaybackEnabled.load(std::memory_order_relaxed);
+}
+
+bool EffectsChain::isAnyExternalPluginPatternPlaying() const noexcept
+{
+    for (const auto& slot : externalPlugins)
+        if (slot.instance != nullptr && slot.enabled.load(std::memory_order_relaxed)
+            && slot.patternPlaybackEnabled.load(std::memory_order_relaxed))
+            return true;
+    return false;
+}
+
+void EffectsChain::setExternalPluginPatternPlaying(bool shouldPlay, int slot) noexcept
+{
+    if (juce::isPositiveAndBelow(slot, kMaxExternalPlugins))
+    {
+        auto& externalPlugin = externalPlugins[(size_t) slot];
+        externalPlugin.patternPlaybackEnabled.store(shouldPlay, std::memory_order_relaxed);
+        externalPlugin.patternStopRequested.store(!shouldPlay, std::memory_order_relaxed);
+    }
+}
+
 juce::String EffectsChain::getExternalPluginName(int slot) const
 {
     return hasExternalPlugin(slot) ? externalPlugins[(size_t) slot].name : juce::String();
@@ -377,6 +410,13 @@ const LoopernicoMidi::DrumNoteMap& EffectsChain::getExternalPluginDrumMap(int sl
         ? externalPluginDrumMaps[(size_t) slot] : defaultMap;
 }
 
+const LoopernicoMidi::DrumMidiPattern& EffectsChain::getExternalPluginDrumPattern(int slot) const
+{
+    static const LoopernicoMidi::DrumMidiPattern defaultPattern;
+    return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)
+        ? externalPluginDrumPatterns[(size_t) slot] : defaultPattern;
+}
+
 bool EffectsChain::setExternalPluginDrumNote(int slot, LoopernicoMidi::DrumLane lane, int midiNote)
 {
     return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)
@@ -387,6 +427,12 @@ bool EffectsChain::setExternalPluginDrumChannel(int slot, LoopernicoMidi::DrumLa
 {
     return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)
         && externalPluginDrumMaps[(size_t) slot].setChannel(lane, midiChannel);
+}
+
+void EffectsChain::setExternalPluginDrumPattern(int slot, const LoopernicoMidi::DrumMidiPattern& pattern)
+{
+    if (juce::isPositiveAndBelow(slot, kMaxExternalPlugins))
+        externalPluginDrumPatterns[(size_t) slot] = pattern;
 }
 
 void EffectsChain::resetExternalPluginDrumMap(int slot)
@@ -413,11 +459,11 @@ int EffectsChain::getActiveExternalPluginLatencySamples() const
 void EffectsChain::setPedalOrder(const std::array<int, kChainItemCount>& order)
 {
     uint64_t low = 0, high = 0;
-    std::array<bool, kChainItemCount> seen{};
+    std::array<bool, kChainItemIdLimit> seen{};
     for (int i = 0; i < kChainItemCount; ++i)
     {
         const int pedal = order[(size_t) i];
-        if (pedal < 0 || pedal >= kChainItemCount || seen[(size_t) pedal])
+        if (pedal < 0 || pedal >= kChainItemIdLimit || pedal == RhythmPedal || seen[(size_t) pedal])
             return;
         seen[(size_t) pedal] = true;
         const int bit = i * 5;
@@ -1149,6 +1195,9 @@ void EffectsChain::processExternalPluginSample(int slotIndex, int channel, int c
             slot.scratchBuffer.clear();
             slot.outputBuffer.clear();
             slot.streamWasEnabled = false;
+            slot.patternTransportWasPlaying = false;
+            slot.looperTransportWasPlaying = false;
+            slot.patternNoteOffBlocksRemaining = 0;
         }
         return;
     }
@@ -1159,6 +1208,9 @@ void EffectsChain::processExternalPluginSample(int slotIndex, int channel, int c
         slot.scratchBuffer.clear();
         slot.outputBuffer.clear();
         slot.streamWasEnabled = true;
+        slot.patternTransportWasPlaying = false;
+        slot.looperTransportWasPlaying = false;
+        slot.patternNoteOffBlocksRemaining = 0;
     }
     auto* plugin = slot.instance.get();
     if (plugin == nullptr || plugin->isSuspended())
@@ -1182,12 +1234,117 @@ void EffectsChain::processExternalPluginSample(int slotIndex, int channel, int c
         if (slot.streamPosition >= blockSize)
         {
             slot.midiBuffer.clear();
+            queueExternalPluginPatternMidi(slotIndex, blockSize);
             plugin->processBlock(slot.scratchBuffer, slot.midiBuffer);
             std::swap(slot.scratchBuffer, slot.outputBuffer);
             slot.scratchBuffer.clear();
             slot.streamPosition = 0;
             slot.outputReady = true;
         }
+    }
+}
+
+void EffectsChain::queueExternalPluginPatternMidi(int slotIndex, int blockSize)
+{
+    if (!juce::isPositiveAndBelow(slotIndex, kMaxExternalPlugins) || blockSize <= 0)
+        return;
+
+    auto& slot = externalPlugins[(size_t) slotIndex];
+    const bool looperIsPlaying = externalPluginPlayHead.looperIsPlaying.load(std::memory_order_relaxed);
+    const bool previousLooperIsPlaying = slot.looperTransportWasPlaying;
+    slot.looperTransportWasPlaying = looperIsPlaying;
+    if (looperIsPlaying && !previousLooperIsPlaying)
+        slot.patternStopRequested.store(false, std::memory_order_relaxed);
+
+    const bool isPlaying = !slot.patternStopRequested.load(std::memory_order_relaxed)
+                        && (looperIsPlaying
+                            || slot.patternPlaybackEnabled.load(std::memory_order_relaxed));
+    const auto& pattern = externalPluginDrumPatterns[(size_t) slotIndex];
+    const auto& noteMap = externalPluginDrumMaps[(size_t) slotIndex];
+
+    const auto sendPatternNoteOff = [&]()
+    {
+        for (int laneIndex = 0; laneIndex < (int) LoopernicoMidi::DrumLane::Count; ++laneIndex)
+        {
+            const auto lane = (LoopernicoMidi::DrumLane) laneIndex;
+            const int channel = noteMap.getChannel(lane);
+            slot.midiBuffer.addEvent(juce::MidiMessage::noteOff(channel, noteMap.getNote(lane)), 0);
+            slot.midiBuffer.addEvent(juce::MidiMessage::allNotesOff(channel), 0);
+            slot.midiBuffer.addEvent(juce::MidiMessage::allSoundOff(channel), 0);
+        }
+    };
+
+    if (!isPlaying)
+    {
+        if (slot.patternTransportWasPlaying)
+            slot.patternNoteOffBlocksRemaining = juce::jlimit(2, 32,
+                slot.latencySamples.load(std::memory_order_relaxed) / juce::jmax(1, blockSize) + 3);
+        if (slot.patternNoteOffBlocksRemaining > 0)
+        {
+            sendPatternNoteOff();
+            --slot.patternNoteOffBlocksRemaining;
+        }
+        slot.patternTransportWasPlaying = false;
+        return;
+    }
+
+    slot.patternNoteOffBlocksRemaining = 0;
+
+    const juce::int64 blockStartSample = externalPluginPlayHead.timeInSamples.load(std::memory_order_relaxed);
+    if (!slot.patternTransportWasPlaying)
+    {
+        slot.patternOriginSample = blockStartSample;
+        slot.patternTransportWasPlaying = true;
+    }
+
+    const double bpm = juce::jlimit(20.0, 300.0,
+                                    externalPluginPlayHead.bpm.load(std::memory_order_relaxed));
+    const double samplesPerStep = sampleRate_ * 60.0 / (bpm * 4.0);
+    const int totalSteps = pattern.getBars() * LoopernicoMidi::DrumMidiPattern::stepsPerBar;
+    if (samplesPerStep <= 0.0 || totalSteps <= 0)
+        return;
+
+    const double relativeStart = (double) juce::jmax<juce::int64>(0, blockStartSample - slot.patternOriginSample);
+    const double relativeEnd = relativeStart + (double) blockSize;
+    const auto firstCandidate = (int) std::floor(relativeStart / samplesPerStep) - 1;
+    const auto lastCandidate = (int) std::ceil(relativeEnd / samplesPerStep) + 1;
+
+    static constexpr std::array<LoopernicoMidi::DrumLane, LoopernicoMidi::DrumNoteMap::laneCount> lanes = {
+        LoopernicoMidi::DrumLane::Kick,
+        LoopernicoMidi::DrumLane::Snare,
+        LoopernicoMidi::DrumLane::ClosedHiHat,
+        LoopernicoMidi::DrumLane::OpenHiHat,
+        LoopernicoMidi::DrumLane::Crash,
+        LoopernicoMidi::DrumLane::Ride
+    };
+
+    for (int candidate = firstCandidate; candidate <= lastCandidate; ++candidate)
+    {
+        const double onTime = (double) candidate * samplesPerStep;
+        const double offTime = onTime + samplesPerStep * 0.5;
+        const int onStep = ((candidate % totalSteps) + totalSteps) % totalSteps;
+
+        const auto addEventsAt = [&](double eventTime, bool noteOn)
+        {
+            if (eventTime < relativeStart || eventTime >= relativeEnd)
+                return;
+            const int offset = juce::jlimit(0, blockSize - 1,
+                                            (int) std::llround(eventTime - relativeStart));
+            for (const auto lane : lanes)
+            {
+                const int velocity = pattern.getVelocity(lane, onStep);
+                if (velocity <= 0)
+                    continue;
+                const int channel = noteMap.getChannel(lane);
+                const int note = noteMap.getNote(lane);
+                slot.midiBuffer.addEvent(noteOn
+                    ? juce::MidiMessage::noteOn(channel, note, (juce::uint8) velocity)
+                    : juce::MidiMessage::noteOff(channel, note), offset);
+            }
+        };
+
+        addEventsAt(onTime, true);
+        addEventsAt(offTime, false);
     }
 }
 
@@ -1214,12 +1371,14 @@ juce::Optional<juce::AudioPlayHead::PositionInfo> EffectsChain::ExternalPluginPl
 }
 
 void EffectsChain::setExternalPluginTransport(float tempoBpm, int numerator,
-                                              bool transportPlaying, bool transportRecording) noexcept
+                                              bool transportPlaying, bool transportRecording,
+                                              bool looperTransportPlaying) noexcept
 {
     externalPluginPlayHead.bpm.store(juce::jlimit(20.0, 300.0, (double) tempoBpm), std::memory_order_relaxed);
     externalPluginPlayHead.beatsPerBar.store(juce::jmax(1, numerator), std::memory_order_relaxed);
     externalPluginPlayHead.isPlaying.store(transportPlaying, std::memory_order_relaxed);
     externalPluginPlayHead.isRecording.store(transportRecording, std::memory_order_relaxed);
+    externalPluginPlayHead.looperIsPlaying.store(looperTransportPlaying, std::memory_order_relaxed);
 }
 
 void EffectsChain::prepare(double sampleRate, int maxBlockSize)
@@ -1273,6 +1432,10 @@ void EffectsChain::reset()
         slot.streamPosition = 0;
         slot.outputReady = false;
         slot.streamWasEnabled = false;
+        slot.patternTransportWasPlaying = false;
+        slot.looperTransportWasPlaying = false;
+        slot.patternNoteOffBlocksRemaining = 0;
+        slot.patternStopRequested.store(false, std::memory_order_relaxed);
         slot.scratchBuffer.clear();
         slot.outputBuffer.clear();
     }
@@ -3230,7 +3393,7 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
                     case ReverbPedal:        processReverb(); break;
                     case EqPedal:            processOutputEq(); break;
                     default:
-                        if (chainItem >= kPedalCount && chainItem < kChainItemCount)
+                        if (chainItem >= kPedalCount && chainItem < kChainItemIdLimit)
                             processExternalPluginSample(chainItem - kPedalCount, ch, channels, sample);
                         break;
                 }

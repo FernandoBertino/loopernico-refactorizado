@@ -27,7 +27,7 @@ class LooperEngine
 {
 public:
     static constexpr int   kMaxTracks  = 12;
-    static constexpr float kMaxLoopSecs = 30.0f;
+    static constexpr float kMaxLoopSecs = 600.0f;
     static constexpr int   kMaxTaps    = 8;
     static constexpr double kTapTimeout = 3.0;
 
@@ -271,6 +271,7 @@ private:
     // ---- Helpers de tempo y trim (message thread) ---------------------------
     void recalcLoopLength();
     int  quantizeToNearestBar(int recordedSamples) const;
+    void ensureTrackBufferCapacity(int track, int samples);
 
     // Detecta el primer y ultimo sample con contenido sobre el umbral,
     // copia la region activa al inicio del buffer y devuelve su longitud.

@@ -651,7 +651,7 @@ public:
             g.drawRoundedRectangle(b, 4.0f, 1.0f);
         }
 
-        if (txt.contains("PLAY"))
+        if (txt.contains("PLAY") && btn.getComponentID() != "vstPatternTransportButton")
         {
             float cy = b.getCentreY();
             float tx = b.getX() + 11.0f;
@@ -682,6 +682,31 @@ public:
     void drawButtonText(juce::Graphics& g, juce::TextButton& btn,
                         bool isMouseOverButton, bool isButtonDown) override
     {
+        if (btn.getComponentID() == "vstPatternTransportButton")
+        {
+            const auto bounds = btn.getLocalBounds().toFloat();
+            const float size = juce::jmin(11.0f, bounds.getHeight() * 0.52f);
+            const float cx = bounds.getCentreX();
+            const float cy = bounds.getCentreY() + (isButtonDown ? 1.0f : 0.0f);
+            const auto colour = btn.getToggleState() ? LnfC::RecRed : LnfC::PlayGreen;
+            g.setColour(colour.withAlpha(isMouseOverButton ? 0.28f : 0.14f));
+            g.fillEllipse(cx - size, cy - size, size * 2.0f, size * 2.0f);
+            g.setColour(colour.withAlpha(isButtonDown ? 0.72f : 1.0f));
+
+            if (btn.getToggleState())
+                g.fillRoundedRectangle(cx - size * 0.48f, cy - size * 0.48f,
+                                       size * 0.96f, size * 0.96f, 1.2f);
+            else
+            {
+                juce::Path triangle;
+                triangle.addTriangle(cx - size * 0.38f, cy - size * 0.62f,
+                                     cx - size * 0.38f, cy + size * 0.62f,
+                                     cx + size * 0.68f, cy);
+                g.fillPath(triangle);
+            }
+            return;
+        }
+
         if (btn.getComponentID() != "headerConsoleButton")
         {
             juce::LookAndFeel_V4::drawButtonText(g, btn, isMouseOverButton, isButtonDown);

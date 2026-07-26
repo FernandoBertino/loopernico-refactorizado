@@ -5,6 +5,17 @@ LooperEngine::LooperEngine()
     tapTimes.fill(0.0);
 }
 
+void LooperEngine::ensureTrackBufferCapacity(int track, int samples)
+{
+    if (track < 0 || track >= kMaxTracks)
+        return;
+
+    const int required = juce::jlimit(0, maxLoopLengthSamples, samples);
+    if (tracks[track].buffer.getNumChannels() < 2
+        || tracks[track].buffer.getNumSamples() < required)
+        tracks[track].buffer.setSize(2, required, true, true, true);
+}
+
 // ==============================================================================
 // CICLO DE VIDA
 // ==============================================================================
@@ -18,8 +29,10 @@ void LooperEngine::prepare(double sr, int maxBlockSize,
     maxLoopLengthSamples = (int)(sampleRate_ * kMaxLoopSecs);
 
     for (int i = 0; i < kMaxTracks; ++i) {
-        tracks[i].buffer.setSize(2, maxLoopLengthSamples);
-        tracks[i].buffer.clear();
+        // Allocate track memory on demand. Ten minutes at 48 kHz in stereo is
+        // substantial, and reserving it for all 12 tracks would waste several
+        // gigabytes before the user records anything.
+        tracks[i].buffer.setSize(0, 0);
         tracks[i].currentGain.store(1.0f);
         tracks[i].bufferRevision.fetch_add(1, std::memory_order_release);
         thumbnails[i] = std::make_unique<juce::AudioThumbnail>(512, fmt, thumbnailCache);
@@ -265,7 +278,12 @@ LooperEngine::PreparedSessionRestore LooperEngine::prepareSessionRestore(
     {
         const auto& track = snapshot.tracks[(size_t) i];
         auto& destination = prepared.tracks[(size_t) i];
-        destination.audio.setSize(2, prepared.maxLoopLengthSamples);
+        const int requestedAudioLength = juce::jmax(
+            convertSamplePosition(track.audio.getNumSamples(), prepared.maxLoopLengthSamples),
+            juce::jmax(convertSamplePosition(track.lengthSamples, prepared.maxLoopLengthSamples),
+                       convertSamplePosition(track.redoLengthSamples, prepared.maxLoopLengthSamples)));
+        if (requestedAudioLength > 0)
+            destination.audio.setSize(2, requestedAudioLength);
         destination.audio.clear();
 
         const int sourceAudioLength = track.audio.getNumSamples();
@@ -278,7 +296,9 @@ LooperEngine::PreparedSessionRestore LooperEngine::prepareSessionRestore(
             {
                 if (sourceSampleRate == sampleRate_)
                 {
-                    destination.audio.copyFrom(ch, 0, track.audio, ch, 0, outputAudioLength);
+                    destination.audio.copyFrom(ch, 0, track.audio, ch, 0,
+                                               juce::jmin(outputAudioLength,
+                                                          destination.audio.getNumSamples()));
                 }
                 else
                 {
@@ -296,11 +316,14 @@ LooperEngine::PreparedSessionRestore LooperEngine::prepareSessionRestore(
                     interpolator.process(sourceSampleRate / sampleRate_,
                                          paddedSource.getReadPointer(0),
                                          destination.audio.getWritePointer(ch),
-                                         outputAudioLength);
+                                         juce::jmin(outputAudioLength,
+                                                    destination.audio.getNumSamples()));
                 }
             }
             if (audioChannels == 1)
-                destination.audio.copyFrom(1, 0, destination.audio, 0, 0, outputAudioLength);
+                destination.audio.copyFrom(1, 0, destination.audio, 0, 0,
+                                           juce::jmin(outputAudioLength,
+                                                      destination.audio.getNumSamples()));
         }
 
         destination.lengthSamples = convertSamplePosition(track.lengthSamples, prepared.maxLoopLengthSamples);
@@ -607,6 +630,7 @@ void LooperEngine::recConfirm()
     if (s == State::Stopped)
     {
         // --- FIX PRO 3: Limpieza e inicializacion absoluta de la pista base ---
+        ensureTrackBufferCapacity(0, maxLoopLengthSamples);
         tracks[0].buffer.clear();
         tracks[0].lengthSamples.store(0);
         loopReadPosition.store(0);
@@ -622,6 +646,7 @@ void LooperEngine::recConfirm()
     }
     else if (s == State::ArmedBase)
     {
+        ensureTrackBufferCapacity(0, maxLoopLengthSamples);
         tracks[0].buffer.clear();
         totalTracks.store(1);
         recordWritePosition.store(0);
@@ -667,6 +692,7 @@ void LooperEngine::recConfirm()
     {
         int n = totalTracks.load();
         if (n < kMaxTracks) {
+            ensureTrackBufferCapacity(n, maxLoopLengthSamples);
             tracks[n].buffer.clear();
             tracks[n].lengthSamples.store(0);
             tracks[n].redoLengthSamples.store(0); // nueva grabacion invalida el redo
@@ -1182,6 +1208,7 @@ void LooperEngine::importAudioToBase(juce::AudioFormatManager& fmt, const juce::
     int len = juce::jmin((int)reader->lengthInSamples, maxLoopLengthSamples);
     if (len <= 0) len = (int)sampleRate_;
 
+    ensureTrackBufferCapacity(0, len);
     tracks[0].buffer.clear();
     reader->read(&tracks[0].buffer, 0, len, 0, true, true);
     tracks[0].bufferRevision.fetch_add(1, std::memory_order_release);

@@ -180,9 +180,13 @@ public:
     bool saveSessionFileForSnapshot(const juce::File& sessionFile, juce::String& errorMessage);
 
 private:
+    // Se conserva el espacio historico del antiguo Rhythm Box (indice 1) para
+    // no renumerar los pedales al restaurar sesiones anteriores. Ese indice no
+    // forma parte del orden activo de la cadena.
     static constexpr int kNumFxPedals = 13;
     static constexpr int kMaxVst3Pedals = EffectsChain::kMaxExternalPlugins;
-    static constexpr int kChainItemCount = kNumFxPedals + kMaxVst3Pedals;
+    static constexpr int kChainItemCount = kNumFxPedals - 1 + kMaxVst3Pedals;
+    static constexpr int kChainItemIdLimit = kNumFxPedals + kMaxVst3Pedals;
     static constexpr int kVst3PedalBodyWidth = 254;
     static constexpr int kVst3PedalPitch = kVst3PedalBodyWidth + 28;
 
@@ -265,26 +269,6 @@ private:
     int dragInsertSlot = -1;
     FXPedalFocusOverlay fxPedalFocusOverlay;
     int focusedFxPedalIndex = -2; // -2: ninguno, -1: VST3, 0..12: pedal interno
-    juce::ComboBox    rhythmStyleSelector;
-    juce::ComboBox    rhythmPatternSelector;
-    juce::ComboBox    rhythmModeSelector;
-    juce::Label       lblRhythmStyle;
-    juce::Label       lblRhythmPattern;
-    juce::Label       lblRhythmMode;
-    juce::Label       lblRhythmBpmValue;
-    juce::Label       lblRhythmColorValue;
-    juce::Label       lblRhythmVerseBars;
-    juce::Label       lblRhythmChorusBars;
-    juce::Label       lblRhythmSectionState;
-    juce::Label       lblRhythmCountIn;
-    juce::Label       lblRhythmCountSound;
-    juce::ComboBox    rhythmVerseBarsSelector;
-    juce::ComboBox    rhythmChorusBarsSelector;
-    juce::ComboBox    rhythmCountInBarsSelector;
-    juce::ComboBox    rhythmCountInSoundSelector;
-    juce::TextButton  btnRhythmNextSection{"SIGUIENTE PARTE"};
-    juce::TextButton  btnRhythmCountInToggle{"PRECONTEO"};
-    juce::int64 lastRhythmTapMs = 0;
     juce::int64 lastTremoloTapMs = 0;
     juce::int64 lastDelayTapMs = 0;
 
@@ -353,13 +337,13 @@ private:
     void closeFxPedalFocus();
     void updateOutputModeButton();
     void updateLoopEditButtons();
-    void updateRhythmBoxReadouts();
     void layoutVst3PedalControls(FXPedalComponent& pedal);
     void styleVstButton(juce::TextButton& button, juce::Colour accent);
     void loadExternalVst3Plugin(int slot = 0);
     void unloadExternalVst3Plugin(int slot = 0);
     void openExternalVst3Editor(int slot = 0);
     void openExternalVst3DrumMapEditor(int slot = 0);
+    void openExternalVst3PatternEditor(int slot = 0);
     void closeExternalVst3Editor(int slot = -1);
     void updateExternalVstUi(int slot = -1);
     void saveSessionToFile();
@@ -384,6 +368,8 @@ private:
     std::array<juce::TextButton, kMaxVst3Pedals> btnUnloadVst3;
     std::array<juce::TextButton, kMaxVst3Pedals> btnEditVst3;
     std::array<juce::TextButton, kMaxVst3Pedals> btnMapVst3;
+    std::array<juce::TextButton, kMaxVst3Pedals> btnPatternVst3;
+    std::array<juce::TextButton, kMaxVst3Pedals> btnPatternPlayVst3;
     std::array<juce::TextButton, kMaxVst3Pedals> btnBypassVst3;
     std::array<TonexDisplayLabel, kMaxVst3Pedals> lblVst3Status;
     std::array<std::unique_ptr<juce::FileChooser>, kMaxVst3Pedals> vst3FileChoosers;

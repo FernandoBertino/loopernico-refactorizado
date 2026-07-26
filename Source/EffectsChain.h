@@ -5,6 +5,7 @@
 #include <vector>
 #include "EQProcessor.h"
 #include "DrumMidiMap.h"
+#include "DrumMidiPattern.h"
 
 class EffectsChain : private juce::Thread,
                      private juce::AudioProcessorListener
@@ -39,9 +40,12 @@ public:
     };
 
     static constexpr int kFreezeMaxLayers = 5;
+    // El indice historico RhythmPedal se conserva solo para leer sesiones
+    // antiguas; el orden activo excluye ese elemento.
     static constexpr int kPedalCount = 13;
     static constexpr int kMaxExternalPlugins = 4;
-    static constexpr int kChainItemCount = kPedalCount + kMaxExternalPlugins;
+    static constexpr int kChainItemCount = kPedalCount - 1 + kMaxExternalPlugins;
+    static constexpr int kChainItemIdLimit = kPedalCount + kMaxExternalPlugins;
 
     enum PedalId
     {
@@ -99,7 +103,8 @@ public:
     // Publica el transporte del looper para los VST3 sincronizados al host.
     // Debe llamarse desde el callback de audio inmediatamente antes de processBlock().
     void setExternalPluginTransport(float bpm, int beatsPerBar,
-                                    bool isPlaying, bool isRecording) noexcept;
+                                    bool isPlaying, bool isRecording,
+                                    bool looperIsPlaying) noexcept;
     void reset();
     bool loadExternalVst3(const juce::File& pluginFile, juce::String& errorMessage);
     void unloadExternalPlugin();
@@ -112,12 +117,17 @@ public:
     bool hasExternalPlugin(int slot = 0) const;
     void setExternalPluginEnabled(bool shouldBeEnabled, int slot = 0);
     bool isExternalPluginEnabled(int slot = 0) const;
+    bool isExternalPluginPatternPlaying(int slot = 0) const noexcept;
+    bool isAnyExternalPluginPatternPlaying() const noexcept;
+    void setExternalPluginPatternPlaying(bool shouldPlay, int slot = 0) noexcept;
     juce::String getExternalPluginName(int slot = 0) const;
     juce::String getExternalPluginPath(int slot = 0) const;
     juce::AudioPluginInstance* getExternalPluginInstance(int slot = 0) const;
     const LoopernicoMidi::DrumNoteMap& getExternalPluginDrumMap(int slot = 0) const;
+    const LoopernicoMidi::DrumMidiPattern& getExternalPluginDrumPattern(int slot = 0) const;
     bool setExternalPluginDrumNote(int slot, LoopernicoMidi::DrumLane lane, int midiNote);
     bool setExternalPluginDrumChannel(int slot, LoopernicoMidi::DrumLane lane, int midiChannel);
+    void setExternalPluginDrumPattern(int slot, const LoopernicoMidi::DrumMidiPattern& pattern);
     void resetExternalPluginDrumMap(int slot = 0);
     int getExternalPluginReportedLatencySamples(int slot = 0) const;
     int getActiveExternalPluginLatencySamples() const;
@@ -394,6 +404,7 @@ private:
     void run() override;
     static RhythmSampleSlot sampleSlotForInstrument(DrumInstrument instrument);
     void processExternalPluginSample(int slot, int channel, int channels, float& sample);
+    void queueExternalPluginPatternMidi(int slotIndex, int blockSize);
     void prepareExternalPluginScratchBuffer(int slot);
     void audioProcessorParameterChanged(juce::AudioProcessor*, int, float) override {}
     void audioProcessorChanged(juce::AudioProcessor*,
@@ -570,9 +581,11 @@ private:
         std::atomic<juce::int64> timeInSamples{ 0 };
         std::atomic<bool> isPlaying{ false };
         std::atomic<bool> isRecording{ false };
+        std::atomic<bool> looperIsPlaying{ false };
     };
     ExternalPluginPlayHead externalPluginPlayHead;
     std::array<LoopernicoMidi::DrumNoteMap, kMaxExternalPlugins> externalPluginDrumMaps;
+    std::array<LoopernicoMidi::DrumMidiPattern, kMaxExternalPlugins> externalPluginDrumPatterns;
     struct ExternalPluginSlot
     {
         std::unique_ptr<juce::AudioPluginInstance> instance;
@@ -584,9 +597,15 @@ private:
         int streamPosition{ 0 };
         bool outputReady{ false };
         bool streamWasEnabled{ false };
+        bool patternTransportWasPlaying{ false };
+        bool looperTransportWasPlaying{ false };
+        int patternNoteOffBlocksRemaining{ 0 };
+        juce::int64 patternOriginSample{ 0 };
         juce::String name;
         juce::String path;
         std::atomic<bool> enabled{ true };
+        std::atomic<bool> patternPlaybackEnabled{ false };
+        std::atomic<bool> patternStopRequested{ false };
         std::atomic<int> latencySamples{ 0 };
     };
     std::array<ExternalPluginSlot, kMaxExternalPlugins> externalPlugins;
