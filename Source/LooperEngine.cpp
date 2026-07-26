@@ -683,6 +683,7 @@ void LooperEngine::recConfirm()
         baseLoopLengthSamples.store(recorded);
         editableLoopSourceSamples.store(recorded);
         tracks[0].lengthSamples.store(recorded);
+        applyLoopSeamCrossfade(recorded);
 
         loopReadPosition.store(0);
         fixedLoopCompletionRequested.store(false);
@@ -713,6 +714,7 @@ void LooperEngine::recConfirm()
         int active = totalTracks.load() - 1;
         if (active >= 0 && active < kMaxTracks)
             tracks[active].lengthSamples.store(baseLoopLengthSamples.load());
+        applyLoopSeamCrossfade(baseLoopLengthSamples.load());
         currentState.store(State::Playing);
     }
 }
@@ -1052,6 +1054,7 @@ void LooperEngine::applyLoopSeamCrossfade(int activeLengthSamples)
         return;
 
     const int fadeStart = activeLengthSamples - crossfadeSamples;
+    juce::HeapBlock<float> tail((size_t) crossfadeSamples);
     for (int t = 0; t < totalTr && t < kMaxTracks; ++t)
     {
         if (tracks[t].lengthSamples.load() <= 0)
@@ -1061,12 +1064,22 @@ void LooperEngine::applyLoopSeamCrossfade(int activeLengthSamples)
         {
             auto* data = tracks[t].buffer.getWritePointer(ch);
             for (int i = 0; i < crossfadeSamples; ++i)
+                tail[i] = data[fadeStart + i];
+
+            // El reproductor ya vuelve a leer data[0] al terminar el loop.
+            // Mezclar tambien la cabeza creaba dos cruces consecutivos:
+            // primero cola->cabeza y, al envolver, cabeza->cola. Ademas,
+            // cada arrastre del marcador volvia a mezclar una region ya
+            // procesada. Dejamos la cabeza intacta y hacemos una sola salida
+            // equal-power hacia su primer sample; asi el ultimo sample
+            // modificado coincide con el primero real del loop.
+            for (int i = 0; i < crossfadeSamples; ++i)
             {
-                const float a = data[fadeStart + i];
-                const float b = data[i];
                 const float mix = (float) i / (float) (crossfadeSamples - 1);
-                data[fadeStart + i] = a * (1.0f - mix) + b * mix;
-                data[i] = b * (1.0f - mix) + a * mix;
+                const float outGain = std::cos(mix * juce::MathConstants<float>::halfPi);
+                const float inGain = std::sin(mix * juce::MathConstants<float>::halfPi);
+                const float seamTarget = data[0];
+                data[fadeStart + i] = tail[i] * outGain + seamTarget * inGain;
             }
         }
         tracks[t].bufferRevision.fetch_add(1, std::memory_order_release);
@@ -1086,11 +1099,24 @@ bool LooperEngine::nudgeLoopStart(int deltaSamples)
     if (regionLength <= 1)
         return false;
 
+    const bool preservePlaybackPosition = currentState.load() == State::Playing;
+    const int previousReadPosition = loopReadPosition.load();
+
     for (int t = 0; t < totalTr && t < kMaxTracks; ++t)
         rotateTrackRegion(t, regionLength, deltaSamples);
 
     applyLoopSeamCrossfade(activeLength);
-    loopReadPosition.store(0);
+    if (preservePlaybackPosition)
+    {
+        int newReadPosition = (previousReadPosition - deltaSamples) % activeLength;
+        if (newReadPosition < 0)
+            newReadPosition += activeLength;
+        loopReadPosition.store(newReadPosition);
+    }
+    else
+    {
+        loopReadPosition.store(0);
+    }
     recordWritePosition.store(0);
     recordStartPosition.store(0);
     return true;
@@ -1105,6 +1131,8 @@ bool LooperEngine::adjustLoopTail(int deltaSamples)
     if (deltaSamples == 0 || currentLength <= 1 || sourceLength <= 1 || totalTr <= 0)
         return false;
 
+    const bool preservePlaybackPosition = currentState.load() == State::Playing;
+    const int previousReadPosition = loopReadPosition.load();
     int newLength = juce::jlimit(64, sourceLength, currentLength + deltaSamples);
     if (newLength == currentLength)
         return false;
@@ -1114,7 +1142,10 @@ bool LooperEngine::adjustLoopTail(int deltaSamples)
         tracks[t].lengthSamples.store(newLength);
 
     applyLoopSeamCrossfade(newLength);
-    loopReadPosition.store(0);
+    if (preservePlaybackPosition)
+        loopReadPosition.store(previousReadPosition % newLength);
+    else
+        loopReadPosition.store(0);
     recordWritePosition.store(0);
     recordStartPosition.store(0);
     return true;
@@ -1215,6 +1246,7 @@ void LooperEngine::importAudioToBase(juce::AudioFormatManager& fmt, const juce::
     baseLoopLengthSamples.store(len);
     editableLoopSourceSamples.store(len);
     tracks[0].lengthSamples.store(len);
+    applyLoopSeamCrossfade(len);
     totalTracks.store(1);
     currentState.store(State::Playing);
     loopReadPosition.store(0);

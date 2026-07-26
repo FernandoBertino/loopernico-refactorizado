@@ -1,5 +1,190 @@
 # Contexto operativo de Loopernico
 
+## Ultimo ajuste comprobado: patron VST3 y swing en tiempo real
+
+- Corregido el 2026-07-26 el editor `PATRON MIDI`: las celdas, los compases,
+  `LIMPIAR` y `SWING` publican cada cambio inmediatamente al motor que genera
+  el `MidiBuffer`; ya no dependen de pulsar `GUARDAR` para afectar el patron
+  que esta sonando.
+- El patron de cada slot VST3 se publica entre dos buffers alternos mediante
+  un indice atomico. El callback de audio nunca lee la copia que la interfaz
+  esta reemplazando. El calculo de swing del segundo paso de cada pareja queda
+  aplicado al instante en los siguientes eventos MIDI.
+- No se modificaron pedales internos, transporte del looper, sesiones ni el
+  mapa MIDI. `GUARDAR` conserva su funcion de cerrar aceptando el estado y
+  `CANCELAR` restaura el patron inicial y descarta las ediciones realizadas en
+  la ventana.
+
+### Verificacion y despliegue
+
+- `git diff --check` correcto; solo permanecen avisos preexistentes de
+  normalizacion LF/CRLF.
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- Pruebas deterministas de compensacion, buses y patron MIDI: codigo de salida
+  0. El ejecutable Release y `Current` permanecieron responsivos durante 8 s.
+- `Current` nuevo SHA-256:
+  `F2DD6AF818149ED71AE973651340D4A3D638A229138F606E4C3D79ED8F2DA700`.
+  `Previous` conserva la version funcional anterior:
+  `2704BAEECB52500836CE155089D0A51B792775B7B61B60A8A84D8F2D520BCEC2`.
+- El acceso directo apunta a `Current`, con directorio de trabajo e icono
+  correctos. `.loopernico` conserva `Loopernico.Session`, tipo `Archivo de
+  Loopernico` y comando con `%1`.
+
+Proximo paso concreto: confirmar manualmente con un VST de bateria cargado que
+el PLAY del patron y el transporte del looper reflejen un cambio de celda y de
+SWING mientras la ventana `PATRON MIDI` sigue abierta.
+
+## Ultimo ajuste comprobado: ventanas MIDI independientes del VST
+
+- Reemplazadas las ventanas `AlertWindow` de `MAPA MIDI` y `PATRON MIDI` por
+  `DocumentWindow` nativas con redimensionado real de JUCE/Windows, limites,
+  centrado estable y layout propio adaptable. La grilla conserva las 16
+  columnas y sus botones se ajustan al area disponible.
+- `MAPA` y `PATRON` quedan habilitados para todos los slots VST3 aunque el slot
+  muestre `SIN VST`; la configuracion se guarda en el estado del slot y queda
+  disponible cuando se cargue el plugin posteriormente.
+- Release `x64` correcto el 2026-07-26. `Current` nuevo:
+  `BEDC5D53C37A451BC139EF761729AB0ECBB0B2F91A00C955829BCAA31FFA4CD7`.
+  `Previous` conserva la version funcional anterior:
+  `A970A83BD27134C7F7DB6177133F54CA6A7E8A317119067C6FF050A6FA20F643`.
+- Ambos ejecutables permanecieron responsivos 8 segundos y cerraron con codigo
+  0. El acceso directo y `.loopernico` apuntan a `Current`; la asociacion
+  conserva `Loopernico.Session` y el comando con `%1`.
+- `git diff --check` correcto, con solo avisos preexistentes de LF/CRLF.
+  Falta confirmar manualmente el arrastre y redimensionado porque el
+  controlador visual de Windows no esta disponible en esta sesion.
+
+Proximo paso concreto: abrir `MAPA` y `PATRON` desde un slot sin VST, modificar,
+guardar y luego cargar un VST en ese slot para confirmar el uso de la
+configuracion persistida.
+
+## Ultimo ajuste comprobado: ventanas emergentes MAPA/PATRON MIDI
+
+- Corregido el comportamiento de las ventanas `MAPA MIDI` y `PATRON MIDI`.
+  El `ResizableCornerComponent` ahora convive con el layout interno real de
+  `AlertWindow`, que se conserva al redimensionar; los limites minimo/maximo
+  siguen siendo 520x520/1200x900 para MAPA y 980x500/1500x900 para PATRON.
+- El centrado y el tamano inicial se aplican antes de entrar en modo modal para
+  evitar saltos de posicion. El editor de patron parte de 820 px y calcula el
+  ancho de sus celdas segun el espacio disponible, de modo que las 16 columnas
+  quedan visibles y se adaptan al redimensionar.
+- No se modificaron el modelo MIDI, el guardado de sesiones, los pedales ni el
+  procesamiento de audio.
+
+### Verificacion y despliegue
+
+- Release `x64` correcto el 2026-07-26 con
+  `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- El ejecutable nuevo y el respaldo anterior permanecieron abiertos y
+  responsivos durante 8 segundos y cerraron con codigo 0.
+- `Builds/LocalDeployment/Current/Loopernico Refactorizado.exe` nuevo:
+  SHA-256 `A970A83BD27134C7F7DB6177133F54CA6A7E8A317119067C6FF050A6FA20F643`.
+  `Previous` conserva la version funcional anterior:
+  `076618A9B447305E9058269535A8AB6B1B52895E5E3C80E8DC418BD10CC34914`.
+- El acceso directo apunta a `Current` con su directorio de trabajo e icono
+  correctos. La asociacion `.loopernico` conserva `Loopernico.Session` y el
+  comando hacia `Current`.
+- `git diff --check` correcto; permanecen solamente avisos preexistentes de
+  normalizacion LF/CRLF. La comprobacion interactiva de arrastre requiere
+  confirmacion manual porque el controlador visual de Windows no esta
+  disponible en esta sesion.
+
+Proximo paso concreto: abrir un VST3, entrar en `PATRON MIDI` y confirmar
+manualmente arrastre, redimensionado y visibilidad de las 16 columnas.
+
+## Etapa 1 del ampliado del secuenciador MIDI: swing
+
+- Implementado el 2026-07-26 únicamente para el patrón de cada slot VST3.
+- `DrumMidiPattern` conserva `swingPercent` de 0 a 100; el valor por defecto
+  es 0 para sesiones anteriores. El segundo paso de cada pareja de
+  semicorcheas se retrasa hasta medio paso a 100%; los pasos impares de la
+  pareja no se alteran.
+- `PATRON MIDI` muestra y edita SWING; la sesión lo serializa como
+  `patternSwing` dentro de cada nodo `VST`. No se modificaron MAPA, transporte,
+  flujo de carga VST3 ni otros pedales.
+- La suite determinista pasó 27/27, incluyendo límites 0/100 y el cálculo de
+  retraso. Release `x64` correcto con la solución generada por JUCE.
+- El ejecutable Release y `Builds/LocalDeployment/Current` permanecieron
+  responsivos durante 15 s y cerraron con código 0. `Current` nuevo:
+  `076618A9B447305E9058269535A8AB6B1B52895E5E3C80E8DC418BD10CC34914`.
+  `Previous` conserva la versión estable anterior:
+  `1E2A3C1E4D302C1F90421ABC28506857AF3E79A0D7DF50B2B6C7D362D449E055`.
+- El acceso directo y la asociación `.loopernico` apuntan a `Current` y
+  conservan el tipo, comando e icono de sesión. La captura/control visual
+  interactivo no pudo completarse por `SetIsBorderRequired (0x80004002)`;
+  queda pendiente revisar manualmente la ventana PATRON MIDI.
+
+Próximo paso concreto: confirmar manualmente la legibilidad del control SWING
+en PATRON MIDI y, si no hay regresiones, iniciar la etapa de acentos y
+articulaciones.
+
+## Auditoria funcional inicial: faltantes potenciales
+
+- Revision estatica realizada el 2026-07-26, sin cambios de codigo: el motor
+  conserva `stopPlay()`, pero el boton visible `IR ARRIBA` llama solamente a
+  `goToStart()`, por lo que no hay un STOP de transporte claramente expuesto
+  en la interfaz principal.
+- El guardado es manual; no se encontro autosave ni recuperacion automatica de
+  una toma despues de un cierre inesperado.
+- Las pistas tienen MUTE, SOLO y volumen visibles, pero la pausa individual
+  existe solo en el backend; la interfaz ofrece PAUSE global.
+- El secuenciador MIDI VST3 actual cubre seis carriles y hasta cuatro compases;
+  articulaciones y humanizacion siguen siendo mejoras pendientes. Swing fue
+  implementado en la etapa 1 por patrón/VST3.
+
+Proximo paso concreto: validar estas prioridades con el uso diario de Fernando
+antes de implementar alguna, empezando por el transporte STOP/IR ARRIBA y la
+recuperacion de sesiones.
+
+## Ultimo ajuste comprobado: retiro del LED de MONO/STEREO
+
+- Se retiro solamente el punto LED de la pala `MONO`/`STEREO` en la esquina
+  inferior derecha. El boton conserva el cambio de modo y su estado visual.
+- Release `x64` correcto el 2026-07-26; el ejecutable desplegado permanecio
+  estable durante 8 segundos y cerro con codigo 0.
+- `Current` SHA-256:
+  `1E2A3C1E4D302C1F90421ABC28506857AF3E79A0D7DF50B2B6C7D362D449E055`.
+  `Previous` conserva la version funcional anterior:
+  `8E50214C62FE3D2090036D98B357995387FBB213CE6A84EA64FE00D52706CC00`.
+- El acceso directo fue recreado hacia `Current`; la asociacion `.loopernico`
+  se conserva sin cambios.
+
+Ultima actualizacion: 2026-07-26 (America/Buenos_Aires)
+
+## Ultimo ajuste comprobado: limpieza visual de halos y diagnostico superior
+
+- Se oculto la etiqueta permanente con driver, dispositivo, sample rate,
+  latencias, compensacion, monitoreo y XRUN; el estado de audio sigue visible
+  solamente mediante `CONFIGURACION !` cuando requiere atencion.
+- Se quitaron los halos circulares del slider `SIGNAL THRESH.` y del transporte
+  icon-only PLAY, conservando sus colores y funciones.
+- Release `x64` correcto el 2026-07-26; el ejecutable desplegado permanecio
+  estable durante 8 segundos y cerro con codigo 0.
+- `Current` SHA-256:
+  `8E50214C62FE3D2090036D98B357995387FBB213CE6A84EA64FE00D52706CC00`.
+  `Previous` conserva la version funcional anterior:
+  `13F48CB7C13EDE3119E112FBCA0AC6D81BCA758F11D2C6FE17E0A3B376553E6D`.
+- El acceso directo y la asociacion `.loopernico` fueron verificados. La
+  captura automatica solicitada para revision visual no genero un PNG valido.
+
+Ultima actualizacion: 2026-07-26 (America/Buenos_Aires)
+
+## Ultimo ajuste comprobado: correccion del fade de arremangado
+
+- El ruido de cruce provenia de mezclar destructivamente la cola y la cabeza
+  del loop al mismo tiempo: al envolver, el reproductor atravesaba dos mezclas
+  consecutivas, y el arrastre del marcador reaplicaba el fade sobre audio ya
+  procesado.
+- `LooperEngine::applyLoopSeamCrossfade()` ahora conserva intacta la cabeza y
+  aplica una sola salida equal-power de la cola hacia el primer sample real del
+  loop. No se cambiaron el ruteo, el transporte ni otros efectos.
+- Release `x64` correcto el 2026-07-26; el ejecutable nuevo permanecio estable
+  durante 8 segundos, se desplego en `Current`, `Previous` conserva la version
+  funcional anterior y el humo de ambos binarios fue correcto.
+- `Current` SHA-256: `13F48CB7C13EDE3119E112FBCA0AC6D81BCA758F11D2C6FE17E0A3B376553E6D`.
+
+Ultima actualizacion: 2026-07-26 (America/Buenos_Aires)
+
 ## Tarea actual: apariencia de ComboBox y PopupMenu
 
 - Se mejoro exclusivamente `LoopernicoLAF`: controles `ComboBox` con gradiente,
@@ -341,8 +526,8 @@ antigua de Rhythm Box sin exponerla nuevamente desde el orden activo.
   del looper; al iniciar transporte comienza en el paso 1, y al detenerlo
   envia `noteOff` para las seis filas.
 - La duracion inicial de cada nota es media semicorchea. La base ya recorre
-  kick, snare, hi-hat cerrado/abierto, crash y ride; la siguiente etapa puede
-  agregar articulaciones, swing y una verificacion interactiva especifica con
+  kick, snare, hi-hat cerrado/abierto, crash y ride; las siguientes etapas
+  pueden agregar articulaciones y una verificacion interactiva especifica con
   BFD Player.
 - Los patrones ahora se guardan opcionalmente en cada nodo `VST` como cantidad
   de compases y velocidades serializadas. Las sesiones anteriores, sin esos

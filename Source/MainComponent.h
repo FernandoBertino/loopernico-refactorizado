@@ -180,6 +180,24 @@ public:
     bool saveSessionFileForSnapshot(const juce::File& sessionFile, juce::String& errorMessage);
 
 private:
+    class LoopRangeMarker final : public juce::Component
+    {
+    public:
+        std::function<void(float, float)> onRangeChanged;
+
+        void setRange(float newStart, float newEnd);
+        void paint(juce::Graphics& g) override;
+        void mouseDown(const juce::MouseEvent& e) override;
+        void mouseDrag(const juce::MouseEvent& e) override;
+
+    private:
+        enum class DragTarget { none, start, end };
+        float start = 0.0f;
+        float end = 1.0f;
+        DragTarget dragTarget = DragTarget::none;
+        float dragSpan = 1.0f;
+    };
+
     // Se conserva el espacio historico del antiguo Rhythm Box (indice 1) para
     // no renumerar los pedales al restaurar sesiones anteriores. Ese indice no
     // forma parte del orden activo de la cadena.
@@ -291,9 +309,10 @@ private:
     juce::TextButton btnMidiSave{"GUARDAR MIDI"};
     juce::Label      lblMidiStatus;
     juce::Label      lblMidiMapping;
-    juce::Label      lblLoopEdit;
-    juce::TextButton btnLoopInEarlier{"IN -"}, btnLoopInLater{"IN +"};
-    juce::TextButton btnLoopOutShorter{"OUT -"}, btnLoopOutLonger{"OUT +"};
+    LoopRangeMarker loopRangeMarker;
+    float loopMarkerStart = 0.0f;
+    float loopMarkerEnd = 1.0f;
+    bool loopMarkerInitialised = false;
     juce::Label      lblSilenceThreshold;
     juce::Slider     sldSilenceThreshold;
 

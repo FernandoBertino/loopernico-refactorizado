@@ -124,7 +124,7 @@ public:
     juce::String getExternalPluginPath(int slot = 0) const;
     juce::AudioPluginInstance* getExternalPluginInstance(int slot = 0) const;
     const LoopernicoMidi::DrumNoteMap& getExternalPluginDrumMap(int slot = 0) const;
-    const LoopernicoMidi::DrumMidiPattern& getExternalPluginDrumPattern(int slot = 0) const;
+    LoopernicoMidi::DrumMidiPattern getExternalPluginDrumPattern(int slot = 0) const;
     bool setExternalPluginDrumNote(int slot, LoopernicoMidi::DrumLane lane, int midiNote);
     bool setExternalPluginDrumChannel(int slot, LoopernicoMidi::DrumLane lane, int midiChannel);
     void setExternalPluginDrumPattern(int slot, const LoopernicoMidi::DrumMidiPattern& pattern);
@@ -585,7 +585,11 @@ private:
     };
     ExternalPluginPlayHead externalPluginPlayHead;
     std::array<LoopernicoMidi::DrumNoteMap, kMaxExternalPlugins> externalPluginDrumMaps;
-    std::array<LoopernicoMidi::DrumMidiPattern, kMaxExternalPlugins> externalPluginDrumPatterns;
+    // La interfaz puede editar el patron mientras el callback de audio lo
+    // consume. Dos buffers permiten publicar una copia completa sin que el
+    // hilo de audio lea una estructura a medio actualizar.
+    std::array<std::array<LoopernicoMidi::DrumMidiPattern, 2>, kMaxExternalPlugins> externalPluginDrumPatterns;
+    std::array<std::atomic<int>, kMaxExternalPlugins> externalPluginDrumPatternReadIndex{};
     struct ExternalPluginSlot
     {
         std::unique_ptr<juce::AudioPluginInstance> instance;

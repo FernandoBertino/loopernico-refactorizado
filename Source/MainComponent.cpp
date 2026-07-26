@@ -4,8 +4,6 @@ using namespace LoopernicoUi;
 
 namespace
 {
-    constexpr float kLoopTrimStepSeconds = 0.02f;
-
     constexpr int kUiOuterInset = 10;
     constexpr int kUiSectionGap = 4;
     constexpr int kUiHeaderHeight = 86;
@@ -228,7 +226,10 @@ namespace
         explicit DrumPatternEditorComponent(const LoopernicoMidi::DrumMidiPattern& initialPattern)
             : pattern(initialPattern)
         {
-            setSize(760, 285);
+            // La grilla completa necesita margen para sus 16 columnas y las
+            // etiquetas laterales. El componente tambien recalcula el ancho
+            // de las celdas cuando la ventana cambia de tamano.
+            setSize(820, 285);
 
             barsLabel.setText("COMPASES", juce::dontSendNotification);
             barsLabel.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.90f));
@@ -239,11 +240,28 @@ namespace
             barsSelector.setSelectedId(pattern.getBars(), juce::dontSendNotification);
             barsSelector.onChange = [this]()
             {
-                pattern.setBars(juce::jmax(1, barsSelector.getSelectedId()));
-                refreshPageSelector();
-                refreshGrid();
+                    pattern.setBars(juce::jmax(1, barsSelector.getSelectedId()));
+                    refreshPageSelector();
+                    refreshGrid();
+                    notifyPatternChanged();
             };
             addAndMakeVisible(barsSelector);
+
+            swingLabel.setText("SWING", juce::dontSendNotification);
+            swingLabel.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.90f));
+            addAndMakeVisible(swingLabel);
+
+            swingSlider.setRange(0.0, 100.0, 1.0);
+            swingSlider.setValue(pattern.getSwingPercent(), juce::dontSendNotification);
+            swingSlider.setTextValueSuffix(" %");
+            swingSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+            swingSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 48, 22);
+            swingSlider.onValueChange = [this]()
+            {
+                pattern.setSwingPercent((int) std::llround(swingSlider.getValue()));
+                notifyPatternChanged();
+            };
+            addAndMakeVisible(swingSlider);
 
             pageLabel.setText("PAGINA", juce::dontSendNotification);
             pageLabel.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.90f));
@@ -285,6 +303,7 @@ namespace
                         const int absoluteStep = currentPage * LoopernicoMidi::DrumMidiPattern::stepsPerBar + (int) col;
                         const int velocity = gridButtons[row][col].getToggleState() ? 100 : 0;
                         pattern.setVelocity(lanes[row], absoluteStep, velocity);
+                        notifyPatternChanged();
                     };
                     addAndMakeVisible(button);
                 }
@@ -303,7 +322,10 @@ namespace
         {
             pattern.clear();
             refreshGrid();
+            notifyPatternChanged();
         }
+
+        std::function<void(const LoopernicoMidi::DrumMidiPattern&)> onPatternChanged;
 
         void paint(juce::Graphics& g) override
         {
@@ -317,28 +339,40 @@ namespace
             const int top = 14;
             barsLabel.setBounds(16, top, 80, 22);
             barsSelector.setBounds(102, top, 72, 24);
+            swingLabel.setBounds(390, top, 58, 22);
+            swingSlider.setBounds(452, top, 260, 24);
             pageLabel.setBounds(194, top, 66, 22);
             pageSelector.setBounds(266, top, 92, 24);
 
             const int gridTop = 56;
             const int laneW = 118;
-            const int cellW = 34;
             const int cellH = 26;
             const int gap = 6;
+            const int gridX = laneW + 18;
+            const int availableGridWidth = juce::jmax(16, getWidth() - gridX - 12);
+            const int cellW = juce::jmax(1,
+                                         (availableGridWidth - (LoopernicoMidi::DrumMidiPattern::stepsPerBar - 1) * gap)
+                                             / LoopernicoMidi::DrumMidiPattern::stepsPerBar);
             const int labelY = gridTop - 20;
             for (int col = 0; col < LoopernicoMidi::DrumMidiPattern::stepsPerBar; ++col)
-                stepLabels[(size_t) col].setBounds(laneW + 18 + col * (cellW + gap), labelY, cellW, 16);
+                stepLabels[(size_t) col].setBounds(gridX + col * (cellW + gap), labelY, cellW, 16);
 
             for (std::size_t row = 0; row < gridButtons.size(); ++row)
             {
                 const int y = gridTop + (int) row * (cellH + gap);
                 laneLabels[row].setBounds(8, y + 2, laneW - 10, 22);
                 for (std::size_t col = 0; col < gridButtons[row].size(); ++col)
-                    gridButtons[row][col].setBounds(laneW + 18 + (int) col * (cellW + gap), y, cellW, cellH);
+                    gridButtons[row][col].setBounds(gridX + (int) col * (cellW + gap), y, cellW, cellH);
             }
         }
 
     private:
+        void notifyPatternChanged()
+        {
+            if (onPatternChanged != nullptr)
+                onPatternChanged(pattern);
+        }
+
         void refreshPageSelector()
         {
             pageSelector.clear(juce::dontSendNotification);
@@ -372,43 +406,176 @@ namespace
         LoopernicoMidi::DrumMidiPattern pattern;
         int currentPage{ 0 };
         juce::Label barsLabel, pageLabel;
+        juce::Label swingLabel;
         juce::ComboBox barsSelector, pageSelector;
+        juce::Slider swingSlider;
         std::array<juce::Label, LoopernicoMidi::DrumNoteMap::laneCount> laneLabels;
         std::array<juce::Label, LoopernicoMidi::DrumMidiPattern::stepsPerBar> stepLabels;
         std::array<std::array<juce::TextButton, LoopernicoMidi::DrumMidiPattern::stepsPerBar>,
                    LoopernicoMidi::DrumNoteMap::laneCount> gridButtons;
     };
 
-    class ClickOutsideDismissableAlertWindow final : public juce::AlertWindow
+    class MidiPopupContent : public juce::Component
     {
     public:
-        ClickOutsideDismissableAlertWindow(const juce::String& title,
-                                           const juce::String& message,
-                                           juce::MessageBoxIconType iconType,
-                                           juce::Component* associatedComponent)
-            : juce::AlertWindow(title, message, iconType, associatedComponent),
-              resizeHandle(this, &resizeConstrainer)
-        {
-            closeButton.setButtonText("CERRAR");
-            closeButton.setTooltip("Cerrar sin guardar");
-            closeButton.onClick = [this]() { dismiss(); };
-            addAndMakeVisible(closeButton);
+        std::function<void(int)> onResult;
 
-            resizeConstrainer.setMinimumOnscreenAmounts(20, 20, 20, 20);
-            addAndMakeVisible(resizeHandle);
+        void finish(int result)
+        {
+            if (onResult != nullptr)
+                onResult(result);
+        }
+    };
+
+    class MidiMapEditorContent final : public MidiPopupContent
+    {
+    public:
+        MidiMapEditorContent(const LoopernicoMidi::DrumNoteMap& initialMap)
+        {
+            static constexpr const char* names[] = {
+                "KICK", "SNARE", "HI-HAT CERRADO", "HI-HAT ABIERTO", "CRASH", "RIDE", "CANAL MIDI"
+            };
+            juce::StringArray noteItems;
+            for (int note = 0; note <= 127; ++note)
+                noteItems.add(juce::String(note));
+            for (int index = 0; index < 6; ++index)
+            {
+                labels[(size_t) index].setText(names[index], juce::dontSendNotification);
+                labels[(size_t) index].setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.90f));
+                addAndMakeVisible(labels[(size_t) index]);
+                for (int note = 0; note <= 127; ++note)
+                    combos[(size_t) index].addItem(juce::String(note), note + 1);
+                combos[(size_t) index].setSelectedId(initialMap.getNote(lanes[(size_t) index]) + 1,
+                                                      juce::dontSendNotification);
+                addAndMakeVisible(combos[(size_t) index]);
+            }
+
+            labels[6].setText(names[6], juce::dontSendNotification);
+            labels[6].setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.90f));
+            addAndMakeVisible(labels[6]);
+            for (int channel = 1; channel <= 16; ++channel)
+                combos[6].addItem(juce::String(channel), channel);
+            combos[6].setSelectedId(initialMap.getChannel(LoopernicoMidi::DrumLane::Kick),
+                                    juce::dontSendNotification);
+            addAndMakeVisible(combos[6]);
+
+            saveButton.setButtonText("GUARDAR");
+            resetButton.setButtonText("RESTABLECER GM");
+            cancelButton.setButtonText("CANCELAR");
+            saveButton.onClick = [this]() { finish(1); };
+            resetButton.onClick = [this]() { finish(2); };
+            cancelButton.onClick = [this]() { finish(0); };
+            addAndMakeVisible(saveButton);
+            addAndMakeVisible(resetButton);
+            addAndMakeVisible(cancelButton);
+            setSize(560, 560);
         }
 
-        ~ClickOutsideDismissableAlertWindow() override
+        int getNote(int index) const { return combos[(size_t) index].getSelectedId() - 1; }
+        int getChannel() const { return combos[6].getSelectedId(); }
+
+        void resized() override
+        {
+            const int margin = 18;
+            const int columnGap = 18;
+            const int labelWidth = 150;
+            const int comboWidth = juce::jmax(120, getWidth() - margin * 2 - labelWidth - columnGap);
+            for (int index = 0; index < 7; ++index)
+            {
+                const int y = 18 + index * 42;
+                labels[(size_t) index].setBounds(margin, y, labelWidth, 28);
+                combos[(size_t) index].setBounds(margin + labelWidth + columnGap, y, comboWidth, 28);
+            }
+            const int buttonY = getHeight() - 52;
+            saveButton.setBounds(margin, buttonY, 110, 30);
+            resetButton.setBounds(margin + 120, buttonY, 170, 30);
+            cancelButton.setBounds(getWidth() - margin - 110, buttonY, 110, 30);
+        }
+
+    private:
+        static constexpr std::array<LoopernicoMidi::DrumLane, 6> lanes = {
+            LoopernicoMidi::DrumLane::Kick, LoopernicoMidi::DrumLane::Snare,
+            LoopernicoMidi::DrumLane::ClosedHiHat, LoopernicoMidi::DrumLane::OpenHiHat,
+            LoopernicoMidi::DrumLane::Crash, LoopernicoMidi::DrumLane::Ride
+        };
+        std::array<juce::Label, 7> labels;
+        std::array<juce::ComboBox, 7> combos;
+        juce::TextButton saveButton, resetButton, cancelButton;
+    };
+
+    class MidiPatternEditorContent final : public MidiPopupContent
+    {
+    public:
+        explicit MidiPatternEditorContent(const LoopernicoMidi::DrumMidiPattern& pattern)
+            : editor(pattern), initialPattern(pattern)
+        {
+            addAndMakeVisible(editor);
+            saveButton.setButtonText("GUARDAR");
+            clearButton.setButtonText("LIMPIAR");
+            cancelButton.setButtonText("CANCELAR");
+            saveButton.onClick = [this]() { finish(1); };
+            clearButton.onClick = [this]() { editor.clearPattern(); };
+            cancelButton.onClick = [this]() { finish(0); };
+            addAndMakeVisible(saveButton);
+            addAndMakeVisible(clearButton);
+            addAndMakeVisible(cancelButton);
+            setSize(1000, 500);
+        }
+
+        const LoopernicoMidi::DrumMidiPattern& getPattern() const { return editor.getPattern(); }
+        const LoopernicoMidi::DrumMidiPattern& getInitialPattern() const { return initialPattern; }
+
+        void setPatternChangedCallback(std::function<void(const LoopernicoMidi::DrumMidiPattern&)> callback)
+        {
+            editor.onPatternChanged = std::move(callback);
+        }
+
+        void resized() override
+        {
+            const int margin = 8;
+            const int buttonY = getHeight() - 42;
+            editor.setBounds(margin, margin, getWidth() - margin * 2, buttonY - margin * 2);
+            saveButton.setBounds(margin, buttonY, 110, 30);
+            clearButton.setBounds(margin + 120, buttonY, 100, 30);
+            cancelButton.setBounds(getWidth() - margin - 110, buttonY, 110, 30);
+        }
+
+    private:
+        DrumPatternEditorComponent editor;
+        LoopernicoMidi::DrumMidiPattern initialPattern;
+        juce::TextButton saveButton, clearButton, cancelButton;
+    };
+
+    class MidiEditorWindow final : public juce::DocumentWindow
+    {
+    public:
+        MidiEditorWindow(const juce::String& title,
+                         std::unique_ptr<MidiPopupContent> content,
+                         int width, int height,
+                         int minimumWidth, int minimumHeight,
+                         int maximumWidth, int maximumHeight)
+            : juce::DocumentWindow(title, juce::Colour(0xff101216), juce::DocumentWindow::closeButton),
+              contentComponent(content.release())
+        {
+            setUsingNativeTitleBar(true);
+            setResizable(true, true);
+            setResizeLimits(minimumWidth, minimumHeight, maximumWidth, maximumHeight);
+            setContentOwned(contentComponent, true);
+            setSize(width, height);
+        }
+
+        ~MidiEditorWindow() override
         {
             juce::Desktop::getInstance().removeGlobalMouseListener(this);
         }
 
-        void enableResizing(int minimumWidth, int minimumHeight,
-                            int maximumWidth, int maximumHeight)
+        void finish(int result)
         {
-            resizeConstrainer.setSizeLimits(minimumWidth, minimumHeight,
-                                            maximumWidth, maximumHeight);
-            resized();
+            if (!closing)
+            {
+                closing = true;
+                exitModalState(result);
+            }
         }
 
         void startDismissOnOutsideClick()
@@ -417,39 +584,90 @@ namespace
         }
 
     private:
-        void dismiss()
-        {
-            if (dismissPending)
-                return;
-
-            dismissPending = true;
-            juce::Component::SafePointer<ClickOutsideDismissableAlertWindow> safeThis(this);
-            juce::MessageManager::callAsync([safeThis]()
-            {
-                if (safeThis != nullptr)
-                    safeThis->exitModalState(0);
-            });
-        }
-
         void mouseDown(const juce::MouseEvent& event) override
         {
             if (!getScreenBounds().contains(event.getScreenPosition().roundToInt()))
-                dismiss();
+                finish(0);
         }
 
-        void resized() override
-        {
-            closeButton.setBounds(juce::jmax(0, getWidth() - 102), 8, 88, 24);
-            resizeHandle.setBounds(juce::jmax(0, getWidth() - 18),
-                                   juce::jmax(0, getHeight() - 18), 18, 18);
-        }
-
-        juce::ComponentBoundsConstrainer resizeConstrainer;
-        juce::ResizableCornerComponent resizeHandle;
-        juce::TextButton closeButton;
-        bool dismissPending = false;
+        MidiPopupContent* contentComponent = nullptr;
+        bool closing = false;
     };
 
+}
+
+void MainComponent::LoopRangeMarker::setRange(float newStart, float newEnd)
+{
+    start = juce::jlimit(0.0f, 1.0f, newStart);
+    end = juce::jlimit(start, 1.0f, newEnd);
+    repaint();
+}
+
+void MainComponent::LoopRangeMarker::paint(juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat().reduced(1.0f);
+    const float left = bounds.getX() + 10.0f;
+    const float width = juce::jmax(1.0f, bounds.getWidth() - 20.0f);
+    const float startX = left + start * width;
+    const float endX = left + end * width;
+
+    g.setColour(juce::Colour(0xff10151d).withAlpha(0.96f));
+    g.fillRoundedRectangle(bounds, 6.0f);
+    for (int i = 0; i < 52; ++i)
+    {
+        const float x = left + width * (float) i / 51.0f;
+        const float bar = 4.0f + 12.0f * (0.5f + 0.5f * std::sin((float) i * 1.83f));
+        g.setColour(juce::Colour(0xff6a86a8).withAlpha(0.34f));
+        g.fillRoundedRectangle(x - 1.0f, bounds.getCentreY() - bar * 0.5f, 2.0f, bar, 1.0f);
+    }
+    g.setColour(juce::Colour(0xff9d5cff).withAlpha(0.72f));
+    g.fillRoundedRectangle(left, bounds.getY() + 2.0f, juce::jmax(0.0f, startX - left),
+                           bounds.getHeight() - 4.0f, 5.0f);
+    g.setColour(juce::Colour(0xff2e9eea).withAlpha(0.70f));
+    g.fillRoundedRectangle(startX, bounds.getY() + 2.0f, juce::jmax(0.0f, endX - startX),
+                           bounds.getHeight() - 4.0f, 5.0f);
+
+    auto drawHandle = [&g, &bounds](float x, juce::Colour colour, const char* label)
+    {
+        g.setColour(colour.withAlpha(0.22f));
+        g.fillRoundedRectangle(x - 10.0f, bounds.getY(), 20.0f, bounds.getHeight(), 5.0f);
+        g.setColour(juce::Colours::white);
+        g.fillRoundedRectangle(x - 2.0f, bounds.getY() + 2.0f, 4.0f, bounds.getHeight() - 4.0f, 2.0f);
+        g.setFont(juce::Font(juce::FontOptions(8.0f).withStyle("Bold")));
+        g.drawText(label, (int) x - 18, (int) bounds.getY() - 1, 36, 10, juce::Justification::centred);
+    };
+    drawHandle(startX, juce::Colour(0xffb46cff), "IN");
+    drawHandle(endX, juce::Colour(0xff52c9ff), "OUT");
+    g.setColour(juce::Colours::white.withAlpha(0.14f));
+    g.drawRoundedRectangle(bounds, 6.0f, 1.0f);
+}
+
+void MainComponent::LoopRangeMarker::mouseDown(const juce::MouseEvent& e)
+{
+    const float left = 11.0f;
+    const float width = juce::jmax(1.0f, (float) getWidth() - 22.0f);
+    const float x = (float) e.position.x;
+    const float startX = left + start * width;
+    const float endX = left + end * width;
+    dragTarget = std::abs(x - startX) <= std::abs(x - endX) ? DragTarget::start : DragTarget::end;
+    dragSpan = juce::jmax(0.01f, end - start);
+}
+
+void MainComponent::LoopRangeMarker::mouseDrag(const juce::MouseEvent& e)
+{
+    const float left = 11.0f;
+    const float width = juce::jmax(1.0f, (float) getWidth() - 22.0f);
+    const float value = juce::jlimit(0.0f, 1.0f, ((float) e.position.x - left) / width);
+    if (dragTarget == DragTarget::start)
+    {
+        start = juce::jlimit(0.0f, juce::jmax(0.0f, 1.0f - dragSpan), value);
+        end = juce::jlimit(start + 0.01f, 1.0f, start + dragSpan);
+    }
+    else if (dragTarget == DragTarget::end)
+        end = juce::jlimit(juce::jmin(1.0f, start + 0.01f), 1.0f, value);
+    repaint();
+    if (onRangeChanged != nullptr)
+        onRangeChanged(start, end);
 }
 
 MainComponent::FXPedalFocusOverlay::FXPedalFocusOverlay()
@@ -750,7 +968,8 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
     lblAudioStatus.setFont(juce::Font(juce::FontOptions(10.5f).withStyle("Bold")));
     lblAudioStatus.setColour(juce::Label::textColourId, LnfC::TextDim);
     lblAudioStatus.setJustificationType(juce::Justification::centredRight);
-    addAndMakeVisible(lblAudioStatus);
+    // El diagnostico detallado de driver/latencia se consulta desde
+    // CONFIGURACION; no ocupa espacio visual permanente en la pantalla.
 
     setupFXPedals();
     fxPedalFocusOverlay.onDismiss = [this]() { closeFxPedalFocus(); };
@@ -856,6 +1075,7 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
     sldSilenceThreshold.setSliderStyle(juce::Slider::LinearHorizontal);
     sldSilenceThreshold.setRange(-80.0, 0.0, 1.0);
     sldSilenceThreshold.setValue(-60.0);
+    sldSilenceThreshold.setComponentID("signalThresholdSlider");
     sldSilenceThreshold.setTextBoxStyle(juce::Slider::TextBoxRight, false, 48, 18);
     sldSilenceThreshold.setTextValueSuffix(" dB");
     sldSilenceThreshold.onValueChange = [this]() { looper.setSilenceThresholdDb((float)sldSilenceThreshold.getValue()); };
@@ -898,6 +1118,7 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
     masterVolume.store((float) masterKnob.getValue(), std::memory_order_relaxed);
 
     btnOutputMode.setClickingTogglesState(true);
+    btnOutputMode.setComponentID("outputModeButton");
     btnOutputMode.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff252535));
     btnOutputMode.setColour(juce::TextButton::buttonOnColourId, LnfC::Accent.withAlpha(0.28f));
     btnOutputMode.onClick = [this]()
@@ -980,66 +1201,25 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
     }
     updateExternalVstUi();
 
-    lblLoopEdit.setText("ARREMANGAR", juce::dontSendNotification);
-    lblLoopEdit.setFont(juce::Font(juce::FontOptions(10.0f)));
-    lblLoopEdit.setColour(juce::Label::textColourId, LnfC::TextDim);
-    addAndMakeVisible(lblLoopEdit);
+    loopRangeMarker.onRangeChanged = [this](float newStart, float newEnd)
+    {
+        const int sourceSamples = looper.getEditableLoopSourceSamples();
+        if (sourceSamples <= 1)
+            return;
 
-    auto styleLoopEditButton = [](juce::TextButton& btn, juce::Colour accent)
-    {
-        btn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff252535));
-        btn.setColour(juce::TextButton::buttonOnColourId, accent.withAlpha(0.22f));
-        btn.setColour(juce::TextButton::textColourOffId, LnfC::TextHi);
+        const int startDelta = juce::roundToInt((newStart - loopMarkerStart) * (float) sourceSamples);
+        const int endDelta = juce::roundToInt((newEnd - loopMarkerEnd) * (float) sourceSamples);
+        if (startDelta != 0)
+            looper.nudgeLoopStart(startDelta);
+        if (endDelta != 0)
+            looper.adjustLoopTail(endDelta);
+        loopMarkerStart = newStart;
+        loopMarkerEnd = newEnd;
+        updateLoopEditButtons();
+        refreshAllThumbnails();
     };
-    styleLoopEditButton(btnLoopInEarlier, LnfC::Accent);
-    styleLoopEditButton(btnLoopInLater,   LnfC::Accent);
-    styleLoopEditButton(btnLoopOutShorter, LnfC::OvdAmber);
-    styleLoopEditButton(btnLoopOutLonger,  LnfC::OvdAmber);
-    btnLoopInEarlier.setTriggeredOnMouseDown(true);
-    btnLoopInLater.setTriggeredOnMouseDown(true);
-    btnLoopOutShorter.setTriggeredOnMouseDown(true);
-    btnLoopOutLonger.setTriggeredOnMouseDown(true);
-    btnLoopInEarlier.setRepeatSpeed(300, 55, 55);
-    btnLoopInLater.setRepeatSpeed(300, 55, 55);
-    btnLoopOutShorter.setRepeatSpeed(300, 55, 55);
-    btnLoopOutLonger.setRepeatSpeed(300, 55, 55);
-    addAndMakeVisible(btnLoopInEarlier);
-    addAndMakeVisible(btnLoopInLater);
-    addAndMakeVisible(btnLoopOutShorter);
-    addAndMakeVisible(btnLoopOutLonger);
+    addAndMakeVisible(loopRangeMarker);
 
-    auto refreshAllLoopThumbnails = [this]()
-    {
-        const int total = looper.getTotalTracks();
-        for (int i = 0; i < total && i < LooperEngine::kMaxTracks; ++i)
-            looper.refreshThumbnail(i, formatManager);
-        repaint();
-    };
-
-    btnLoopInEarlier.onClick = [this, refreshAllLoopThumbnails]()
-    {
-        const int stepSamples = juce::jmax(1, juce::roundToInt(looper.getSampleRate() * kLoopTrimStepSeconds));
-        if (looper.nudgeLoopStart(-stepSamples))
-            refreshAllLoopThumbnails();
-    };
-    btnLoopInLater.onClick = [this, refreshAllLoopThumbnails]()
-    {
-        const int stepSamples = juce::jmax(1, juce::roundToInt(looper.getSampleRate() * kLoopTrimStepSeconds));
-        if (looper.nudgeLoopStart(stepSamples))
-            refreshAllLoopThumbnails();
-    };
-    btnLoopOutShorter.onClick = [this, refreshAllLoopThumbnails]()
-    {
-        const int stepSamples = juce::jmax(1, juce::roundToInt(looper.getSampleRate() * kLoopTrimStepSeconds));
-        if (looper.adjustLoopTail(-stepSamples))
-            refreshAllLoopThumbnails();
-    };
-    btnLoopOutLonger.onClick = [this, refreshAllLoopThumbnails]()
-    {
-        const int stepSamples = juce::jmax(1, juce::roundToInt(looper.getSampleRate() * kLoopTrimStepSeconds));
-        if (looper.adjustLoopTail(stepSamples))
-            refreshAllLoopThumbnails();
-    };
     updateLoopEditButtons();
 
     // MIDI callbacks
@@ -1823,6 +2003,7 @@ void MainComponent::layoutVst3PedalControls(FXPedalComponent& pedal)
     const int slot = findChainItemId(pedal) - kNumFxPedals;
     if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
         return;
+
     auto body = pedal.getLocalBounds().toFloat().reduced(3.0f);
     const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / 1.20f);
     body = { body.getX(), body.getCentreY() - bodyHeight * 0.5f,
@@ -1953,9 +2134,39 @@ void MainComponent::openExternalVst3Editor(int slot)
 
 void MainComponent::openExternalVst3DrumMapEditor(int slot)
 {
-    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals)
-        || !effectsChain.hasExternalPlugin(slot))
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
         return;
+
+    static constexpr LoopernicoMidi::DrumLane mapLanes[] = {
+        LoopernicoMidi::DrumLane::Kick, LoopernicoMidi::DrumLane::Snare,
+        LoopernicoMidi::DrumLane::ClosedHiHat, LoopernicoMidi::DrumLane::OpenHiHat,
+        LoopernicoMidi::DrumLane::Crash, LoopernicoMidi::DrumLane::Ride
+    };
+    auto content = std::make_unique<MidiMapEditorContent>(effectsChain.getExternalPluginDrumMap(slot));
+    auto* contentPtr = content.get();
+    const auto pluginName = effectsChain.getExternalPluginName(slot);
+    const auto title = "MAPA MIDI - " + (pluginName.isNotEmpty() ? pluginName : "SLOT " + juce::String(slot + 1));
+    auto* window = new MidiEditorWindow(title, std::move(content), 560, 560, 520, 420, 1200, 900);
+    contentPtr->onResult = [window](int result) { window->finish(result); };
+    window->centreAroundComponent(vst3Pedals[(size_t) slot].get(), 560, 560);
+    window->enterModalState(true,
+                           juce::ModalCallbackFunction::create([this, window, contentPtr, slot](int result)
+    {
+        if (result == 1)
+        {
+            for (int i = 0; i < 6; ++i)
+                effectsChain.setExternalPluginDrumNote(slot, mapLanes[i], contentPtr->getNote(i));
+            for (const auto lane : mapLanes)
+                effectsChain.setExternalPluginDrumChannel(slot, lane, contentPtr->getChannel());
+        }
+        else if (result == 2)
+            effectsChain.resetExternalPluginDrumMap(slot);
+        delete window;
+    }), false);
+    window->startDismissOnOutsideClick();
+    return;
+
+#if 0
 
     static constexpr LoopernicoMidi::DrumLane lanes[] = {
         LoopernicoMidi::DrumLane::Kick,
@@ -1998,6 +2209,8 @@ void MainComponent::openExternalVst3DrumMapEditor(int slot)
     alert->addButton("GUARDAR", 1, juce::KeyPress(juce::KeyPress::returnKey));
     alert->addButton("RESTABLECER GM", 2);
     alert->addButton("CANCELAR", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    alert->enableResizing(520, 520, 1200, 900);
+    alert->centreAroundComponent(vst3Pedals[(size_t) slot].get(), 560, 560);
     alert->enterModalState(true,
                            juce::ModalCallbackFunction::create([this, alert, slot](int result)
     {
@@ -2018,16 +2231,39 @@ void MainComponent::openExternalVst3DrumMapEditor(int slot)
         }
         delete alert;
     }), false);
-    alert->centreAroundComponent(vst3Pedals[(size_t) slot].get(), 560, 560);
-    alert->enableResizing(520, 520, 1200, 900);
     alert->startDismissOnOutsideClick();
+#endif
 }
 
 void MainComponent::openExternalVst3PatternEditor(int slot)
 {
-    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals)
-        || !effectsChain.hasExternalPlugin(slot))
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
         return;
+
+    auto content = std::make_unique<MidiPatternEditorContent>(effectsChain.getExternalPluginDrumPattern(slot));
+    auto* contentPtr = content.get();
+    const auto pluginName = effectsChain.getExternalPluginName(slot);
+    const auto title = "PATRON MIDI - " + (pluginName.isNotEmpty() ? pluginName : "SLOT " + juce::String(slot + 1));
+    auto* window = new MidiEditorWindow(title, std::move(content), 1000, 500, 980, 430, 1500, 900);
+    contentPtr->onResult = [window](int result) { window->finish(result); };
+    contentPtr->setPatternChangedCallback([this, slot](const LoopernicoMidi::DrumMidiPattern& pattern)
+    {
+        effectsChain.setExternalPluginDrumPattern(slot, pattern);
+    });
+    window->centreAroundComponent(vst3Pedals[(size_t) slot].get(), 1000, 500);
+    window->enterModalState(true,
+                           juce::ModalCallbackFunction::create([this, window, contentPtr, slot](int result)
+    {
+            if (result == 1)
+                effectsChain.setExternalPluginDrumPattern(slot, contentPtr->getPattern());
+            else if (result == 0)
+                effectsChain.setExternalPluginDrumPattern(slot, contentPtr->getInitialPattern());
+        delete window;
+    }), false);
+    window->startDismissOnOutsideClick();
+    return;
+
+#if 0
 
     auto* editor = new DrumPatternEditorComponent(effectsChain.getExternalPluginDrumPattern(slot));
     auto* alert = new ClickOutsideDismissableAlertWindow("PATRON MIDI - " + effectsChain.getExternalPluginName(slot),
@@ -2038,6 +2274,8 @@ void MainComponent::openExternalVst3PatternEditor(int slot)
     alert->addButton("GUARDAR", 1, juce::KeyPress(juce::KeyPress::returnKey));
     alert->addButton("LIMPIAR", 2);
     alert->addButton("CANCELAR", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    alert->enableResizing(980, 500, 1500, 900);
+    alert->centreAroundComponent(vst3Pedals[(size_t) slot].get(), 1000, 500);
     alert->enterModalState(true,
                            juce::ModalCallbackFunction::create([this, alert, editor, slot](int result)
     {
@@ -2053,9 +2291,8 @@ void MainComponent::openExternalVst3PatternEditor(int slot)
 
         delete alert;
     }), false);
-    alert->centreAroundComponent(vst3Pedals[(size_t) slot].get(), 1000, 500);
-    alert->enableResizing(980, 500, 1500, 900);
     alert->startDismissOnOutsideClick();
+#endif
 }
 
 void MainComponent::closeExternalVst3Editor(int slot)
@@ -2080,8 +2317,10 @@ void MainComponent::updateExternalVstUi(int requestedSlot)
         const auto pluginName = effectsChain.getExternalPluginName(slot);
         btnUnloadVst3[(size_t) slot].setEnabled(hasPlugin);
         btnEditVst3[(size_t) slot].setEnabled(hasPlugin);
-        btnMapVst3[(size_t) slot].setEnabled(hasPlugin);
-        btnPatternVst3[(size_t) slot].setEnabled(hasPlugin);
+        // El mapa y el patron pertenecen al slot, no a la instancia cargada.
+        // Se pueden preparar antes de elegir o cargar el VST3.
+        btnMapVst3[(size_t) slot].setEnabled(true);
+        btnPatternVst3[(size_t) slot].setEnabled(true);
         btnPatternPlayVst3[(size_t) slot].setEnabled(hasPlugin);
         btnPatternPlayVst3[(size_t) slot].setToggleState(
             hasPlugin && effectsChain.isExternalPluginPatternPlaying(slot),
@@ -2476,6 +2715,7 @@ juce::ValueTree MainComponent::createSessionTree(const LooperEngine::SessionSnap
         vst.setProperty("hasState", vstState.getSize() > 0, nullptr);
         const auto& pattern = effectsChain.getExternalPluginDrumPattern(slot);
         vst.setProperty("patternBars", pattern.getBars(), nullptr);
+        vst.setProperty("patternSwing", pattern.getSwingPercent(), nullptr);
         vst.setProperty("patternData", serializeDrumPattern(pattern), nullptr);
         fx.addChild(vst, -1, nullptr);
     }
@@ -2518,6 +2758,7 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
     std::array<juce::String, kMaxVst3Pedals> pluginPaths;
     std::array<bool, kMaxVst3Pedals> pluginEnabled{};
     std::array<int, kMaxVst3Pedals> patternBars{};
+    std::array<int, kMaxVst3Pedals> patternSwing{};
     std::array<juce::String, kMaxVst3Pedals> patternData;
     std::array<EffectsChain::PreparedExternalPlugin, kMaxVst3Pedals> candidates;
     int vstNodeCount = 0;
@@ -2532,6 +2773,7 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
         pluginPaths[(size_t) slot] = node.getProperty("path").toString();
         pluginEnabled[(size_t) slot] = (bool) node.getProperty("enabled", true);
         patternBars[(size_t) slot] = (int) node.getProperty("patternBars", 1);
+        patternSwing[(size_t) slot] = (int) node.getProperty("patternSwing", 0);
         patternData[(size_t) slot] = node.getProperty("patternData", "").toString();
         if (pluginPaths[(size_t) slot].isNotEmpty())
         {
@@ -2676,7 +2918,10 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
 
             LoopernicoMidi::DrumMidiPattern pattern;
             if (deserializeDrumPattern(patternData[(size_t) slot], patternBars[(size_t) slot], pattern))
+            {
+                pattern.setSwingPercent(patternSwing[(size_t) slot]);
                 effectsChain.setExternalPluginDrumPattern(slot, pattern);
+            }
         }
 
     }
@@ -3504,10 +3749,23 @@ void MainComponent::updateLoopEditButtons()
         && state != LooperEngine::State::RecordingBase
         && state != LooperEngine::State::RecordingLayer;
 
-    btnLoopInEarlier.setEnabled(canEditLoop);
-    btnLoopInLater.setEnabled(canEditLoop);
-    btnLoopOutShorter.setEnabled(canEditLoop);
-    btnLoopOutLonger.setEnabled(canEditLoop && looper.getBaseLoopSamples() < looper.getEditableLoopSourceSamples());
+    const int sourceSamples = looper.getEditableLoopSourceSamples();
+    const int baseSamples = looper.getBaseLoopSamples();
+    if (sourceSamples <= 1 || baseSamples <= 1)
+    {
+        loopMarkerInitialised = false;
+        loopMarkerStart = 0.0f;
+        loopMarkerEnd = 1.0f;
+        loopRangeMarker.setRange(loopMarkerStart, loopMarkerEnd);
+    }
+    else if (!loopMarkerInitialised)
+    {
+        loopMarkerStart = 0.0f;
+        loopMarkerEnd = juce::jlimit(0.01f, 1.0f, (float) baseSamples / (float) sourceSamples);
+        loopRangeMarker.setRange(loopMarkerStart, loopMarkerEnd);
+        loopMarkerInitialised = true;
+    }
+    loopRangeMarker.setVisible(canEditLoop);
 }
 
 void MainComponent::updateMuteSoloMatrix()
@@ -3812,12 +4070,9 @@ void MainComponent::resized()
                                 juce::jmax(100, midiMenuW - midiSaveX - kMidiSaveWidth - 28), 18);
     }
 
-    const int loopGroupX = kFooterInset + midiButtonWidth + 8;
-    const int loopButtonY = midiControlsY;
-    lblLoopEdit.setBounds(loopGroupX, footerY + 4, 74, 12);
-    const int loopButtonsX = loopGroupX + 80;
-    btnLoopInEarlier.setBounds(loopButtonsX, loopButtonY, 48, 24);
-    btnLoopInLater.setBounds(loopButtonsX + 52, loopButtonY, 48, 24);
-    btnLoopOutShorter.setBounds(loopButtonsX + 104, loopButtonY, 54, 24);
-    btnLoopOutLonger.setBounds(loopButtonsX + 162, loopButtonY, 54, 24);
+    // El marcador es una pista maestra visual: vive sobre la forma de onda de
+    // la primera pista y no ocupa la hilera superior de controles.
+    const int firstTrackWaveX = fullX + 4 + 180;
+    loopRangeMarker.setBounds(firstTrackWaveX, mY + kTrackViewportTopInset + 5,
+                              juce::jmax(40, fullW - 8 - 180), 30);
 }

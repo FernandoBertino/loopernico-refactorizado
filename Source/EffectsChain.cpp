@@ -410,11 +410,15 @@ const LoopernicoMidi::DrumNoteMap& EffectsChain::getExternalPluginDrumMap(int sl
         ? externalPluginDrumMaps[(size_t) slot] : defaultMap;
 }
 
-const LoopernicoMidi::DrumMidiPattern& EffectsChain::getExternalPluginDrumPattern(int slot) const
+LoopernicoMidi::DrumMidiPattern EffectsChain::getExternalPluginDrumPattern(int slot) const
 {
     static const LoopernicoMidi::DrumMidiPattern defaultPattern;
-    return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)
-        ? externalPluginDrumPatterns[(size_t) slot] : defaultPattern;
+    if (!juce::isPositiveAndBelow(slot, kMaxExternalPlugins))
+        return defaultPattern;
+
+    const auto& buffers = externalPluginDrumPatterns[(size_t) slot];
+    const int readIndex = externalPluginDrumPatternReadIndex[(size_t) slot].load(std::memory_order_acquire);
+    return buffers[(size_t) juce::jlimit(0, 1, readIndex)];
 }
 
 bool EffectsChain::setExternalPluginDrumNote(int slot, LoopernicoMidi::DrumLane lane, int midiNote)
@@ -432,7 +436,13 @@ bool EffectsChain::setExternalPluginDrumChannel(int slot, LoopernicoMidi::DrumLa
 void EffectsChain::setExternalPluginDrumPattern(int slot, const LoopernicoMidi::DrumMidiPattern& pattern)
 {
     if (juce::isPositiveAndBelow(slot, kMaxExternalPlugins))
-        externalPluginDrumPatterns[(size_t) slot] = pattern;
+    {
+        auto& buffers = externalPluginDrumPatterns[(size_t) slot];
+        auto& readIndex = externalPluginDrumPatternReadIndex[(size_t) slot];
+        const int writeIndex = 1 - juce::jlimit(0, 1, readIndex.load(std::memory_order_acquire));
+        buffers[(size_t) writeIndex] = pattern;
+        readIndex.store(writeIndex, std::memory_order_release);
+    }
 }
 
 void EffectsChain::resetExternalPluginDrumMap(int slot)
@@ -1259,7 +1269,10 @@ void EffectsChain::queueExternalPluginPatternMidi(int slotIndex, int blockSize)
     const bool isPlaying = !slot.patternStopRequested.load(std::memory_order_relaxed)
                         && (looperIsPlaying
                             || slot.patternPlaybackEnabled.load(std::memory_order_relaxed));
-    const auto& pattern = externalPluginDrumPatterns[(size_t) slotIndex];
+    const auto& patternBuffers = externalPluginDrumPatterns[(size_t) slotIndex];
+    const int patternReadIndex = externalPluginDrumPatternReadIndex[(size_t) slotIndex]
+        .load(std::memory_order_acquire);
+    const auto& pattern = patternBuffers[(size_t) juce::jlimit(0, 1, patternReadIndex)];
     const auto& noteMap = externalPluginDrumMaps[(size_t) slotIndex];
 
     const auto sendPatternNoteOff = [&]()
@@ -1320,9 +1333,10 @@ void EffectsChain::queueExternalPluginPatternMidi(int slotIndex, int blockSize)
 
     for (int candidate = firstCandidate; candidate <= lastCandidate; ++candidate)
     {
-        const double onTime = (double) candidate * samplesPerStep;
-        const double offTime = onTime + samplesPerStep * 0.5;
         const int onStep = ((candidate % totalSteps) + totalSteps) % totalSteps;
+        const double swingDelay = samplesPerStep * pattern.getSwingDelayInSteps(onStep);
+        const double onTime = (double) candidate * samplesPerStep + swingDelay;
+        const double offTime = onTime + samplesPerStep * 0.5;
 
         const auto addEventsAt = [&](double eventTime, bool noteOn)
         {

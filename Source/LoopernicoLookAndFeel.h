@@ -666,7 +666,7 @@ public:
             g.fillPath(tri);
         }
 
-        if (on)
+        if (on && btn.getComponentID() != "outputModeButton")
         {
             const auto led = on && txt.contains("CONFIRM") ? LnfC::RecRed : LnfC::Accent;
             const float lr = 2.4f;
@@ -691,8 +691,6 @@ public:
             const float cx = bounds.getCentreX();
             const float cy = bounds.getCentreY() + (isButtonDown ? 1.0f : 0.0f);
             const auto colour = btn.getToggleState() ? LnfC::RecRed : LnfC::PlayGreen;
-            g.setColour(colour.withAlpha(isMouseOverButton ? 0.28f : 0.14f));
-            g.fillEllipse(cx - size, cy - size, size * 2.0f, size * 2.0f);
             g.setColour(colour.withAlpha(isButtonDown ? 0.72f : 1.0f));
 
             if (btn.getToggleState())
@@ -999,8 +997,11 @@ public:
         float tx = horiz ? pos : b.getCentreX();
         float ty = horiz ? b.getCentreY() : pos;
 
-        g.setColour(fillColour.withAlpha(0.20f));
-        g.fillEllipse(tx - thumbR * 1.8f, ty - thumbR * 1.8f, thumbR * 3.6f, thumbR * 3.6f);
+        if (slider.getComponentID() != "signalThresholdSlider")
+        {
+            g.setColour(fillColour.withAlpha(0.20f));
+            g.fillEllipse(tx - thumbR * 1.8f, ty - thumbR * 1.8f, thumbR * 3.6f, thumbR * 3.6f);
+        }
         juce::ColourGradient thumbGrad(LnfC::MetalHi, tx - thumbR, ty - thumbR,
                                        LnfC::MetalLo, tx + thumbR, ty + thumbR, false);
         g.setGradientFill(thumbGrad);

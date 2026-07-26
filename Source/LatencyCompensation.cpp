@@ -143,6 +143,17 @@ namespace LoopernicoLatency
         LoopernicoMidi::DrumMidiPattern pattern;
         expect("patron inicia en un compas", 1, pattern.getBars());
         expect("patron inicia vacio", 0, pattern.countActiveSteps());
+        expect("swing inicia en cero", 0, pattern.getSwingPercent());
+        pattern.setSwingPercent(65);
+        expect("swing acepta porcentaje", 65, pattern.getSwingPercent());
+        pattern.setSwingPercent(-10);
+        expect("swing limita minimo", 0, pattern.getSwingPercent());
+        pattern.setSwingPercent(140);
+        expect("swing limita maximo", 100, pattern.getSwingPercent());
+        expect("swing no retrasa paso impar de la pareja", 0,
+               juce::roundToInt(pattern.getSwingDelayInSteps(0) * 1000.0));
+        expect("swing retrasa segundo paso al maximo", 500,
+               juce::roundToInt(pattern.getSwingDelayInSteps(1) * 1000.0));
         expect("patron acepta velocidad", 1,
                pattern.setVelocity(LoopernicoMidi::DrumLane::Kick, 0, 110) ? 1 : 0);
         expect("patron conserva velocidad", 110,
