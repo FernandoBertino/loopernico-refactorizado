@@ -102,6 +102,54 @@ public:
             return;
         }
 
+        const bool plusLargeKnob = slider.getComponentID() == "gamechangerPlusLargeKnob";
+        const bool plusMiniKnob = slider.getComponentID() == "gamechangerPlusMiniKnob";
+
+        if (plusLargeKnob || plusMiniKnob)
+        {
+            static const auto largeRaster = []
+            {
+                const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
+                const juce::File candidates[] = {
+                    sourceDirectory.getSiblingFile("Assets").getChildFile("Hardware/gamechanger-plus-pedal-ii-knob-large-v1.png"),
+                    juce::File::getCurrentWorkingDirectory().getChildFile("Assets/Hardware/gamechanger-plus-pedal-ii-knob-large-v1.png"),
+                    juce::File::getCurrentWorkingDirectory()
+                        .getChildFile("Loopernico Refactorizado/Assets/Hardware/gamechanger-plus-pedal-ii-knob-large-v1.png")
+                };
+                for (const auto& file : candidates)
+                    if (file.existsAsFile())
+                        if (auto image = juce::ImageFileFormat::loadFrom(file); image.isValid())
+                            return image;
+                return juce::Image{};
+            }();
+            static const auto miniRaster = []
+            {
+                const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
+                const juce::File candidates[] = {
+                    sourceDirectory.getSiblingFile("Assets").getChildFile("Hardware/gamechanger-plus-pedal-ii-knob-mini-v1.png"),
+                    juce::File::getCurrentWorkingDirectory().getChildFile("Assets/Hardware/gamechanger-plus-pedal-ii-knob-mini-v1.png"),
+                    juce::File::getCurrentWorkingDirectory()
+                        .getChildFile("Loopernico Refactorizado/Assets/Hardware/gamechanger-plus-pedal-ii-knob-mini-v1.png")
+                };
+                for (const auto& file : candidates)
+                    if (file.existsAsFile())
+                        if (auto image = juce::ImageFileFormat::loadFrom(file); image.isValid())
+                            return image;
+                return juce::Image{};
+            }();
+
+            const auto& raster = plusLargeKnob ? largeRaster : miniRaster;
+            if (raster.isValid())
+            {
+                const float angle = startAngle + pos * (endAngle - startAngle);
+                juce::Graphics::ScopedSaveState state(g);
+                g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+                g.addTransform(juce::AffineTransform::rotation(angle, centre.x, centre.y));
+                g.drawImage(raster, bounds);
+            }
+            return;
+        }
+
         if (slider.getComponentID() != "bossNoiseKnob")
         {
             // Broad drop shadow from the physical height of the knob. The darker,

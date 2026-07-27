@@ -1291,7 +1291,7 @@ void MainComponent::setupFXPedals()
         { "COMPRESSOR",     0xffb8880a, "THRESH",  "RATIO",   "LEVEL" },
         { "HARMONIZER",     0xfff1f1f1, "SHIFT A", "SHIFT B", "MIX"   },
         { "REMOVED",        0xff9a2b1f, "",        "",        ""      },
-        { "SUSTAIN CHORDS", 0xff486d89, "MIX",     "SIZE",    "FADE"  },
+        { "SUSTAIN CHORDS", 0xff486d89, "LEVEL",   "RISE",    "DECAY" },
         { "FUZZ",           0xff0f3a88, "FUZZ",    "TONE",    "LEVEL" },
         { "SUNSET",         0xffc91522, "LEVEL A", "DRIVE A", "TONE A" },
         { "CHORUS",         0xff0f4e88, "MIX",     "RATE",    "DEPTH" },
@@ -1346,6 +1346,8 @@ void MainComponent::setupFXPedals()
         auto& d = defs[i];
         fxPedals[i] = std::make_unique<FXPedalComponent>(
             d.name, juce::Colour(d.col), d.l1, d.l2, d.l3);
+        if (i == EffectsChain::SustainChordsPedal)
+            fxPedals[i]->setDisplayName("Gamechanger Audio Plus Pedal II");
         fxPedals[i]->onDragStart = [this](FXPedalComponent& pedal, const juce::MouseEvent& e)
         {
             beginFxPedalDrag(pedal, e);
@@ -1463,13 +1465,21 @@ void MainComponent::setupFXPedals()
     effectsChain.setHarmonicDelayMs((float) fxPedals[3]->knob4.getValue());
     effectsChain.setHarmonicFeedback((float) fxPedals[3]->knob5.getValue());
 
-    fxPedals[5]->configureExtendedKnobs("BLEND", "RISE", "TAIL", "TONE", "SIZE", "DENS");
+    // Keep the historical knob indices for session compatibility while placing
+    // the controls according to the Plus Pedal II artwork in resized().
+    fxPedals[5]->configureExtendedKnobs("LEVEL", "RISE", "DECAY", "TONE", "RESONANCE", "LAYERS");
     cfg(fxPedals[5]->knob1,0.0,2.0,1.0);
     cfg(fxPedals[5]->knob2,0.0,1200.0,110.0);
     cfg(fxPedals[5]->knob3,0.0,2200.0,420.0);
     cfg(fxPedals[5]->knob4,0.0,1.0,1.0);
     cfg(fxPedals[5]->knob5,180.0,900.0,900.0);
     cfg(fxPedals[5]->knob6,0.0,1.0,1.0);
+    fxPedals[5]->knob1.setComponentID("gamechangerPlusLargeKnob");
+    fxPedals[5]->knob2.setComponentID("gamechangerPlusLargeKnob");
+    fxPedals[5]->knob3.setComponentID("gamechangerPlusLargeKnob");
+    fxPedals[5]->knob4.setComponentID("gamechangerPlusMiniKnob");
+    fxPedals[5]->knob5.setComponentID("gamechangerPlusMiniKnob");
+    fxPedals[5]->knob6.setComponentID("gamechangerPlusLargeKnob");
     fxPedals[5]->onBtn.onClick=[this](){ effectsChain.setChordFreezeEnabled(fxPedals[5]->onBtn.getToggleState()); };
     fxPedals[5]->knob1.onValueChange=[this](){ effectsChain.setChordFreezeMix((float)fxPedals[5]->knob1.getValue()); };
     fxPedals[5]->knob2.onValueChange=[this](){ effectsChain.setChordFreezeRiseMs((float)fxPedals[5]->knob2.getValue()); };
@@ -1765,6 +1775,7 @@ FXPedalComponent* MainComponent::getChainItemPedal(int chainItem) const
 int MainComponent::fxPedalBodyWidth(int pedalIndex) const
 {
     if (pedalIndex >= kNumFxPedals) return kVst3PedalBodyWidth;
+    if (pedalIndex == EffectsChain::SustainChordsPedal) return 110;
     if (pedalIndex == 1) return 180;
     if (pedalIndex == 2) return 245;
     if (pedalIndex == 9) return 245;
@@ -1780,6 +1791,8 @@ int MainComponent::fxPedalBodyWidth(int pedalIndex) const
 
 int MainComponent::fxPedalPitch(int pedalIndex) const
 {
+    // Keep the Plus Pedal's larger compact footprint in the same pitch
+    // calculation used by the drag order and fxContainer width.
     return fxPedalBodyWidth(pedalIndex) + 28;
 }
 

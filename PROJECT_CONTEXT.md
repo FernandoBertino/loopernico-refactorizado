@@ -1,5 +1,132 @@
 # Contexto operativo de Loopernico
 
+## Ultimo ajuste comprobado: zona superior invisible para arrastrar pedales
+
+- Corregido el 2026-07-27: la zona superior de cada `FXPedalComponent` conserva
+  la logica de arrastre existente, pero no dibuja manija, brillo ni texto. Asi
+  el pedal sigue siendo agarrable sin agregar ruido visual ni tapar los assets.
+- No se cambiaron el tamano del asset, los controles, el orden de la cadena ni
+  el comportamiento de audio.
+
+### Verificacion y despliegue
+
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- El ejecutable Release y `Builds/LocalDeployment/Current` permanecieron
+  abiertos y responsivos durante 8 s; ambos se cerraron despues de la prueba.
+- `Current` SHA-256:
+  `40F0270B952DFF7E1D3EDA96B9033BE86A819B907BF81BF919D82FA085C6B029`.
+  `Previous` conserva la version funcional anterior:
+  `F2931354ECF742271FA6CF779E5269BB1D185DDA5BD44ACA4171EE493C51C178`.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` sigue apuntando a `Current`,
+  con directorio de trabajo e icono de sesion correctos. `.loopernico` conserva
+  `Loopernico.Session`, el tipo `Archivo de Loopernico` y el comando con `%1`.
+- La confirmacion visual interactiva del arrastre queda pendiente porque el
+  controlador de Windows no esta disponible en esta sesion.
+
+## Ultimo ajuste comprobado: escala visual de SUSTAIN CHORDS
+
+- Corregido el 2026-07-27: se recortaron al dibujar los margenes laterales del
+  PNG de Gamechanger Audio Plus Pedal II y se amplio la carcasa visible dentro
+  de la huella de 110 px, manteniendo la proporcion real del recorte (0.45) y
+  el espaciado general de 28 px entre pedales.
+  La textura original permanece intacta; tambien se reajustaron los seis
+  overlays y el hitbox de la lengueta dorada.
+- No se modificaron DSP, parametros, sesiones, MIDI ni otros pedales.
+
+### Verificacion y despliegue
+
+- `git diff --check`: correcto; solo avisos preexistentes de normalizacion LF/CRLF.
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- Humo de Release y `Builds/LocalDeployment/Current`: ambos permanecieron
+  abiertos y responsivos durante 8 s; se cerraron despues de la comprobacion.
+- Capturas revisadas: `tmp/gamechanger-plus-pedal-ii-overview-v3.png` y
+  `tmp/gamechanger-plus-pedal-ii-compact-v3.png` y
+  `tmp/gamechanger-plus-pedal-ii-compact-v4.png` y
+  `tmp/gamechanger-plus-pedal-ii-overview-v5.png`; la carcasa conserva su
+  proporcion y los margenes visuales coinciden con los pedales vecinos.
+- `Current` SHA-256: `49603A44E326C374CD73EA9D60AE6477CF0B814758D8DE9682093E55829C73DB`.
+  `Previous` conserva la version funcional anterior:
+  `A522E6F88BE868ABD5B427749447E15640CE2600D5778C672D14E492CF799E80`.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` apunta a `Current`, con
+  directorio de trabajo e icono de sesion correctos. `.loopernico` conserva
+  `Loopernico.Session`, tipo `Archivo de Loopernico`, icono de sesion y comando
+  con `%1` hacia `Current`.
+
+## Ultimo ajuste comprobado: Gamechanger Audio Plus Pedal II, geometria v2
+
+- Corregido el 2026-07-27: la tira compacta usa una huella de componente de
+  110 px para `SUSTAIN CHORDS`; esta geometria fue posteriormente ampliada
+  visualmente mediante un recorte de los margenes del PNG.
+  `fxPedalPitch()` incluye la nueva huella en `fxContainer` y en el orden de
+  arrastre.
+- Medicion sobre el canvas completo: LEVEL (318,190), TONE (~334,315), RISE
+  (318,450), LAYERS (712,189), RESONANCE (~697,315) y DECAY (713,448).
+  Las posiciones normalizadas y los tamanos de los overlays se aplican igual
+  en miniatura y vista HD; la vista HD no vuelve a escalar la miniatura.
+- Se mantienen los controles rasterizados grandes/mini y el mapeo historico:
+  LEVEL=knob1/`chordFreezeMix`, RISE=knob2/`chordFreezeRiseMs`, DECAY=knob3/
+  `chordFreezeTailMs`, TONE=knob4/`chordFreezeTone`, RESONANCE=knob5/
+  `chordFreezeWindowMs`, LAYERS=knob6/`chordFreezeCrossfade`.
+- No se agregaron LED, footswitch redondo, etiquetas ni controles. La lengueta
+  dorada sigue siendo el unico switch/bypass; sesiones, MIDI e identificador
+  interno siguen usando `SUSTAIN CHORDS`.
+- El hitbox generico inferior no puede activar este pedal: fuera de la lengueta
+  dorada no hay otra zona de bypass.
+
+### Verificacion y despliegue
+
+- `git diff --check`: correcto; solo avisos preexistentes de normalizacion
+  LF/CRLF.
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- Capturas revisadas mediante `createComponentSnapshot`:
+  `tmp/gamechanger-plus-pedal-ii-compact-v2.png` SHA-256
+  `75CDC8F10FA1934CFE52056B89239CD1B50B4A9BB2C4680B978A085CE6327644` y
+  `tmp/gamechanger-plus-pedal-ii-hd-v2.png` SHA-256
+  `4B5669AEC295E5C4CAD1D0EB9ECE65971B1689AF121DAE993A4627554429F0A3`.
+  Ambas muestran proporciones consistentes, seis knobs sin duplicacion,
+  ausencia de recortes/deformacion y ningun texto antiguo.
+- Humo del Release y de `Builds/LocalDeployment/Current`: ventana visible y
+  responsiva durante al menos 8 s; ambos cerraron con codigo 0.
+- `Builds/LocalDeployment/Current` SHA-256:
+  `A91E5014EFDE2674E3ECFB47982120B1DFE752C7493D06A0962CD6F725C91E74`.
+  `Previous` conserva la version funcional inmediatamente anterior:
+  `A71D045367353D544FB2E1DB52783FD879E578646012A901CCFBE0C80BE65349`.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` apunta a `Current`, con
+  directorio de trabajo e icono `Assets/Brand/Icons/loopernico-session.ico`.
+  `.loopernico` conserva `Loopernico.Session`, tipo `Archivo de Loopernico`,
+  icono de sesion y comando con `%1` hacia `Current`.
+
+Limitacion real: la captura se hizo con el snapshot interno de JUCE; no se
+declara una prueba interactiva de arrastre/clic porque el controlador visual de
+Windows sigue sin estar disponible en esta sesion.
+
+## Ultimo ajuste comprobado: manual y nombres de SUSTAIN CHORDS
+
+- Corregido el 2026-07-27: los controles visibles de `SUSTAIN CHORDS` ahora se
+  llaman `LEVEL`, `FADE IN`, `FADE OUT`, `TONE`, `LENGTH` y `SMOOTH`, sin cambiar
+  sus rangos ni su comportamiento DSP.
+- Se agrego un boton pequeno `?` dentro de la carcasa. Abre una ayuda breve en
+  espanol con la funcion de cada control.
+- La captura final confirma que las etiquetas nuevas reemplazan a las antiguas
+  incrustadas en la textura y que el boton no invade los knobs.
+
+### Verificacion y despliegue
+
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- El ejecutable de `Builds/LocalDeployment/Current` permanecio abierto durante
+  8 segundos y la captura HD del pedal fue generada y revisada correctamente.
+- `Current` SHA-256:
+  `6D39AC27FCE52D13C93B4D2094A654FF026F56594F53D7D87330C5FBF8F164DA`.
+  `Previous` conserva la version funcional anterior:
+  `8685BE601652B2ED338BCF357E8A685241EEB9B13CECDB942416898C20F4475A`.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` apunta a `Current`, con
+  directorio de trabajo e icono de sesion correctos. La asociacion `.loopernico`
+  conserva `Loopernico.Session`, `Archivo de Loopernico` y el comando hacia
+  `Current`.
+
+Proximo paso concreto: confirmar manualmente el clic en `?` y la legibilidad de
+  las etiquetas en el pedal maximizado si se desea una comprobacion interactiva.
+
 ## Ultimo ajuste comprobado: retiro de Sustain Gran y correccion de cadena
 
 - Corregido el 2026-07-26: se retiro `SUSTAIN GRAN` de la interfaz, del orden

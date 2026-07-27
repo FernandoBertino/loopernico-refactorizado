@@ -198,7 +198,8 @@ public:
     void setKnobValueFormatter(int knobIndex, std::function<juce::String(double)> formatter);
     void setInfoText(const juce::String& mainText, const juce::String& subText = {});
     void setDragHintVisible(bool visible);
-    const juce::String& getDisplayName() const noexcept { return pedalName; }
+    void setDisplayName(const juce::String& name) { displayName = name; repaint(); }
+    const juce::String& getDisplayName() const noexcept { return displayName; }
     /** Centre of the physical side jack, expressed in this component's coordinates. */
     juce::Point<float> getJackCentre(JackSide side) const noexcept;
     juce::ToggleButton onBtn{"ON"};
@@ -235,6 +236,27 @@ public:
 
     void mouseDown(const juce::MouseEvent& e) override
     {
+        if (pedalName == "SUSTAIN CHORDS")
+        {
+            const auto body = getLocalBounds().toFloat().reduced(3.0f);
+            constexpr float plusFaceAspect = 0.45f;
+            const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / plusFaceAspect);
+            const float bodyWidth = juce::jmin(body.getWidth(), bodyHeight * plusFaceAspect);
+            const auto plusBody = juce::Rectangle<float>(body.getCentreX() - bodyWidth * 0.5f,
+                                                          body.getCentreY() - bodyHeight * 0.5f,
+                                                          bodyWidth, bodyHeight);
+            const auto switchZone = juce::Rectangle<float>(plusBody.getX() + plusBody.getWidth() * 0.34f,
+                                                            plusBody.getY() + plusBody.getHeight() * 0.31f,
+                                                            plusBody.getWidth() * 0.32f,
+                                                            plusBody.getHeight() * 0.61f);
+            if (switchZone.contains(e.position))
+            {
+                onBtn.setToggleState(!onBtn.getToggleState(), juce::sendNotification);
+                repaint();
+                return;
+            }
+        }
+
         if (pedalName == "SUNSET")
         {
             auto body = getLocalBounds().toFloat().reduced(3.0f);
@@ -500,11 +522,11 @@ public:
         }
 
         const bool customWideFootswitch = ((pedalName == "FUZZ" || pedalName == "COMPRESSOR"
-                                              || pedalName == "SUSTAIN CHORDS" || pedalName == "OUTPUT EQ")
+                                              || pedalName == "OUTPUT EQ")
                                                && e.y > juce::roundToInt(getHeight() * 0.66f))
                                           || (pedalName.containsIgnoreCase("NOISE GATE")
                                                && e.y > juce::roundToInt(getHeight() * 0.55f));
-        if (e.y > getHeight() - 30 || customWideFootswitch)
+        if ((pedalName != "SUSTAIN CHORDS" && e.y > getHeight() - 30) || customWideFootswitch)
         {
             onBtn.setToggleState(!onBtn.getToggleState(), juce::sendNotification);
             repaint();
@@ -545,7 +567,7 @@ public:
     void resized() override;
 
 private:
-    juce::String pedalName, k1, k2, k3, k4, k5, k6, k7, k8, k9;
+    juce::String pedalName, displayName, k1, k2, k3, k4, k5, k6, k7, k8, k9;
     juce::Colour pedalCol;
     bool extendedKnobs = false;
     bool nineKnobs = false;
