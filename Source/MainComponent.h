@@ -203,7 +203,9 @@ private:
     // forma parte del orden activo de la cadena.
     static constexpr int kNumFxPedals = 13;
     static constexpr int kMaxVst3Pedals = EffectsChain::kMaxExternalPlugins;
-    static constexpr int kChainItemCount = kNumFxPedals - 1 + kMaxVst3Pedals;
+    // RhythmPedal y el indice historico de Sustain Gran no forman parte de la
+    // cadena activa, aunque ambos indices se conservan para compatibilidad.
+    static constexpr int kChainItemCount = kNumFxPedals - 2 + kMaxVst3Pedals;
     static constexpr int kChainItemIdLimit = kNumFxPedals + kMaxVst3Pedals;
     static constexpr int kVst3PedalBodyWidth = 254;
     static constexpr int kVst3PedalPitch = kVst3PedalBodyWidth + 28;

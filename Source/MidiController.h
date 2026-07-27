@@ -31,7 +31,7 @@ public:
     enum Action
     {
         RecConfirm = 0, Cancel, Undo, Redo, StopPlay, MuteAll, ResetAll,
-        PauseAll, RhythmNextSection, SustainGranToggle,
+        PauseAll, RhythmNextSection,
         NoiseGateToggle, RhythmBoxToggle, CompressorToggle, HarmonizerToggle,
         SustainChordsToggle, FuzzToggle, OverdriveToggle, ChorusToggle,
         TremoloToggle, TapeDelayToggle, RoomReverbToggle, OutputEqToggle,

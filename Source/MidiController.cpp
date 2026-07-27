@@ -198,7 +198,7 @@ const char* MidiController::actionName(int index)
 {
     static const char* names[kNumActions] = {
         "REC/CONFIRM", "CANCEL", "UNDO", "REDO", "IR ARRIBA", "MUTE ALL",
-        "RESET ALL", "PAUSA/RESUME", "RHYTHM NEXT", "SUSTAIN GRAN",
+        "RESET ALL", "PAUSA/RESUME", "RHYTHM NEXT",
         "PEDAL NOISE GATE", "PEDAL RHYTHM BOX", "PEDAL COMPRESSOR",
         "PEDAL HARMONIZER", "PEDAL SUSTAIN CHORDS", "PEDAL FUZZ",
         "PEDAL SUNSET", "PEDAL CHORUS", "PEDAL TREMOLO",

@@ -1223,7 +1223,6 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
     registerPedalToggle(MidiController::NoiseGateToggle,      0);
     registerPedalToggle(MidiController::CompressorToggle,     2);
     registerPedalToggle(MidiController::HarmonizerToggle,     3);
-    registerPedalToggle(MidiController::SustainGranToggle,    4);
     registerPedalToggle(MidiController::SustainChordsToggle,  5);
     registerPedalToggle(MidiController::FuzzToggle,            6);
     registerPedalToggle(MidiController::OverdriveToggle,       7);
@@ -1291,7 +1290,7 @@ void MainComponent::setupFXPedals()
         { "REMOVED",        0xff9a2b1f, "",        "",        ""      },
         { "COMPRESSOR",     0xffb8880a, "THRESH",  "RATIO",   "LEVEL" },
         { "HARMONIZER",     0xfff1f1f1, "SHIFT A", "SHIFT B", "MIX"   },
-        { "SUSTAIN GRAN",   0xff2d5c7d, "MIX",     "SIZE",    "FADE"  },
+        { "REMOVED",        0xff9a2b1f, "",        "",        ""      },
         { "SUSTAIN CHORDS", 0xff486d89, "MIX",     "SIZE",    "FADE"  },
         { "FUZZ",           0xff0f3a88, "FUZZ",    "TONE",    "LEVEL" },
         { "SUNSET",         0xffc91522, "LEVEL A", "DRIVE A", "TONE A" },
@@ -1336,7 +1335,7 @@ void MainComponent::setupFXPedals()
 
     for (int i = 0; i < kNumFxPedals; ++i)
     {
-        if (i == EffectsChain::RhythmPedal)
+        if (i == EffectsChain::RhythmPedal || i == EffectsChain::LegacySustainGranPedal)
         {
             // El hueco conserva el indice de sesiones antiguas, pero el
             // BeatBuddy ya no se construye ni entra en la cadena activa.
@@ -1368,7 +1367,7 @@ void MainComponent::setupFXPedals()
     fxOrder[0] = kNumFxPedals;
     int nextOrderSlot = 1;
     for (int i = 0; i < kNumFxPedals; ++i)
-        if (i != EffectsChain::RhythmPedal)
+        if (i != EffectsChain::RhythmPedal && i != EffectsChain::LegacySustainGranPedal)
             fxOrder[(size_t) nextOrderSlot++] = i;
     for (int slot = 1; slot < kMaxVst3Pedals; ++slot)
         fxOrder[(size_t) nextOrderSlot++] = kNumFxPedals + slot;
@@ -1463,27 +1462,6 @@ void MainComponent::setupFXPedals()
     effectsChain.setHarmonicLevel(1.0f);
     effectsChain.setHarmonicDelayMs((float) fxPedals[3]->knob4.getValue());
     effectsChain.setHarmonicFeedback((float) fxPedals[3]->knob5.getValue());
-
-    fxPedals[4]->configureExtendedKnobs("BLEND", "RISE", "TAIL", "TONE", "SIZE", "DENS");
-    cfg(fxPedals[4]->knob1,0.0,2.0,1.0);
-    cfg(fxPedals[4]->knob2,0.0,1200.0,110.0);
-    cfg(fxPedals[4]->knob3,0.0,2200.0,420.0);
-    cfg(fxPedals[4]->knob4,0.0,1.0,1.0);
-    cfg(fxPedals[4]->knob5,180.0,900.0,900.0);
-    cfg(fxPedals[4]->knob6,0.0,1.0,1.0);
-    fxPedals[4]->onBtn.onClick=[this](){ effectsChain.setFreezeEnabled(fxPedals[4]->onBtn.getToggleState()); };
-    fxPedals[4]->knob1.onValueChange=[this](){ effectsChain.setFreezeMix((float)fxPedals[4]->knob1.getValue()); };
-    fxPedals[4]->knob2.onValueChange=[this](){ effectsChain.setFreezeRiseMs((float)fxPedals[4]->knob2.getValue()); };
-    fxPedals[4]->knob3.onValueChange=[this](){ effectsChain.setFreezeTailMs((float)fxPedals[4]->knob3.getValue()); };
-    fxPedals[4]->knob4.onValueChange=[this](){ effectsChain.setFreezeTone((float)fxPedals[4]->knob4.getValue()); };
-    fxPedals[4]->knob5.onValueChange=[this](){ effectsChain.setFreezeWindowMs((float)fxPedals[4]->knob5.getValue()); };
-    fxPedals[4]->knob6.onValueChange=[this](){ effectsChain.setFreezeDensity((float) fxPedals[4]->knob6.getValue()); };
-    fxPedals[4]->setKnobValueFormatter(0, formatBlend);
-    fxPedals[4]->setKnobValueFormatter(1, formatMs);
-    fxPedals[4]->setKnobValueFormatter(2, formatMs);
-    fxPedals[4]->setKnobValueFormatter(3, formatPercent01);
-    fxPedals[4]->setKnobValueFormatter(4, formatMs);
-    fxPedals[4]->setKnobValueFormatter(5, formatPercent01);
 
     fxPedals[5]->configureExtendedKnobs("BLEND", "RISE", "TAIL", "TONE", "SIZE", "DENS");
     cfg(fxPedals[5]->knob1,0.0,2.0,1.0);
@@ -2782,7 +2760,7 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
         if (pedal.hasType("PEDAL"))
         {
             item = juce::jlimit(0, kNumFxPedals - 1, (int) pedal.getProperty("index", 0));
-            if (item == EffectsChain::RhythmPedal)
+            if (item == EffectsChain::RhythmPedal || item == EffectsChain::LegacySustainGranPedal)
                 continue;
             desiredSlot = (int) pedal.getProperty("slot", item) + (legacySingleVst ? 1 : 0);
         }
@@ -2999,7 +2977,7 @@ void MainComponent::toggleFxPedalFromMidi(int pedalIndex)
 
     static constexpr const char* pedalNames[kNumFxPedals] = {
         "NOISE GATE", "REMOVED", "COMPRESSOR", "HARMONIZER",
-        "SUSTAIN GRAN", "SUSTAIN CHORDS", "FUZZ", "SUNSET", "CHORUS",
+        "REMOVED", "SUSTAIN CHORDS", "FUZZ", "SUNSET", "CHORUS",
         "TREMOLO", "TAPE DELAY", "ROOM REVERB", "OUTPUT EQ"
     };
 

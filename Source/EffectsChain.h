@@ -44,7 +44,9 @@ public:
     // antiguas; el orden activo excluye ese elemento.
     static constexpr int kPedalCount = 13;
     static constexpr int kMaxExternalPlugins = 4;
-    static constexpr int kChainItemCount = kPedalCount - 1 + kMaxExternalPlugins;
+    // RhythmPedal y el indice historico de Sustain Gran no forman parte de la
+    // cadena activa, aunque ambos indices se conservan para compatibilidad.
+    static constexpr int kChainItemCount = kPedalCount - 2 + kMaxExternalPlugins;
     static constexpr int kChainItemIdLimit = kPedalCount + kMaxExternalPlugins;
 
     enum PedalId
@@ -53,7 +55,9 @@ public:
         RhythmPedal,
         CompressorPedal,
         HarmonizerPedal,
-        SustainGranPedal,
+        // Indice historico reservado: Sustain Gran fue retirado, pero se
+        // conserva para no desplazar los indices de sesiones antiguas.
+        LegacySustainGranPedal,
         SustainChordsPedal,
         FuzzPedal,
         OverdrivePedal,

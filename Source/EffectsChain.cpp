@@ -87,7 +87,7 @@ EffectsChain::EffectsChain()
     initialOrder[0] = kPedalCount;
     int nextOrderSlot = 1;
     for (int i = 0; i < kPedalCount; ++i)
-        if (i != RhythmPedal)
+        if (i != RhythmPedal && i != LegacySustainGranPedal)
             initialOrder[(size_t) nextOrderSlot++] = i;
     for (int slot = 1; slot < kMaxExternalPlugins; ++slot)
         initialOrder[(size_t) nextOrderSlot++] = kPedalCount + slot;
@@ -473,7 +473,8 @@ void EffectsChain::setPedalOrder(const std::array<int, kChainItemCount>& order)
     for (int i = 0; i < kChainItemCount; ++i)
     {
         const int pedal = order[(size_t) i];
-        if (pedal < 0 || pedal >= kChainItemIdLimit || pedal == RhythmPedal || seen[(size_t) pedal])
+        if (pedal < 0 || pedal >= kChainItemIdLimit || pedal == RhythmPedal
+            || pedal == LegacySustainGranPedal || seen[(size_t) pedal])
             return;
         seen[(size_t) pedal] = true;
         const int bit = i * 5;
@@ -3396,7 +3397,6 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
                     case RhythmPedal:        processRhythm(); break;
                     case CompressorPedal:    processCompressor(); break;
                     case HarmonizerPedal:    processHarmonizer(); break;
-                    case SustainGranPedal:   processSustainGran(); break;
                     case SustainChordsPedal: processSustainChords(); break;
                     case FuzzPedal:          processFuzz(); break;
                     case OverdrivePedal:     processOverdrive(); break;

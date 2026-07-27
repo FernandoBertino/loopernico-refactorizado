@@ -500,7 +500,6 @@ public:
         }
 
         const bool customWideFootswitch = ((pedalName == "FUZZ" || pedalName == "COMPRESSOR"
-                                              || pedalName == "SUSTAIN GRAN"
                                               || pedalName == "SUSTAIN CHORDS" || pedalName == "OUTPUT EQ")
                                                && e.y > juce::roundToInt(getHeight() * 0.66f))
                                           || (pedalName.containsIgnoreCase("NOISE GATE")

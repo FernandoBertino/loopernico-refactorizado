@@ -1,5 +1,65 @@
 # Contexto operativo de Loopernico
 
+## Ultimo ajuste comprobado: retiro de Sustain Gran y correccion de cadena
+
+- Corregido el 2026-07-26: se retiro `SUSTAIN GRAN` de la interfaz, del orden
+  activo de pedales y del selector MIDI. Su indice historico queda reservado
+  como `REMOVED` para no desplazar sesiones antiguas.
+- Corregido el mismo dia un fallo de conteo introducido durante ese retiro: la
+  cadena activa ahora cuenta por separado los dos indices reservados
+  (`RhythmPedal` y `LegacySustainGranPedal`), evitando que el orden publicado
+  sea rechazado y dejando nuevamente operativos el Noise Gate y los efectos.
+- `SUSTAIN CHORDS` permanece visible, configurable, procesado por DSP y
+  disponible desde MIDI. Las sesiones que contengan el antiguo indice de
+  Sustain Gran ahora lo ignoran al cargarse.
+
+### Verificacion y despliegue
+
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`,
+  0 errores y 0 advertencias.
+- El ejecutable Release y `Builds/LocalDeployment/Current` permanecieron
+  abiertos y responsivos durante 8 s.
+- `Current` SHA-256:
+  `E85162653E0D27D3FE35E2A6E28234C36C51A4586E14DCA909100BAA3B48755A`.
+  `Previous` conserva la version funcional anterior:
+  `B810125E799CECED4EBA1190F2CED8E6DA9FD29C8FE40762D695DCF557C0DAF7`.
+- El acceso directo apunta a `Current`, con directorio de trabajo e icono de
+  sesion correctos. `.loopernico` conserva `Loopernico.Session`, el tipo
+  `Archivo de Loopernico`, el comando hacia `Current` y el icono de sesion.
+
+Proximo paso concreto: confirmar manualmente que `SUSTAIN CHORDS` responde al
+footwitch y que `SUSTAIN GRAN` ya no aparece en la tira de pedales.
+
+## Ultimo ajuste comprobado: escalado de OUTPUT EQ en vista HD y miniatura
+
+- Corregido el 2026-07-26 en `FXPedalComponent` y `LoopernicoLAF`: la
+  carcasa MXR de `OUTPUT EQ` conserva una geometria comun entre miniatura y
+  vista maximizada, usando el tamano real de la miniatura como referencia y
+  tipografia HD limitada para evitar solapamientos.
+  Los faders, rieles, capsulas y halos escalan desde el tamano real del
+  componente, y el layout de los sliders coincide con las posiciones pintadas.
+- No se modificaron el DSP, los parametros, las sesiones ni otros pedales.
+
+### Verificacion y despliegue
+
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`,
+  0 errores y 0 advertencias.
+- Capturas revisadas: `tmp/eq-hd-fixed.png` y `tmp/eq-compact-fixed.png`; la
+  carcasa, etiquetas y faders quedan proporcionados y legibles sin escalar dos
+  veces la miniatura.
+- Humo de `Builds/LocalDeployment/Current`: ventana valida y responsiva durante
+  8 s; cierre normal con codigo 0.
+- `Current` SHA-256:
+  `49227A21D0CA21173D8DA43FB90ED410E395A4FA27F7B5E63A9FF4C19C704726`.
+  `Previous` conserva la version funcional anterior:
+  `D3F18D8D5DEA165AA526CA1F20116C036C4A89D5AA8A6A0050D1A710F6E6D4EE`.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` apunta a `Current`, con
+  directorio de trabajo e icono de sesion correctos. `.loopernico` conserva
+  `Loopernico.Session`, tipo `Archivo de Loopernico` y el comando con `%1`.
+
+Proximo paso concreto: confirmar manualmente el arrastre de los faders si se
+desea una comprobacion interactiva adicional.
+
 ## Ultimo ajuste comprobado: retiro del LED verde en STOP de patrones VST3
 
 - Corregido el 2026-07-26 en `LoopernicoLookAndFeel`: el boton de transporte

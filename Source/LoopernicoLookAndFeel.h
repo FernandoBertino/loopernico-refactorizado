@@ -950,27 +950,34 @@ public:
 
         if (slider.getComponentID() == "mxrTenBandSlider")
         {
+            // Slider children are not affected by the parent's artwork
+            // transform, so scale their hardware from the actual pedal size.
+            // 72 px is the compact EQ slider travel; focus mode can enlarge
+            // it, but the fader hardware must remain proportional to the
+            // pedal rather than growing at the design-coordinate scale.
+            const float uiScale = juce::jmax(0.55f, b.getHeight() / 72.0f);
+            const auto px = [uiScale](float value) { return value * uiScale; };
             const float cx = b.getCentreX();
-            const float trackTop = b.getY() + 4.0f;
-            const float trackBottom = b.getBottom() - 4.0f;
+            const float trackTop = b.getY() + px(4.0f);
+            const float trackBottom = b.getBottom() - px(4.0f);
             g.setColour(juce::Colours::black.withAlpha(0.86f));
-            g.fillRoundedRectangle(cx - 2.3f, trackTop, 4.6f, trackBottom - trackTop, 1.4f);
+            g.fillRoundedRectangle(cx - px(2.3f), trackTop, px(4.6f), trackBottom - trackTop, px(1.4f));
             g.setColour(juce::Colours::white.withAlpha(0.12f));
-            g.drawVerticalLine(juce::roundToInt(cx - 0.5f), trackTop + 1.0f, trackBottom - 1.0f);
+            g.drawVerticalLine(juce::roundToInt(cx - px(0.5f)), trackTop + px(1.0f), trackBottom - px(1.0f));
 
             const auto blue = slider.findColour(juce::Slider::trackColourId);
             g.setColour(blue.withAlpha(0.20f));
-            g.fillEllipse(cx - 8.5f, pos - 8.5f, 17.0f, 17.0f);
+            g.fillEllipse(cx - px(8.5f), pos - px(8.5f), px(17.0f), px(17.0f));
             g.setColour(juce::Colours::black.withAlpha(0.58f));
-            g.fillRoundedRectangle(cx - 7.2f, pos - 4.6f, 14.4f, 10.8f, 2.5f);
-            juce::ColourGradient cap(juce::Colour(0xfff5f6f6), cx - 5.5f, pos - 4.0f,
-                                     juce::Colour(0xff6e7478), cx + 5.0f, pos + 5.0f, true);
+            g.fillRoundedRectangle(cx - px(7.2f), pos - px(4.6f), px(14.4f), px(10.8f), px(2.5f));
+            juce::ColourGradient cap(juce::Colour(0xfff5f6f6), cx - px(5.5f), pos - px(4.0f),
+                                     juce::Colour(0xff6e7478), cx + px(5.0f), pos + px(5.0f), true);
             g.setGradientFill(cap);
-            g.fillRoundedRectangle(cx - 6.2f, pos - 5.0f, 12.4f, 10.0f, 2.0f);
+            g.fillRoundedRectangle(cx - px(6.2f), pos - px(5.0f), px(12.4f), px(10.0f), px(2.0f));
             g.setColour(blue.withAlpha(0.96f));
-            g.fillRoundedRectangle(cx - 2.2f, pos - 3.6f, 4.4f, 7.2f, 1.2f);
+            g.fillRoundedRectangle(cx - px(2.2f), pos - px(3.6f), px(4.4f), px(7.2f), px(1.2f));
             g.setColour(juce::Colours::white.withAlpha(0.72f));
-            g.drawHorizontalLine(juce::roundToInt(pos - 3.0f), cx - 1.5f, cx + 1.5f);
+            g.drawHorizontalLine(juce::roundToInt(pos - px(3.0f)), cx - px(1.5f), cx + px(1.5f));
             return;
         }
 

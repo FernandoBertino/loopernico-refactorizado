@@ -732,7 +732,7 @@ const juce::Image& getPedalEnamelTexture(const juce::String& name)
         return dedaloTres;
     if (name == "HARMONIZER")
         return harmonizer;
-    if (name == "SUSTAIN GRAN" || name == "SUSTAIN CHORDS")
+    if (name == "SUSTAIN CHORDS")
         return sustainGran;
     if (name == "VST3 HOST")
         return modelHost;
@@ -776,7 +776,7 @@ juce::Rectangle<int> getPedalTextureCrop(const juce::String& name, const juce::I
                  juce::roundToInt(w * 0.976f), juce::roundToInt(h * 0.976f) };
     if (name == "HARMONIZER")
         return image.getBounds();
-    if (name == "SUSTAIN GRAN" || name == "SUSTAIN CHORDS")
+    if (name == "SUSTAIN CHORDS")
         return { juce::roundToInt(w * 0.012f), juce::roundToInt(h * 0.012f),
                  juce::roundToInt(w * 0.976f), juce::roundToInt(h * 0.976f) };
     if (name == "VST3 HOST")
@@ -819,7 +819,7 @@ float getPedalTextureOpacity(const juce::String& name)
         return 0.99f;
     if (name == "HARMONIZER")
         return 0.99f;
-    if (name == "SUSTAIN GRAN" || name == "SUSTAIN CHORDS")
+    if (name == "SUSTAIN CHORDS")
         return 0.99f;
     if (name == "VST3 HOST")
         return 0.99f;
@@ -895,7 +895,7 @@ void FXPedalComponent::paint(juce::Graphics& g)
     const bool dedaloJetArtwork = pedalName == "COMPRESSOR";
     const bool dedaloTresArtwork = pedalName == "TREMOLO";
     const bool harmonizerArtwork = pedalName == "HARMONIZER";
-    const bool sustainGranArtwork = pedalName == "SUSTAIN GRAN" || pedalName == "SUSTAIN CHORDS";
+    const bool sustainChordsArtwork = pedalName == "SUSTAIN CHORDS";
     const bool beatBuddyArtwork = pedalName == "RHYTHM BOX";
     const bool modelHostArtwork = pedalName == "VST3 HOST";
     const bool tenBandEqArtwork = pedalName == "OUTPUT EQ";
@@ -904,7 +904,7 @@ void FXPedalComponent::paint(juce::Graphics& g)
     const bool smallCloneArtwork = pedalName == "CHORUS";
     const bool bossNoiseArtwork = pedalName.containsIgnoreCase("NOISE GATE");
     const bool customArtwork = wideFuzzArtwork || sunsetArtwork || dedaloJetArtwork || dedaloTresArtwork || harmonizerArtwork
-                            || sustainGranArtwork || bossNoiseArtwork
+                            || sustainChordsArtwork || bossNoiseArtwork
                             || beatBuddyArtwork || modelHostArtwork || tenBandEqArtwork || bigSkyArtwork || timeLineArtwork
                             || smallCloneArtwork;
     if (customArtwork)
@@ -917,7 +917,7 @@ void FXPedalComponent::paint(juce::Graphics& g)
                            : (dedaloJetArtwork ? 1.23f
                            : (dedaloTresArtwork ? (4.0f / 3.0f)
                            : (harmonizerArtwork ? (1578.0f / 1240.0f)
-                           : (sustainGranArtwork ? 0.667f
+                           : (sustainChordsArtwork ? 0.667f
                             : (beatBuddyArtwork ? 0.72f
                            : (bossNoiseArtwork ? (976.0f / 1612.0f)
                            : (modelHostArtwork ? 1.20f : (tenBandEqArtwork ? (124.0f / 92.0f) : 1.08f))))))))))));
@@ -1176,7 +1176,7 @@ void FXPedalComponent::paint(juce::Graphics& g)
                        juce::Colour(0xffff4f3f), false);
     }
 
-    if (sustainGranArtwork)
+    if (sustainChordsArtwork)
     {
         const float centres[] = { 0.205f, 0.500f, 0.795f };
         const juce::String topLabels[] = { "BLEND", "RISE", "TAIL" };
@@ -1290,6 +1290,17 @@ void FXPedalComponent::paint(juce::Graphics& g)
 
     if (tenBandEqArtwork)
     {
+        // The compact pedal is already rendered at roughly 197 px of artwork
+        // height. Use that real miniaturised size as the baseline; using the
+        // 92 px design grid here would enlarge the thumbnail a second time.
+        // HD typography grows only up to a deliberate ceiling.
+        constexpr float compactEqArtworkHeight = 197.0f;
+        const float eqScale = juce::jmin(2.0f, b.getHeight() / compactEqArtworkHeight);
+        const auto actualEqBounds = b;
+        b = { b.getX(), b.getY(), b.getWidth() / eqScale, b.getHeight() / eqScale };
+        juce::Graphics::ScopedSaveState eqArtworkState(g);
+        g.addTransform(juce::AffineTransform::scale(eqScale, eqScale, b.getX(), b.getY()));
+
         const auto ink = juce::Colour(0xff17191c);
         const auto blue = juce::Colour(0xff29b7ff);
         const bool active = onBtn.getToggleState();
@@ -1300,10 +1311,10 @@ void FXPedalComponent::paint(juce::Graphics& g)
 
         g.setColour(ink.withAlpha(0.92f));
         g.setFont(juce::Font(juce::FontOptions(6.6f).withStyle("Bold")));
-        g.drawText("OUT 1", juce::Rectangle<float>(b.getX() + b.getWidth() * 0.14f, b.getY() + 5.0f, 35.0f, 10.0f), juce::Justification::centred);
-        g.drawText("OUT 2", juce::Rectangle<float>(b.getX() + b.getWidth() * 0.32f, b.getY() + 5.0f, 35.0f, 10.0f), juce::Justification::centred);
-        g.drawText("POWER", juce::Rectangle<float>(b.getX() + b.getWidth() * 0.455f, b.getY() + 5.0f, 42.0f, 10.0f), juce::Justification::centred);
-        g.drawText("IN", juce::Rectangle<float>(b.getX() + b.getWidth() * 0.75f, b.getY() + 5.0f, 30.0f, 10.0f), juce::Justification::centred);
+        g.drawFittedText("OUT 1", juce::Rectangle<float>(b.getX() + b.getWidth() * 0.14f, b.getY() + 5.0f, 35.0f, 10.0f).toNearestInt(), juce::Justification::centred, 1, 0.72f);
+        g.drawFittedText("OUT 2", juce::Rectangle<float>(b.getX() + b.getWidth() * 0.32f, b.getY() + 5.0f, 35.0f, 10.0f).toNearestInt(), juce::Justification::centred, 1, 0.72f);
+        g.drawFittedText("POWER", juce::Rectangle<float>(b.getX() + b.getWidth() * 0.455f, b.getY() + 5.0f, 42.0f, 10.0f).toNearestInt(), juce::Justification::centred, 1, 0.72f);
+        g.drawFittedText("IN", juce::Rectangle<float>(b.getX() + b.getWidth() * 0.75f, b.getY() + 5.0f, 30.0f, 10.0f).toNearestInt(), juce::Justification::centred, 1, 0.72f);
 
         const juce::String labels[] = { "VOL", "31.25", "62.5", "125", "250", "500", "1K", "2K", "4K", "8K", "16K", "GAIN" };
         juce::Slider* sliders[] = { &eqVolumeSlider,
@@ -1360,6 +1371,8 @@ void FXPedalComponent::paint(juce::Graphics& g)
                                                 b.getY() + b.getHeight() * 0.765f,
                                                 b.getWidth() * 0.32f, 22.0f).toNearestInt(),
                          juce::Justification::centred, 1, 0.88f);
+
+        b = actualEqBounds;
     }
 
     g.setColour(juce::Colours::white.withAlpha(0.80f));
@@ -1463,14 +1476,14 @@ void FXPedalComponent::paint(juce::Graphics& g)
         && !harmonizerArtwork && !sunsetArtwork && !timeLineArtwork)
     {
     float ledCX = customArtwork ? (dedaloJetArtwork ? b.getX() + b.getWidth() * 0.156f
-                                                     : ((harmonizerArtwork || sustainGranArtwork) ? b.getCentreX() - 31.0f
+                                                     : ((harmonizerArtwork || sustainChordsArtwork) ? b.getCentreX() - 31.0f
                                                      : (modelHostArtwork ? b.getCentreX() + 30.0f
                                                                          : (tenBandEqArtwork ? b.getCentreX() - 34.0f
                                                                                              : (float)getWidth() * 0.5f))))
                                 : (float)getWidth() * 0.5f - 27.0f;
     float ledCY = customArtwork ? b.getY() + b.getHeight() * (wideFuzzArtwork ? 0.72f
                                                      : (dedaloJetArtwork ? 0.672f
-                                                     : ((harmonizerArtwork || sustainGranArtwork) ? 0.895f
+                                                     : ((harmonizerArtwork || sustainChordsArtwork) ? 0.895f
                                                      : (modelHostArtwork ? 0.90f : (tenBandEqArtwork ? 0.815f : 0.74f))))
                                                      )
                                 : (float)getHeight() - 16.0f;
@@ -1485,7 +1498,7 @@ void FXPedalComponent::paint(juce::Graphics& g)
 
     const auto ledColour = dedaloJetArtwork ? juce::Colour(0xfffff9e8)
                          : (harmonizerArtwork ? juce::Colour(0xff51e0dc)
-                         : (sustainGranArtwork ? juce::Colour(0xff49d5e8)
+                         : (sustainChordsArtwork ? juce::Colour(0xff49d5e8)
                          : (modelHostArtwork ? juce::Colour(0xff55dce5)
                          : (tenBandEqArtwork ? juce::Colour(0xff29b7ff) : LnfC::PlayGreen))));
     if (!tenBandEqArtwork)
@@ -1554,7 +1567,7 @@ void FXPedalComponent::paint(juce::Graphics& g)
             const float cx = dedaloJetArtwork ? b.getX() + b.getWidth() * 0.156f : b.getCentreX();
             const float cy = b.getY() + b.getHeight() * (wideFuzzArtwork ? 0.840f
                                                       : (dedaloJetArtwork ? 0.871f
-                                                      : (sustainGranArtwork ? 0.925f
+                                                      : (sustainChordsArtwork ? 0.925f
                                                       : (modelHostArtwork ? 0.900f
                                                       : (tenBandEqArtwork ? 0.815f : 0.880f)))));
             drawMetalFootswitch(g, cx, cy, 40.0f * hardwareScale, on);
@@ -1869,7 +1882,7 @@ void FXPedalComponent::resized()
         return;
     }
 
-    if (pedalName == "SUSTAIN GRAN" || pedalName == "SUSTAIN CHORDS")
+    if (pedalName == "SUSTAIN CHORDS")
     {
         const float aspect = 0.667f;
         const int bodyHeight = juce::jmin(getHeight() - 6, juce::roundToInt((float) getWidth() / aspect));
@@ -1903,8 +1916,8 @@ void FXPedalComponent::resized()
         const int bodyWidth = getWidth() - 6;
         const float left = (float)bodyLeft + (float)bodyWidth * 0.055f;
         const float right = (float)(bodyLeft + bodyWidth) - (float)bodyWidth * 0.055f;
-        const int top = bodyTop + juce::roundToInt((float)bodyHeight * 0.275f);
-        const int bottom = bodyTop + juce::roundToInt((float)bodyHeight * 0.670f);
+        const int top = bodyTop + juce::roundToInt((float)bodyHeight * 0.285f);
+        const int bottom = bodyTop + juce::roundToInt((float)bodyHeight * 0.650f);
         const float cellW = (right - left) / 12.0f;
         juce::Slider* sliders[] = { &eqVolumeSlider,
                                     &eqBandSliders[0], &eqBandSliders[1], &eqBandSliders[2], &eqBandSliders[3], &eqBandSliders[4],
