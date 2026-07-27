@@ -666,7 +666,8 @@ public:
             g.fillPath(tri);
         }
 
-        if (on && btn.getComponentID() != "outputModeButton")
+        if (on && btn.getComponentID() != "outputModeButton"
+            && btn.getComponentID() != "vstPatternTransportButton")
         {
             const auto led = on && txt.contains("CONFIRM") ? LnfC::RecRed : LnfC::Accent;
             const float lr = 2.4f;

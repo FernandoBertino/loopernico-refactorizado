@@ -1334,8 +1334,7 @@ void EffectsChain::queueExternalPluginPatternMidi(int slotIndex, int blockSize)
     for (int candidate = firstCandidate; candidate <= lastCandidate; ++candidate)
     {
         const int onStep = ((candidate % totalSteps) + totalSteps) % totalSteps;
-        const double swingDelay = samplesPerStep * pattern.getSwingDelayInSteps(onStep);
-        const double onTime = (double) candidate * samplesPerStep + swingDelay;
+        const double onTime = (double) candidate * samplesPerStep;
         const double offTime = onTime + samplesPerStep * 0.5;
 
         const auto addEventsAt = [&](double eventTime, bool noteOn)

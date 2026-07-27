@@ -1,5 +1,52 @@
 # Contexto operativo de Loopernico
 
+## Ultimo ajuste comprobado: retiro del LED verde en STOP de patrones VST3
+
+- Corregido el 2026-07-26 en `LoopernicoLookAndFeel`: el boton de transporte
+  del patron VST3 conserva el cuadrado rojo de `STOP`, pero ya no recibe el
+  LED verde lateral del estilo general de botones toggle. `PLAY` mantiene su
+  triangulo verde y no se cambio el comportamiento MIDI.
+
+### Verificacion y despliegue
+
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- `git diff --check` correcto, con solo avisos preexistentes de LF/CRLF.
+- `Current` SHA-256:
+  `D3F18D8D5DEA165AA526CA1F20116C036C4A89D5AA8A6A0050D1A710F6E6D4EE`.
+  `Previous` conserva la version funcional anterior:
+  `E159A9D04BA81B318066988C023D4B7AA1840924BE28B52F0E5E3D1461F44718`.
+- El ejecutable nuevo permanecio estable y responsivo durante 12 s y cerro
+  con codigo 0. El acceso directo y `.loopernico` apuntan a `Current`.
+
+Proximo paso concreto: confirmar visualmente el boton STOP en la carcasa VST3
+si se desea una comprobacion manual adicional.
+
+## Ultimo ajuste comprobado: retiro de swing de los secuenciadores VST3
+
+- Corregido el 2026-07-26: `PATRON MIDI` ya no muestra ni modifica SWING. La
+  grilla queda como unico editor de pasos, compases y paginas del patron.
+- El patron VST3 ya no guarda porcentaje de swing ni retrasa el segundo paso
+  de cada pareja; los eventos MIDI se programan equidistantes según el tempo.
+  Las sesiones antiguas siguen leyendo `patternData` y simplemente ignoran la
+  propiedad obsoleta `patternSwing`.
+- Se retiraron tambien el estado y las pruebas deterministas especificas de
+  swing. No se modifico el secuenciador interno historico ajeno a VST3.
+
+### Verificacion y despliegue
+
+- `git diff --check` correcto, con solo avisos preexistentes de LF/CRLF.
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- `Current` SHA-256:
+  `E159A9D04BA81B318066988C023D4B7AA1840924BE28B52F0E5E3D1461F44718`.
+  `Previous` conserva la version funcional anterior:
+  `F2DD6AF818149ED71AE973651340D4A3D638A229138F606E4C3D79ED8F2DA700`.
+- El acceso directo apunta a `Current`; `.loopernico` conserva
+  `Loopernico.Session` y el comando con `%1`. El ejecutable nuevo permanecio
+  estable y responsivo durante 15 s y cerro con codigo 0.
+
+Proximo paso concreto: confirmar manualmente la ventana `PATRON MIDI` y que el
+patron escrito en la grilla se reproduzca sin desplazamiento de swing.
+
 ## Ultimo ajuste comprobado: patron VST3 y swing en tiempo real
 
 - Corregido el 2026-07-26 el editor `PATRON MIDI`: las celdas, los compases,

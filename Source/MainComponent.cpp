@@ -247,22 +247,6 @@ namespace
             };
             addAndMakeVisible(barsSelector);
 
-            swingLabel.setText("SWING", juce::dontSendNotification);
-            swingLabel.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.90f));
-            addAndMakeVisible(swingLabel);
-
-            swingSlider.setRange(0.0, 100.0, 1.0);
-            swingSlider.setValue(pattern.getSwingPercent(), juce::dontSendNotification);
-            swingSlider.setTextValueSuffix(" %");
-            swingSlider.setSliderStyle(juce::Slider::LinearHorizontal);
-            swingSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 48, 22);
-            swingSlider.onValueChange = [this]()
-            {
-                pattern.setSwingPercent((int) std::llround(swingSlider.getValue()));
-                notifyPatternChanged();
-            };
-            addAndMakeVisible(swingSlider);
-
             pageLabel.setText("PAGINA", juce::dontSendNotification);
             pageLabel.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.90f));
             addAndMakeVisible(pageLabel);
@@ -339,8 +323,6 @@ namespace
             const int top = 14;
             barsLabel.setBounds(16, top, 80, 22);
             barsSelector.setBounds(102, top, 72, 24);
-            swingLabel.setBounds(390, top, 58, 22);
-            swingSlider.setBounds(452, top, 260, 24);
             pageLabel.setBounds(194, top, 66, 22);
             pageSelector.setBounds(266, top, 92, 24);
 
@@ -406,9 +388,7 @@ namespace
         LoopernicoMidi::DrumMidiPattern pattern;
         int currentPage{ 0 };
         juce::Label barsLabel, pageLabel;
-        juce::Label swingLabel;
         juce::ComboBox barsSelector, pageSelector;
-        juce::Slider swingSlider;
         std::array<juce::Label, LoopernicoMidi::DrumNoteMap::laneCount> laneLabels;
         std::array<juce::Label, LoopernicoMidi::DrumMidiPattern::stepsPerBar> stepLabels;
         std::array<std::array<juce::TextButton, LoopernicoMidi::DrumMidiPattern::stepsPerBar>,
@@ -2715,7 +2695,6 @@ juce::ValueTree MainComponent::createSessionTree(const LooperEngine::SessionSnap
         vst.setProperty("hasState", vstState.getSize() > 0, nullptr);
         const auto& pattern = effectsChain.getExternalPluginDrumPattern(slot);
         vst.setProperty("patternBars", pattern.getBars(), nullptr);
-        vst.setProperty("patternSwing", pattern.getSwingPercent(), nullptr);
         vst.setProperty("patternData", serializeDrumPattern(pattern), nullptr);
         fx.addChild(vst, -1, nullptr);
     }
@@ -2758,7 +2737,6 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
     std::array<juce::String, kMaxVst3Pedals> pluginPaths;
     std::array<bool, kMaxVst3Pedals> pluginEnabled{};
     std::array<int, kMaxVst3Pedals> patternBars{};
-    std::array<int, kMaxVst3Pedals> patternSwing{};
     std::array<juce::String, kMaxVst3Pedals> patternData;
     std::array<EffectsChain::PreparedExternalPlugin, kMaxVst3Pedals> candidates;
     int vstNodeCount = 0;
@@ -2773,7 +2751,6 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
         pluginPaths[(size_t) slot] = node.getProperty("path").toString();
         pluginEnabled[(size_t) slot] = (bool) node.getProperty("enabled", true);
         patternBars[(size_t) slot] = (int) node.getProperty("patternBars", 1);
-        patternSwing[(size_t) slot] = (int) node.getProperty("patternSwing", 0);
         patternData[(size_t) slot] = node.getProperty("patternData", "").toString();
         if (pluginPaths[(size_t) slot].isNotEmpty())
         {
@@ -2919,7 +2896,6 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
             LoopernicoMidi::DrumMidiPattern pattern;
             if (deserializeDrumPattern(patternData[(size_t) slot], patternBars[(size_t) slot], pattern))
             {
-                pattern.setSwingPercent(patternSwing[(size_t) slot]);
                 effectsChain.setExternalPluginDrumPattern(slot, pattern);
             }
         }
