@@ -236,6 +236,16 @@ public:
 
     void mouseDown(const juce::MouseEvent& e) override
     {
+        // El clic derecho es la accion explicita para abrir el pedal ampliado.
+        // Debe resolverse antes de las zonas de footswitch para no cambiar
+        // parametros ni el estado de bypass accidentalmente.
+        if (e.mods.isRightButtonDown())
+        {
+            if (onZoomRequest)
+                onZoomRequest(*this);
+            return;
+        }
+
         if (pedalName == "SUSTAIN CHORDS")
         {
             const auto body = getLocalBounds().toFloat().reduced(3.0f);
@@ -541,12 +551,6 @@ public:
     {
         if (onDragMove)
             onDragMove(*this, e);
-    }
-
-    void mouseDoubleClick(const juce::MouseEvent&) override
-    {
-        if (onZoomRequest)
-            onZoomRequest(*this);
     }
 
     void mouseUp(const juce::MouseEvent& e) override

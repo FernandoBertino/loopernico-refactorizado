@@ -1,4 +1,74 @@
+# Ultimo ajuste comprobado: estilo unificado de botones inferiores
+
+- Corregido el 2026-07-27 en `MainComponent`: `MIDI +`, `MONO`/`STEREO` y
+  `MUTE ALL` usan ahora el mismo estilo de boton de consola, con iguales
+  altura y ancho, y quedan alineados en la franja inferior. Se conservaron los
+  colores de estado, textos dinamicos y comportamientos existentes.
+- Se genero y reviso la captura `Builds/VisualStudio2026/x64/Release/App/tmp/footer-buttons-unified.png`:
+  los tres botones muestran carcasa, tipografia e iluminacion coherentes.
+
+## Verificacion y despliegue
+
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- Prueba de humo del ejecutable de Release y de `Builds/LocalDeployment/Current`:
+  ambos permanecieron abiertos y responsivos durante 8 s y se cerraron luego.
+- `Current` SHA-256:
+  `3E87253CDAEACA3DA5F0482F89251B8EAC5DBF6A8CE6CFA756B651673D952CA0`.
+  `Previous` conserva la version funcional anterior:
+  `FEA4B0B93E1785F20B67B8729BD65125A304705C4A3C013B54C8D337968ABC2D`.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` apunta a `Current`, con
+  directorio de trabajo e icono de sesion correctos. La asociacion
+  `.loopernico` conserva `Loopernico.Session`, tipo `Archivo de Loopernico` y
+  el comando con `%1` hacia `Current`.
+
+# Ultimo ajuste comprobado: MUTE ALL silencia toda la salida
+
+- Corregido el 2026-07-27 en `MainComponent`: `MUTE ALL` ahora silencia la
+  salida completa despues de mezclar entrada monitorizada, looper,
+  efectos/VST3 y ritmo. La grabacion y el procesamiento continuan activos.
+- El boton ahora funciona como toggle, sincroniza su estado con el looper y
+  usa el estilo rojo cuando esta activo. El control MIDI historico conserva
+  el mismo comportamiento de alternancia.
+- No se cambiaron las pistas individuales, el DSP de los efectos, las
+  sesiones ni el ruteo de grabacion.
+
+## Verificacion y despliegue
+
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- Prueba de humo del ejecutable de Release y de `Builds/LocalDeployment/Current`:
+  ambos permanecieron abiertos y responsivos durante 8 s y se cerraron luego.
+- `Current` SHA-256:
+  `FEA4B0B93E1785F20B67B8729BD65125A304705C4A3C013B54C8D337968ABC2D`.
+  `Previous` conserva la version funcional anterior:
+  `D47332F06CEDD01D8BF860D81F2CBD56CDF18C1C0CE386A58FB5F77C62B31FCA`.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` apunta a `Current`, con
+  directorio de trabajo e icono de sesion correctos. La asociacion
+  `.loopernico` debe conservar `Loopernico.Session`, tipo `Archivo de
+  Loopernico` y el comando con `%1` hacia `Current`.
+
 # Contexto operativo de Loopernico
+
+## Ultimo ajuste comprobado: nombre MIDI de Gamechanger Audio Plus II
+
+- Corregido el 2026-07-27: en la configuracion MIDI, la accion que antes se
+  mostraba como `PEDAL SUSTAIN CHORDS` ahora se muestra como
+  `PEDAL GAMECHANGER AUDIO PLUS II`.
+- El identificador interno, el nombre del pedal en la cadena, el DSP, las
+  sesiones y el resto del mapa MIDI no se modificaron.
+
+### Verificacion y despliegue
+
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- `Current` SHA-256:
+  `BDD888F551863821877B993FF20526ABF784C4AE06A0A03CFC55E1696A4D1F9D`.
+  `Previous` conserva la version funcional anterior:
+  `40F0270B952DFF7E1D3EDA96B9033BE86A819B907BF81BF919D82FA085C6B029`.
+- Ambos ejecutables permanecieron abiertos y responsivos durante 8 s y luego
+  se cerraron. El acceso directo apunta a `Current`, con directorio de trabajo
+  e icono de sesion correctos. `.loopernico` conserva `Loopernico.Session` y
+  el comando con `%1` hacia `Current`.
+- `git diff --check`: correcto; solo permanece el aviso preexistente de
+  normalizacion LF/CRLF.
 
 ## Ultimo ajuste comprobado: zona superior invisible para arrastrar pedales
 
@@ -981,3 +1051,30 @@ Fernando pidio que los cuatro hosts VST3 reutilicen exactamente la carcasa TONEX
 ## Estado de la base VST3
 
 Implementacion terminada, verificada y desplegada como version diaria. Limite deliberado actual: cuatro VST3 simultaneos.
+# Ultimo ajuste comprobado: ampliar pedales con clic derecho
+
+- Corregido el 2026-07-27 en `FXPedalComponent`: el clic derecho abre
+  directamente la vista ampliada del pedal y se procesa antes de las zonas de
+  footswitch, para no cambiar parametros ni apagar/encender pedales por error.
+  Se retiro el doble clic como disparador de ampliacion. No se modificaron el
+  clic izquierdo, los controles, el arrastre ni el DSP.
+
+## Verificacion y despliegue
+
+- `git diff --check`: correcto; solo avisos preexistentes de normalizacion
+  LF/CRLF.
+- Release `x64` correcto con
+  `Builds/VisualStudio2026/Loopernico Refactorizado.sln`, 0 errores y 0
+  advertencias.
+- Humo de `Builds/LocalDeployment/Current`: ventana visible y responsiva,
+  proceso estable durante 5 segundos y cierre normal.
+- `Current` SHA-256:
+  `D47332F06CEDD01D8BF860D81F2CBD56CDF18C1C0CE386A58FB5F77C62B31FCA`.
+  `Previous` conserva la version funcional anterior:
+  `BDD888F551863821877B993FF20526ABF784C4AE06A0A03CFC55E1696A4D1F9D`.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` apunta a `Current`, con
+  directorio de trabajo e icono de sesion correctos. `.loopernico` conserva
+  `Loopernico.Session`, tipo `Archivo de Loopernico`, icono de sesion y
+  comando con `%1` hacia `Current`.
+
+# Contexto operativo de Loopernico

@@ -875,6 +875,8 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
         addAndMakeVisible(*d.b);
     }
 
+    btnMuteAll.setClickingTogglesState(true);
+
     auto styleHeaderButton = [](juce::TextButton& button, juce::Colour led)
     {
         button.setComponentID("headerConsoleButton");
@@ -885,8 +887,7 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
         button.setMouseCursor(juce::MouseCursor::PointingHandCursor);
     };
     for (auto& d : tdefs)
-        if (d.b != &btnMuteAll)
-            styleHeaderButton(*d.b, d.on);
+        styleHeaderButton(*d.b, d.on);
 
     btnRecConfirm.onClick = [this]() {
         auto prev = looper.getState();
@@ -919,7 +920,13 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
         if (t >= 0 && t < LooperEngine::kMaxTracks) looper.refreshThumbnail(t, formatManager);
         repaint();
     };
-    btnMuteAll.onClick  = [this]() { looper.setGlobalMute(!looper.isGlobalMuted()); };
+    btnMuteAll.onClick  = [this]()
+    {
+        const bool muted = !looper.isGlobalMuted();
+        looper.setGlobalMute(muted);
+        btnMuteAll.setToggleState(muted, juce::dontSendNotification);
+        repaint();
+    };
     btnPauseAll.onClick = [this]() { looper.togglePauseAll(); };
     btnReset.onClick    = [this]() {
         looper.resetAll();
@@ -957,7 +964,7 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
 
     // MIDI
     btnMidiMenu.setTooltip("Mostrar u ocultar la configuracion MIDI");
-    styleVstButton(btnMidiMenu, LnfC::Accent);
+    styleHeaderButton(btnMidiMenu, LnfC::Accent);
     btnMidiMenu.onClick = [this]() { setMidiMenuExpanded(!midiMenuExpanded); };
     addAndMakeVisible(btnMidiMenu);
 
@@ -1098,9 +1105,7 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
     masterVolume.store((float) masterKnob.getValue(), std::memory_order_relaxed);
 
     btnOutputMode.setClickingTogglesState(true);
-    btnOutputMode.setComponentID("outputModeButton");
-    btnOutputMode.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff252535));
-    btnOutputMode.setColour(juce::TextButton::buttonOnColourId, LnfC::Accent.withAlpha(0.28f));
+    styleHeaderButton(btnOutputMode, LnfC::Accent);
     btnOutputMode.onClick = [this]()
     {
         outputMono.store(btnOutputMode.getToggleState(), std::memory_order_relaxed);
@@ -3299,6 +3304,12 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buf)
         }
     }
 
+    // MUTE ALL silencia la salida completa: entrada monitorizada, looper,
+    // efectos/VST3 y ritmo. La grabacion y el procesamiento continuan para
+    // que activar el boton no interrumpa el estado del looper.
+    if (looper.isGlobalMuted())
+        buf.buffer->clear(buf.startSample, buf.numSamples);
+
     {
         float peakL = 0.0f, peakR = 0.0f;
         int ch = buf.buffer->getNumChannels();
@@ -3599,6 +3610,7 @@ void MainComponent::timerCallback()
     bool gPlay = (state == LooperEngine::State::Playing);
 
     btnRecConfirm.setToggleState(gArm || gRec || gOvd, juce::dontSendNotification);
+    btnMuteAll.setToggleState(looper.isGlobalMuted(), juce::dontSendNotification);
     btnPauseAll.setToggleState(looper.isGlobalPaused(), juce::dontSendNotification);
 
     if (gRec)
@@ -4005,8 +4017,8 @@ void MainComponent::resized()
     masterKnob.setBounds(outputZoneX + 225, footerY + 3, 34, 34);
     masterVUMeter.setBounds(outputZoneX + 282, midiControlsY, 116, 24);
 
-    const int midiButtonWidth = 108;
-    btnMidiMenu.setBounds(kFooterInset, midiControlsY, midiButtonWidth, 24);
+    const int footerButtonWidth = 96;
+    btnMidiMenu.setBounds(kFooterInset, midiControlsY, footerButtonWidth, 24);
 
     const int midiMenuW = juce::jmin(kMidiMenuWidth, juce::jmax(620, W - kFooterInset * 2));
     const int midiMenuH = kMidiMenuHeight;
