@@ -1,3 +1,27 @@
+# Limpieza segura de bancos WAV retirados
+
+- Realizada el 2026-07-29 después del retiro de BeatBuddy/Rhythm Box.
+- Se eliminaron exclusivamente 1416 archivos `.wav` versionados: 139 de
+  `Assets/Samples/RhythmBox`, 1184 de `Source/The Crate vol.6`, 28 de
+  `Source/rock-kit` y 65 de `Source/Reapertips - Metronome Sounds`.
+- No se eliminaron código, proyectos, imágenes, sesiones ni documentación. Se
+  conservaron los README/licencias de las cuatro carpetas. Las bajas permanecen
+  recuperables desde el historial de Git.
+- El backend histórico de Rhythm Box sigue compilado pero es inalcanzable desde
+  el orden activo. Si alguna vez se restaura, deberá reponerse un banco en
+  `Assets/Samples/RhythmBox`; sin samples externos conserva su fallback
+  sintetizado.
+
+Verificación 2026-07-29:
+- El ejecutable diario `Builds/LocalDeployment/Current` inició y aceptó el
+  cierre normal de su ventana principal, terminando con código 0. La consulta
+  automática `Responding` no se volvió positiva durante los 8 segundos de la
+  prueba con la ventana oculta.
+- `git diff --cached` confirmó 1416 bajas `.wav` y ninguna baja de otro tipo.
+
+Próximo paso concreto: ninguno; conservar el commit de limpieza como punto de
+recuperación.
+
 # Tarea terminada: réplica VOX Cooltron Duel Overdrive
 
 - Finalizado el 2026-07-29 a partir de `C:\Users\Fernando\Downloads\vox.webp`
