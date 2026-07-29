@@ -705,7 +705,7 @@ void drawH90LedLens(juce::Graphics& g, float cx, float cy, float bodyWidth,
 const juce::Image& getPedalEnamelTexture(const juce::String& name)
 {
     static const auto noiseGate = loadPedalTexture("Pedals/boss-ns2-noise-suppressor-face-v8.png");
-    static const auto pampaFuzz = loadPedalTexture("Pedals/pampa-fuzz-face-v3.png");
+    static const auto pampaFuzz = loadPedalTexture("Pedals/pampa-fuzz-face-v8.png");
     static const auto sunset = loadPedalTexture("Pedals/strymon-sunset-face-v2.png");
     static const auto dedaloJet = loadPedalTexture("Pedals/dedalo-jet-compressor-face-v4.png");
     static const auto dedaloTres = loadPedalTexture("Pedals/dedalo-tres-tremolo-face-v1.png");
@@ -768,8 +768,7 @@ juce::Rectangle<int> getPedalTextureCrop(const juce::String& name, const juce::I
         return { juce::roundToInt(w * 0.068f), juce::roundToInt(h * 0.052f),
                  juce::roundToInt(w * 0.864f), juce::roundToInt(h * 0.856f) };
     if (name == "FUZZ")
-        return { juce::roundToInt(w * 0.065f), juce::roundToInt(h * 0.195f),
-                 juce::roundToInt(w * 0.87f), juce::roundToInt(h * 0.665f) };
+        return image.getBounds();
     if (name == "SUNSET")
         return image.getBounds();
     if (name == "COMPRESSOR")
@@ -916,7 +915,7 @@ void FXPedalComponent::paint(juce::Graphics& g)
     {
         const float aspect = sunsetArtwork ? 1.0f
                            : (smallCloneArtwork ? (3.38f / 5.25f)
-                           : (wideFuzzArtwork ? 1.30f
+                           : (wideFuzzArtwork ? (977.0f / 1610.0f)
                            : (timeLineArtwork ? 1.50f
                            : (bigSkyArtwork ? 1.455f
                            : (dedaloJetArtwork ? 1.23f
@@ -927,7 +926,8 @@ void FXPedalComponent::paint(juce::Graphics& g)
                            : (bossNoiseArtwork ? (976.0f / 1612.0f)
                            : (modelHostArtwork ? 1.20f : (tenBandEqArtwork ? (124.0f / 92.0f) : 1.08f))))))))))));
         const float bodyHeight = juce::jmin(b.getHeight(), b.getWidth() / aspect);
-        const float bodyWidth = (beatBuddyArtwork || bossNoiseArtwork || harmonizerArtwork || smallCloneArtwork
+        const float bodyWidth = (beatBuddyArtwork || bossNoiseArtwork || wideFuzzArtwork
+                                 || harmonizerArtwork || smallCloneArtwork
                                  || plusPedalArtwork)
                                     ? juce::jmin(b.getWidth(), bodyHeight * aspect)
                                     : b.getWidth();
@@ -1447,6 +1447,7 @@ void FXPedalComponent::paint(juce::Graphics& g)
     }
 
     if (!beatBuddyArtwork && !bossNoiseArtwork && !dedaloTresArtwork && !bigSkyArtwork && !smallCloneArtwork
+        && !wideFuzzArtwork
         && !plusPedalArtwork
         && !harmonizerArtwork && !sunsetArtwork && !timeLineArtwork)
     {
@@ -1539,12 +1540,31 @@ void FXPedalComponent::paint(juce::Graphics& g)
         }
         else
         {
-            const float cx = dedaloJetArtwork ? b.getX() + b.getWidth() * 0.156f : b.getCentreX();
-            const float cy = b.getY() + b.getHeight() * (wideFuzzArtwork ? 0.840f
+            const float cx = dedaloJetArtwork ? b.getX() + b.getWidth() * 0.156f
+                                              : (wideFuzzArtwork ? b.getX() + b.getWidth() * 0.500f
+                                                                  : b.getCentreX());
+            const float cy = b.getY() + b.getHeight() * (wideFuzzArtwork ? 0.885f
                                                       : (dedaloJetArtwork ? 0.871f
                                                       : (plusPedalArtwork ? 0.90f
                                                       : (modelHostArtwork ? 0.900f
                                                       : (tenBandEqArtwork ? 0.815f : 0.880f)))));
+
+            if (wideFuzzArtwork && on)
+            {
+                const auto haloColour = juce::Colour(0xffc9f7ff);
+                const float haloRadius = 30.0f * hardwareScale;
+                juce::ColourGradient halo(haloColour.withAlpha(0.30f), cx, cy,
+                                          juce::Colours::transparentBlack,
+                                          cx + haloRadius, cy, true);
+                g.setGradientFill(halo);
+                g.fillEllipse(cx - haloRadius, cy - haloRadius,
+                              haloRadius * 2.0f, haloRadius * 2.0f);
+                g.setColour(haloColour.withAlpha(0.25f));
+                g.drawEllipse(cx - haloRadius * 0.73f, cy - haloRadius * 0.73f,
+                              haloRadius * 1.46f, haloRadius * 1.46f,
+                              juce::jmax(0.7f, 0.75f * hardwareScale));
+            }
+
             drawMetalFootswitch(g, cx, cy, 40.0f * hardwareScale, on);
         }
     }
@@ -1716,12 +1736,19 @@ void FXPedalComponent::resized()
 
     if (pedalName == "FUZZ")
     {
-        const int top = juce::roundToInt((float) getHeight() * 0.18f);
-        const int knobH = juce::roundToInt((float) getHeight() * 0.21f);
-        const int thirdW = (b.getWidth() - 18) / 3;
-        knob1.setBounds(b.getX() + 3, top, thirdW, knobH);
-        knob2.setBounds(b.getX() + thirdW + 9, top, thirdW, knobH);
-        knob3.setBounds(b.getX() + (thirdW + 6) * 2 + 3, top, thirdW, knobH);
+        // The face artwork is control-free: place the interactive knobs
+        // inside the printed QUILOMBO / TONO / VOLUMEN ornaments using the
+        // same normalized coordinates as the visible crop.
+        const int knobSize = juce::jmax(16, juce::roundToInt((float) b.getWidth() * 0.300f));
+        const int knobCY = b.getY() + juce::roundToInt((float) b.getHeight() * 0.271f);
+        const float knobCentres[] = { 0.200f, 0.500f, 0.800f };
+        juce::Slider* knobs[] = { &knob1, &knob2, &knob3 };
+        for (int i = 0; i < 3; ++i)
+        {
+            const int cx = b.getX() + juce::roundToInt((float) b.getWidth() * knobCentres[i]);
+            knobs[i]->setBounds(cx - knobSize / 2, knobCY - knobSize / 2,
+                                knobSize, knobSize);
+        }
         knob4.setBounds(0, 0, 0, 0);
         knob5.setBounds(0, 0, 0, 0);
         knob6.setBounds(0, 0, 0, 0);

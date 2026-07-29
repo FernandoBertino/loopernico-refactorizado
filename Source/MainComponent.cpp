@@ -1785,7 +1785,7 @@ int MainComponent::fxPedalBodyWidth(int pedalIndex) const
     if (pedalIndex == 2) return 245;
     if (pedalIndex == 9) return 245;
     if (pedalIndex == 3) return 310;
-    if (pedalIndex == 6) return 270;
+    if (pedalIndex == 6) return 156;
     if (pedalIndex == 7) return 270;
     if (pedalIndex == 8) return 158;
     if (pedalIndex == 12) return 270;

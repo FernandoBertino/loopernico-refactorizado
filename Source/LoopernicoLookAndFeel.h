@@ -527,39 +527,42 @@ public:
 
         if (slider.getComponentID() == "pampaFuzzKnob")
         {
-            const float r = radius * 0.84f;
             const float angle = startAngle + pos * (endAngle - startAngle);
-            g.setColour(juce::Colours::black.withAlpha(0.40f));
-            g.fillEllipse(centre.x - r - 1.5f, centre.y - r + 2.2f, r * 2.0f + 3.0f, r * 2.0f + 3.0f);
-            g.setColour(juce::Colour(0xff050505));
-            g.fillEllipse(centre.x - r - 1.0f, centre.y - r - 1.0f, r * 2.0f + 2.0f, r * 2.0f + 2.0f);
-
-            for (int i = 0; i < 36; ++i)
+            static const auto rasterKnob = []
             {
-                const float a = juce::MathConstants<float>::twoPi * (float) i / 36.0f;
-                const auto p1 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * (r * 0.87f);
-                const auto p2 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * (r * 1.05f);
-                g.setColour((i % 2 == 0 ? juce::Colours::white : juce::Colours::black)
-                                .withAlpha(i % 2 == 0 ? 0.13f : 0.72f));
-                g.drawLine({ p1, p2 }, 1.25f);
+                const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
+                const juce::File candidates[] = {
+                    sourceDirectory.getSiblingFile("Assets").getChildFile("Hardware/pampa-fuzz-filete-knob-v1.png"),
+                    juce::File::getCurrentWorkingDirectory().getChildFile("Assets/Hardware/pampa-fuzz-filete-knob-v1.png"),
+                    juce::File::getCurrentWorkingDirectory()
+                        .getChildFile("Loopernico Refactorizado/Assets/Hardware/pampa-fuzz-filete-knob-v1.png")
+                };
+                for (const auto& file : candidates)
+                    if (file.existsAsFile())
+                        if (auto image = juce::ImageFileFormat::loadFrom(file); image.isValid())
+                            return image;
+                return juce::Image{};
+            }();
+
+            if (rasterKnob.isValid())
+            {
+                constexpr float assetMarkerAngle = -0.50f;
+                const auto target = bounds.reduced(0.5f, 0.5f);
+                juce::Graphics::ScopedSaveState state(g);
+                g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+                g.addTransform(juce::AffineTransform::rotation(angle - assetMarkerAngle,
+                                                               centre.x, centre.y));
+                g.drawImage(rasterKnob, target);
+                return;
             }
 
-            juce::ColourGradient vintageBlack(juce::Colour(0xff55534d), centre.x - r * 0.48f, centre.y - r * 0.58f,
-                                               juce::Colour(0xff090909), centre.x + r * 0.42f, centre.y + r * 0.52f, true);
-            vintageBlack.addColour(0.45, juce::Colour(0xff292927));
-            g.setGradientFill(vintageBlack);
-            g.fillEllipse(centre.x - r * 0.86f, centre.y - r * 0.86f, r * 1.72f, r * 1.72f);
-            g.setColour(juce::Colours::white.withAlpha(0.12f));
-            g.drawEllipse(centre.x - r * 0.84f, centre.y - r * 0.84f, r * 1.68f, r * 1.68f, 1.0f);
-
+            const float r = radius * 0.84f;
+            g.setColour(juce::Colour(0xff050505));
+            g.fillEllipse(centre.x - r, centre.y - r, r * 2.0f, r * 2.0f);
             const auto markerStart = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.18f);
             const auto markerEnd = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.69f);
-            g.setColour(juce::Colours::black.withAlpha(0.70f));
-            g.drawLine({ markerStart.translated(1.0f, 1.2f), markerEnd.translated(1.0f, 1.2f) }, 3.0f);
             g.setColour(juce::Colour(0xffe8d8ad));
             g.drawLine({ markerStart, markerEnd }, 2.1f);
-            g.setColour(juce::Colours::white.withAlpha(0.16f));
-            g.fillEllipse(centre.x - r * 0.44f, centre.y - r * 0.68f, r * 0.68f, r * 0.24f);
             return;
         }
 

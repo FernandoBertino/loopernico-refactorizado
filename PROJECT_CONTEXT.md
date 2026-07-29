@@ -1,3 +1,358 @@
+# Auditoria de estabilidad 2026-07-28
+
+# Ultimo ajuste comprobado: halo PAMPA FUZZ mas visible
+
+- Corregido el 2026-07-28 en `Source/LoopernicoWidgets.cpp`: se aumento
+  nuevamente la intensidad del halo celeste activo, manteniendo el degradado
+  suave y la circunferencia sin borde rigido. No se modificaron hitbox,
+  callback, DSP, parametros, MIDI ni sesiones.
+
+Verificacion y despliegue 2026-07-28:
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`,
+  0 errores y 0 advertencias.
+- `Builds/LocalDeployment/Current` contiene la nueva version, SHA-256
+  `A7DDA920DCE15E6FBED0095D0A1674CB0571B9237AED446DFDC94EBF2DD7AE44`.
+  `Previous` conserva la version anterior, SHA-256
+  `FA7475B3E132D948D042C688616B225B9C4BB395D509A22D30BDD9F7B884B4B2`.
+- El humo del ejecutable desplegado permanecio responsivo durante 5 segundos y
+  cerro normalmente. El acceso directo se recreo hacia `Current`.
+
+Proximo paso concreto: evaluar en uso diario si esta intensidad ya es la
+definitiva.
+
+# Ultimo ajuste comprobado: intensidad intermedia del halo PAMPA FUZZ
+
+- Corregido el 2026-07-28 en `Source/LoopernicoWidgets.cpp`: se aumento
+  moderadamente la intensidad del halo celeste del footswitch activo para que
+  sea visible sin recuperar el borde duro de la primera version. No se
+  modificaron hitbox, callback, DSP, parametros, MIDI ni sesiones.
+
+Verificacion y despliegue 2026-07-28:
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`,
+  0 errores y 0 advertencias.
+- `Builds/LocalDeployment/Current` contiene la nueva version, SHA-256
+  `FA7475B3E132D948D042C688616B225B9C4BB395D509A22D30BDD9F7B884B4B2`.
+  `Previous` conserva la version anterior, SHA-256
+  `312D8F3671489752CE91007C1ADD4F7C296B6AB00E73A40A03502029F9B90DEF`.
+- El humo del ejecutable desplegado permanecio responsivo durante 5 segundos y
+  cerro normalmente. El acceso directo se recreo hacia `Current`.
+
+Proximo paso concreto: evaluar en uso diario si esta intensidad intermedia es
+la definitiva.
+
+# Ultimo ajuste comprobado: halo celeste suavizado del PAMPA FUZZ
+
+- Corregido el 2026-07-28 en `Source/LoopernicoWidgets.cpp`: se redujo la
+  intensidad del halo del footswitch activo y se reemplazo la circunferencia
+  marcada por un borde muy tenue, conservando una iluminacion celeste suave.
+  No se modificaron hitbox, callback, DSP, parametros, MIDI ni sesiones.
+
+Verificacion y despliegue 2026-07-28:
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`,
+  0 errores y 0 advertencias.
+- `Builds/LocalDeployment/Current` contiene la nueva version, SHA-256
+  `312D8F3671489752CE91007C1ADD4F7C296B6AB00E73A40A03502029F9B90DEF`.
+  `Previous` conserva la version anterior, SHA-256
+  `4EF68999EA2EDF1C56F9C39E3F971E0D80327D5273A702E9802903CE39E4B7B9`.
+- El acceso directo de Escritorio apunta a `Current`, con directorio de
+  trabajo e icono de sesion correctos.
+- El humo del ejecutable desplegado permanecio responsivo durante 5 segundos y
+  cerro normalmente.
+
+Proximo paso concreto: evaluar en uso diario si la luz queda suficientemente
+organica y discreta en miniatura.
+
+# Ultimo ajuste comprobado: halo celeste del interruptor de PAMPA FUZZ
+
+- Corregido el 2026-07-28 en `Source/LoopernicoWidgets.cpp`: cuando `onBtn`
+  esta activo, el footswitch del FUZZ recibe un halo radial celeste muy claro
+  y un aro tenue alrededor del hardware. El efecto se pinta solo para PAMPA
+  FUZZ y no cambia hitbox, callback, DSP, parametros, MIDI ni sesiones.
+
+Verificacion y despliegue 2026-07-28:
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`,
+  0 errores y 0 advertencias.
+- `Builds/LocalDeployment/Current` contiene la nueva version, SHA-256
+  `4EF68999EA2EDF1C56F9C39E3F971E0D80327D5273A702E9802903CE39E4B7B9`.
+  `Previous` conserva la version funcional anterior, SHA-256
+  `6AD3049E3A3CE09587B36CF97796446F9E6F661F3C3C4287443901A8341FEB62`.
+- El acceso directo `C:\Users\Fernando\Desktop\Loopernico.lnk` apunta a
+  `Current`, con directorio de trabajo e icono de sesion correctos.
+- La asociacion `.loopernico` conserva `Loopernico.Session`, tipo `Archivo de
+  Loopernico` y comando con `%1` hacia `Current`.
+- El ejecutable desplegado se lanzo y cerro mediante la ventana principal. El
+  modo automatico `--snapshot-ui` no genero PNG ni respondio en esta corrida,
+  por lo que no se declara captura visual automatica del estado encendido.
+
+Proximo paso concreto: confirmar en uso diario que la intensidad del halo sea
+la adecuada en miniatura y vista ampliada.
+
+# Ajuste comprobado: rotulos y perillas del PAMPA FUZZ
+
+- El frente activo es `Assets/Pedals/pampa-fuzz-face-v8.png`, editado con
+  ImageGen sobre la v7 para aumentar aproximadamente 60 % la altura y peso de
+  `QUILOMBO`, `TONO` y `VOLUMEN`, manteniendo su arco, ortografia y el resto
+  del frente.
+- Las tres perillas pasaron de `0.200` a `0.300` del ancho del cuerpo y sus
+  centros bajaron de `0.252` a `0.271` de la altura. El hardware visible cubre
+  ahora las circunferencias impresas tanto en miniatura como en vista HD.
+- No se modificaron DSP, valores, orden, MIDI ni compatibilidad de sesiones.
+
+Verificacion y despliegue 2026-07-28:
+- Release `x64` correcto con
+  `Builds/VisualStudio2026/Loopernico Refactorizado.sln`, codigo 0.
+- Capturas revisadas:
+  `tmp/pampa-fuzz-v8-final-compact.png` y
+  `tmp/pampa-fuzz-v8-final-focused.png`. Los tres nombres son legibles en la
+  cadena y las perillas cubren los aros sin tapar el texto.
+- Humo del ejecutable desplegado correcto mediante
+  `tmp/pampa-fuzz-v8-deployed-smoke.png`; cierre normal.
+- `Builds/LocalDeployment/Current` SHA-256:
+  `6AD3049E3A3CE09587B36CF97796446F9E6F661F3C3C4287443901A8341FEB62`.
+  `Previous` conserva la version funcional anterior:
+  `208C2E859DA7EDBA84C33F559A12364265C039784D7F456576DB69B01BBACA9A`.
+  Hay exactamente dos ejecutables desplegados.
+- Acceso directo recreado hacia `Current`. La asociacion `.loopernico`
+  conserva `Loopernico.Session`, tipo `Archivo de Loopernico`, comando con
+  `%1` hacia `Current` e icono de sesion.
+
+# Estado comprobado: PAMPA FUZZ segun referencia, en medida Noise Suppressor
+
+- El frente activo es `Assets/Pedals/pampa-fuzz-face-v7.png`, regenerado de
+  forma nativa a `976x1611` (proporcion del Noise Suppressor), sin estirar el
+  asset anterior. La carcasa conserva textura marfil envejecida, bordes
+  celestes finos, sol recortado a la izquierda y serigrafia filete dominante.
+- Los rotulos visibles son `QUILOMBO`, `TONO` y `VOLUMEN`, arqueados alrededor
+  de cada perilla. Los parametros internos siguen siendo fuzz, tone y level
+  para preservar DSP, MIDI y sesiones existentes.
+- El fuzz usa el mismo ancho compacto `156` y la misma proporcion exterior que
+  el Noise Suppressor. Los knobs se centran en `0.200`/`0.500`/`0.800`, a
+  `0.252` de la altura. Se retiraron la bandera y el aro celeste del switch
+  porque no aparecen en la referencia.
+
+Verificacion y despliegue 2026-07-28:
+- Release `x64` correcto con
+  `Builds/VisualStudio2026/Loopernico Refactorizado.sln`, codigo 0.
+- Capturas revisadas:
+  `tmp/pampa-fuzz-v7-native-compact.png` y
+  `tmp/pampa-fuzz-v7-native-focused.png`. Fuzz y Noise Suppressor ocupan el
+  mismo rectangulo exterior; los aros son circulares, los knobs calzan y la
+  serigrafia no invade el footswitch.
+- Humo del ejecutable desplegado correcto mediante
+  `tmp/pampa-fuzz-v7-deployed-smoke.png`; coincide byte a byte con la captura
+  enfocada del candidato y el proceso cerro normalmente.
+- `Builds/LocalDeployment/Current` SHA-256:
+  `208C2E859DA7EDBA84C33F559A12364265C039784D7F456576DB69B01BBACA9A`.
+  `Previous` conserva la version funcional anterior:
+  `10DC3CE839EAE998ECC7162CC0D23202294F640BC6A666BE692E9F21522AA0A8`.
+  Hay exactamente dos ejecutables desplegados.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` fue recreado hacia `Current`, con
+  directorio de trabajo e icono de sesion correctos. La asociacion
+  `.loopernico` conserva `Loopernico.Session`, tipo `Archivo de Loopernico`,
+  comando con `%1` hacia `Current` e icono de sesion.
+
+Proximo paso concreto: evaluar el nuevo frente en uso diario a escala compacta.
+
+# Ultimo ajuste en curso: PAMPA FUZZ vertical segun referencia de Fernando
+
+- Corregido el 2026-07-28: se genero `Assets/Pedals/pampa-fuzz-face-v5.png` a
+  partir de la referencia `fuzz.png`, con carcasa vertical angosta de proporción
+  aproximada `471:559`, textura continua y sin recortes de asset horizontal.
+- Los rótulos visibles del asset ahora son `QUILOMBO`, `CHAMUYO` y `MANGO`.
+  Los parámetros internos siguen siendo fuzz, tone y level para conservar
+  sesiones, MIDI y DSP.
+- La integración usa el crop completo del nuevo asset; los tres knobs se
+  centran en `0.300`/`0.500`/`0.700` y bajan a `0.225` de la altura del cuerpo.
+  El footswitch se centra en `0.500`, baja a `0.885` y recibe un aro celeste
+  que se ilumina al activar el pedal. La bandera existente se conserva a la
+  derecha del switch.
+
+Verificación final 2026-07-28:
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- Captura HD revisada: `tmp/pampa-fuzz-vertical-v5-focused.png`; no hay
+  solapamiento entre rótulos y knobs, la textura se ve unificada y el aro se
+  dibuja alrededor del switch.
+- Humo del ejecutable desplegado correcto: `tmp/pampa-fuzz-vertical-v5-deployed.png`,
+  cierre normal y código 0.
+- `Builds/LocalDeployment/Current` SHA-256:
+  `10DC3CE839EAE998ECC7162CC0D23202294F640BC6A666BE692E9F21522AA0A8`.
+  `Previous` conserva la versión funcional anterior:
+  `3D87EDD9F5B02BF5A49EE0FFABBC98FB853994F7B115C025B9723D3FECDCBC21`.
+- El acceso directo apunta a `Current`, con directorio de trabajo e icono de
+  sesión correctos. Se conservaron exactamente dos ejecutables funcionales.
+
+Próximo paso concreto: evaluar en uso real la escala del aro celeste y la
+ubicación de la bandera respecto del switch.
+
+# Ultimo ajuste en curso: geometria final de PAMPA FUZZ
+
+- Se acercaron los centros de las tres perillas a `0.300`/`0.500`/`0.700` y
+  se aumento su tamano de `0.175` a `0.200` del ancho del cuerpo.
+- El footswitch visual se desplazo a la izquierda (`0.400`) y mas abajo
+  (`0.840`); la bandera dinamica se ubico a su derecha (`0.560`) dentro de la
+  misma franja inferior. El hitbox funcional permanece sin cambios.
+
+Verificacion final 2026-07-28:
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- El ejecutable Release y `Builds/LocalDeployment/Current` permanecieron vivos
+  y responsivos durante 8 s; se cerraron despues de la comprobacion.
+- `Current` SHA-256: `3D87EDD9F5B02BF5A49EE0FFABBC98FB853994F7B115C025B9723D3FECDCBC21`.
+  `Previous` conserva la version funcional anterior:
+  `A25BA5E666D9868C6E30B9EEAFD1F42EAC49D1158020AD34BAEB12292B145640`.
+- El acceso directo apunta a `Current`, con directorio de trabajo e icono
+  correctos; la asociacion `.loopernico` no fue alterada.
+
+Proximo paso concreto: evaluar en uso real el espacio entre el switch y la
+bandera cuando el pedal se muestra en tamaño minimo.
+
+# Ultimo avance: rediseño visual de PAMPA FUZZ
+
+- Generado `Assets/Pedals/pampa-fuzz-face-v4.png`: se retiro “EDICION
+  ARGENTINA” y se incorporo una tipografia filete porteño para “PAMPA FUZZ”,
+  conservando carcasa, etiquetas y textura. El asset deja libre la zona de la
+  bandera dinamica para evitar duplicacion.
+- Integrado el frente v4 en `Source/LoopernicoWidgets.cpp`. La bandera conserva
+  su comportamiento de encendido y ahora se dibuja en proporcion 3:2, en vez de
+  la huella 2:1 que la aplastaba.
+
+Verificacion final 2026-07-28:
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- El ejecutable Release y `Builds/LocalDeployment/Current` permanecieron vivos
+  y responsivos durante 8 s; se cerraron despues de la comprobacion.
+- `Current` SHA-256: `A25BA5E666D9868C6E30B9EEAFD1F42EAC49D1158020AD34BAEB12292B145640`.
+  `Previous` conserva la version funcional anterior:
+  `83D66A96AA554A018D7F6DDADDAB1A745A8FE56D61E4545CFCF3E2BA216DEA83`.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` apunta a `Current`, con
+  directorio de trabajo e icono `Assets/Brand/Icons/loopernico-session.ico`.
+- `.loopernico` conserva `Loopernico.Session` y el comando con `%1` hacia
+  `Current`.
+- La captura interactiva no pudo realizarse por la interfaz de Windows
+  `0x80004002`; el asset generado fue inspeccionado directamente y no presenta
+  texto extra, subtitulo ni bandera integrada duplicada.
+
+Proximo paso concreto: evaluar en uso real si el tamaño final de la marca y la
+placa de bandera resultan cómodos en miniatura y vista ampliada.
+
+# Ultimo ajuste comprobado: escala y centrado final de potes PAMPA FUZZ
+
+- Corregido el 2026-07-28: los tres potes fileteados pasan a `0.175` del ancho
+  del cuerpo y los extremos se acercan a `0.276`/`0.724`, conservando el centro
+  de TONE en `0.500`. El diseño destaca mas sin tocar etiquetas, DSP,
+  parametros, sesiones, MIDI ni hitboxes.
+- Capturas revisadas: `tmp/pampa-fuzz-filete-knob-hd-v2.png` y
+  `tmp/pampa-fuzz-filete-knob-deployed-v2.png`; no hay solapamientos y el
+  fileteado permanece legible.
+
+## Verificacion y despliegue
+
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- `Builds/LocalDeployment/Current` contiene la nueva version y `Previous`
+  conserva la anterior. El humo del desplegado genero la captura HD.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` apunta a `Current`, con
+  directorio de trabajo e icono de sesion correctos. `.loopernico` conserva
+  `Loopernico.Session`, el tipo de archivo y el comando con `%1` hacia
+  `Current`.
+
+Proximo paso concreto: evaluar en uso real si el tamaño final se siente cómodo
+  para arrastre y, si hace falta, ajustar solo el detalle ornamental del asset.
+
+# Ultimo ajuste comprobado: potes fileteados de PAMPA FUZZ
+
+- Integrado el 2026-07-28 `Assets/Hardware/pampa-fuzz-filete-knob-v1.png` en
+  los tres controles de FUZZ. El PNG se escala al bounds existente y rota con
+  el valor del control, compensando el marcador base del asset. No se cambiaron
+  DSP, parametros, sesiones, MIDI, hitboxes ni la textura de la carcasa.
+- Capturas revisadas: `tmp/pampa-fuzz-filete-knob-hd-v1.png` y
+  `tmp/pampa-fuzz-filete-knob-deployed-v1.png`; los tres potes quedan alineados,
+  legibles y coherentes con el fileteado y la bandera del pedal.
+
+## Verificacion y despliegue
+
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- `Builds/LocalDeployment/Current` contiene la nueva version y `Previous`
+  conserva la version funcional inmediatamente anterior. El humo del
+  desplegado genero la captura HD correctamente.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` apunta a `Current`, con
+  directorio de trabajo e icono de sesion correctos. `.loopernico` conserva
+  `Loopernico.Session`, el tipo de archivo y el comando con `%1` hacia
+  `Current`.
+
+Proximo paso concreto: probar el recorrido de los potes con valores distintos
+  y decidir si hace falta una variante de fileteado mas sobria para miniatura.
+
+# Avance actual: primer pote fileteado para PAMPA FUZZ
+
+- Generado el 2026-07-28 el candidato rasterizado
+  `Assets/Hardware/pampa-fuzz-filete-knob-v1.png`: baquelita negra envejecida,
+  estriado radial, aro de bronce, marcador marfil y ornamentacion celeste/dorada
+  inspirada en el fileteado porteño.
+- El PNG es `1254x1254`, `32bppArgb`, con esquinas transparentes y sin halo verde
+  visible. Todavia no se integro al codigo ni se reemplazaron los potes actuales.
+
+Proximo paso concreto: probar este asset en los tres controles de PAMPA FUZZ y
+revisar escala, contraste y legibilidad antes de decidir si se conserva o se
+genera una variante mas sobria.
+
+# Ultimo ajuste comprobado: alineacion de potenciometros de PAMPA FUZZ
+
+- Corregido el 2026-07-28: se mantuvo `Assets/Pedals/pampa-fuzz-face-v3.png`,
+  que fue revisado y no contiene dibujos ni huecos de potenciometros. Los tres
+  controles interactivos de FUZZ ahora usan tamano proporcional al cuerpo y se
+  centran bajo `FUZZ`, `TONE` y `LEVEL` en las coordenadas de la textura. No se
+  cambiaron asset, DSP, nombres, sesiones, MIDI ni hitboxes.
+- Capturas revisadas: `tmp/pampa-fuzz-alignment-v2.png` y
+  `tmp/pampa-fuzz-deployed-smoke.png`; los tres nombres quedan legibles, sin
+  solapamiento, y cada knob queda alineado con su etiqueta.
+
+## Verificacion y despliegue
+
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- `Builds/LocalDeployment/Current` contiene la nueva version y `Previous`
+  conserva la version funcional anterior. El humo del desplegado genero la
+  captura HD y la interfaz permanecio operativa durante el snapshot.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` apunta a `Current`, con
+  directorio de trabajo e icono de sesion correctos. `.loopernico` conserva
+  `Loopernico.Session`, el tipo de archivo y el comando con `%1` hacia
+  `Current`.
+
+Proximo paso concreto: redisenar los potenciometros de PAMPA FUZZ para que
+  encajen con la estetica del pedal, manteniendo esta geometria como base.
+
+# Ultimo ajuste comprobado: indicador argentino de PAMPA FUZZ
+
+- Corregido el 2026-07-28: se retiro el LED generico inferior de `FUZZ`, que
+  quedaba debajo del footswitch en la miniatura. Se agrego la placa rasterizada
+  `Assets/Hardware/pampa-argentina-flag-v1.png`, generada como asset
+  complementario con transparencia, y se dibuja centrada en la franja libre
+  sobre el switch.
+- La bandera se mantiene tenue apagada y recibe halo celeste y retroiluminacion
+  interna cuando `onBtn` esta activo. No se cambiaron controles, DSP, sesiones,
+  MIDI ni hitboxes.
+
+## Verificacion y despliegue
+
+- Release `x64` correcto con `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- Captura revisada: `tmp/pampa-fuzz-flag-v1.png`; el asset carga correctamente
+  en vista HD. La geometria final fue elevada y reducida para despejar el
+  footswitch; la captura v2 no se regenero por una segunda instancia que no
+  completo el ciclo de snapshot, pero el cambio solo ajusta esas coordenadas.
+- `Builds/LocalDeployment/Current` SHA-256:
+  `E3D4A072B2AA3EDB188235254E6773709D3821052BBEBB83BCF399350DB607C5`.
+  `Previous` conserva la version funcional anterior:
+  `3E87253CDAEACA3DA5F0482F89251B8EAC5DBF6A8CE6CFA756B651673D952CA0`.
+- Humo de `Current`: ventana abierta y responsiva durante 5 s; cierre forzado
+  despues de la comprobacion. El acceso directo apunta a `Current`, con
+  directorio de trabajo e icono de sesion correctos. `.loopernico` conserva
+  `Loopernico.Session`, tipo `Archivo de Loopernico` y comando con `%1`.
+
+Proximo paso concreto: confirmar visualmente el estado encendido de la bandera
+en una captura o sesion interactiva si se desea una comprobacion adicional.
+
+- Revision estatica actual: no se encontro una ruta de crash confirmada en el flujo normal de Release; el humo previo solo cubre apertura y responsividad basica.
+- Riesgo concreto pendiente: `EffectsChain::processBlock()` y `LooperEngine::processBlock()` convierten buffers a punteros crudos sin validar internamente `startSample + numSamples` contra el tamano real. El callback actual los llama con `startSample=0` y buffers preparados, por lo que no queda reproducido en el flujo normal, pero la API puede desbordar si recibe un rango invalido.
+- Riesgo adicional: `LooperEngine::rotateTrackRegion()` y `trimSilence()` presuponen que `regionLengthSamples`/`recordedSamples` caben en el buffer; sus llamadores actuales usan longitudes derivadas del loop y del limite de captura, sin evidencia de desborde en la ruta normal.
+- Verificacion realizada: inspeccion estatica de `EffectsChain`, `LooperEngine`, `MainComponent`, sesiones MIDI/VST3 y estado Git; no se modifico codigo fuente. Proximo paso si se busca blindaje: agregar validacion de rangos y una prueba adversarial de callbacks/sesiones.
+
 # Ultimo ajuste comprobado: estilo unificado de botones inferiores
 
 - Corregido el 2026-07-27 en `MainComponent`: `MIDI +`, `MONO`/`STEREO` y
