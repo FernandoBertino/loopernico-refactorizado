@@ -601,6 +601,33 @@ constexpr float kCompactPedalHeight = 236.0f;
 // Render the actual pedal larger inside its compact lane while keeping the
 // source PNG untouched.
 constexpr float kGamechangerPlusFaceAspect = 0.45f;
+constexpr float kBigSkyFaceAspect = 1536.0f / 1024.0f;
+// Source crop and measured OLED bounds inside strymon-bigsky-mx-face-v3.png.
+// The screen coordinates must be relative to the crop drawn into the pedal,
+// rather than to the complete 1536x1024 photograph.
+constexpr float kBigSkyCropX = 103.0f;
+constexpr float kBigSkyCropY = 56.0f;
+constexpr float kBigSkyCropW = 1330.0f;
+constexpr float kBigSkyCropH = 916.0f;
+constexpr float kBigSkyScreenX = (659.0f - kBigSkyCropX) / kBigSkyCropW;
+constexpr float kBigSkyScreenY = (175.0f - kBigSkyCropY) / kBigSkyCropH;
+constexpr float kBigSkyScreenW = 422.0f / kBigSkyCropW;
+constexpr float kBigSkyScreenH = 117.0f / kBigSkyCropH;
+constexpr float kTimelineFaceAspect = 1536.0f / 1024.0f;
+// getPedalTextureCrop() draws this exact rounded 1 % inset from
+// strymon-timeline-mx-face-v2.png. All measured hardware coordinates below
+// are expressed in full-PNG pixels and converted to the crop's coordinate
+// space here, so paint() and resized() cannot mix the two systems.
+constexpr float kTimelineCropX = 15.0f;
+constexpr float kTimelineCropY = 10.0f;
+constexpr float kTimelineCropW = 1505.0f;
+constexpr float kTimelineCropH = 1004.0f;
+constexpr float timelineX(float pngX) noexcept { return (pngX - kTimelineCropX) / kTimelineCropW; }
+constexpr float timelineY(float pngY) noexcept { return (pngY - kTimelineCropY) / kTimelineCropH; }
+constexpr float kTimelineScreenX = timelineX(649.0f);
+constexpr float kTimelineScreenY = timelineY(133.0f);
+constexpr float kTimelineScreenW = 479.0f / kTimelineCropW;
+constexpr float kTimelineScreenH = 126.0f / kTimelineCropH;
 constexpr float kBeatBuddyScreenX = 0.090f;
 constexpr float kBeatBuddyScreenY = 0.285f;
 constexpr float kBeatBuddyScreenW = 0.820f;
@@ -792,11 +819,11 @@ juce::Rectangle<int> getPedalTextureCrop(const juce::String& name, const juce::I
         return { juce::roundToInt(w * 0.035f), juce::roundToInt(h * 0.008f),
                  juce::roundToInt(w * 0.930f), juce::roundToInt(h * 0.970f) };
     if (name == "ROOM REVERB")
-        return { juce::roundToInt(w * 0.067f), juce::roundToInt(h * 0.055f),
-                 juce::roundToInt(w * 0.866f), juce::roundToInt(h * 0.895f) };
+        return { juce::roundToInt(kBigSkyCropX), juce::roundToInt(kBigSkyCropY),
+                 juce::roundToInt(kBigSkyCropW), juce::roundToInt(kBigSkyCropH) };
     if (name == "TAPE DELAY")
-        return { juce::roundToInt(w * 0.010f), juce::roundToInt(h * 0.010f),
-                 juce::roundToInt(w * 0.980f), juce::roundToInt(h * 0.980f) };
+        return { juce::roundToInt(kTimelineCropX), juce::roundToInt(kTimelineCropY),
+                 juce::roundToInt(kTimelineCropW), juce::roundToInt(kTimelineCropH) };
     if (name.containsIgnoreCase("COMPRESSOR") || name.containsIgnoreCase("OUTPUT EQ"))
         return { juce::roundToInt(w * 0.22f), juce::roundToInt(h * 0.045f),
                  juce::roundToInt(w * 0.56f), juce::roundToInt(h * 0.91f) };
@@ -916,8 +943,8 @@ void FXPedalComponent::paint(juce::Graphics& g)
         const float aspect = sunsetArtwork ? 1.0f
                            : (smallCloneArtwork ? (3.38f / 5.25f)
                            : (wideFuzzArtwork ? (977.0f / 1610.0f)
-                           : (timeLineArtwork ? 1.50f
-                           : (bigSkyArtwork ? 1.455f
+                           : (timeLineArtwork ? kTimelineFaceAspect
+                           : (bigSkyArtwork ? kBigSkyFaceAspect
                            : (dedaloJetArtwork ? 1.23f
                            : (dedaloTresArtwork ? (4.0f / 3.0f)
                            : (harmonizerArtwork ? (1578.0f / 1240.0f)
@@ -928,7 +955,7 @@ void FXPedalComponent::paint(juce::Graphics& g)
         const float bodyHeight = juce::jmin(b.getHeight(), b.getWidth() / aspect);
         const float bodyWidth = (beatBuddyArtwork || bossNoiseArtwork || wideFuzzArtwork
                                  || harmonizerArtwork || smallCloneArtwork
-                                 || plusPedalArtwork)
+                                 || plusPedalArtwork || bigSkyArtwork || timeLineArtwork)
                                     ? juce::jmin(b.getWidth(), bodyHeight * aspect)
                                     : b.getWidth();
         b = juce::Rectangle<float>(b.getCentreX() - bodyWidth * 0.5f,
@@ -1180,17 +1207,26 @@ void FXPedalComponent::paint(juce::Graphics& g)
             "NONLINEAR", "ROOM", "HALL", "CHAMBER", "PLATE", "SPRING"
         };
         const int type = juce::jlimit(0, typeNames.size() - 1, juce::roundToInt(knob8.getValue()));
-        auto screen = juce::Rectangle<float>(b.getX() + b.getWidth() * 0.390f,
-                                              b.getY() + b.getHeight() * 0.082f,
-                                              b.getWidth() * 0.380f,
-                                              b.getHeight() * 0.185f);
-        g.setColour(juce::Colour(0xff02090d).withAlpha(0.97f));
-        g.fillRoundedRectangle(screen, 2.0f);
+        auto screen = juce::Rectangle<float>(b.getX() + b.getWidth() * kBigSkyScreenX,
+                                              b.getY() + b.getHeight() * kBigSkyScreenY,
+                                              b.getWidth() * kBigSkyScreenW,
+                                              b.getHeight() * kBigSkyScreenH);
+        const float screenPixelScale = juce::jmin(b.getWidth() / kBigSkyCropW,
+                                                   b.getHeight() / kBigSkyCropH);
+        const float cornerRadius = juce::jmax(1.0f, 5.0f * screenPixelScale);
+        const float borderWidth = juce::jlimit(0.55f, 1.1f, screenPixelScale);
+        g.setColour(juce::Colour(0xff02090d));
+        g.fillRoundedRectangle(screen, cornerRadius);
         g.setColour(juce::Colour(0xff244321));
-        g.drawRoundedRectangle(screen.reduced(0.5f), 2.0f, 0.8f);
+        g.drawRoundedRectangle(screen.reduced(borderWidth * 0.5f),
+                               juce::jmax(0.6f, cornerRadius - borderWidth * 0.5f),
+                               borderWidth);
         g.setColour(juce::Colour(0xff70f147));
-        g.setFont(juce::Font(juce::FontOptions(7.2f).withStyle("Bold")));
-        g.drawFittedText(typeNames[type], screen.reduced(5.0f, 3.0f).toNearestInt(),
+        const float fontHeight = juce::jlimit(7.0f, 22.0f, screen.getHeight() * 0.34f);
+        const float textInsetX = juce::jmax(2.0f, screen.getWidth() * 0.025f);
+        const float textInsetY = juce::jmax(1.0f, screen.getHeight() * 0.08f);
+        g.setFont(juce::Font(juce::FontOptions(fontHeight).withStyle("Bold")));
+        g.drawFittedText(typeNames[type], screen.reduced(textInsetX, textInsetY).toNearestInt(),
                          juce::Justification::centred, 1, 0.72f);
 
         const float ledY = b.getY() + b.getHeight() * 0.704f;
@@ -1226,22 +1262,39 @@ void FXPedalComponent::paint(juce::Graphics& g)
             "DIGITAL", "LO FI", "dBUCKET", "FILTER", "dTAPE", "REVERB"
         };
         const int type = juce::jlimit(0, typeNames.size() - 1, juce::roundToInt(knob8.getValue()));
-        auto screen = juce::Rectangle<float>(b.getX() + b.getWidth() * 0.409f,
-                                              b.getY() + b.getHeight() * 0.105f,
-                                              b.getWidth() * 0.344f,
-                                              b.getHeight() * 0.174f);
-        g.setColour(juce::Colour(0xff010604).withAlpha(0.98f));
-        g.fillRoundedRectangle(screen, 2.0f);
+        auto screen = juce::Rectangle<float>(b.getX() + b.getWidth() * kTimelineScreenX,
+                                              b.getY() + b.getHeight() * kTimelineScreenY,
+                                              b.getWidth() * kTimelineScreenW,
+                                              b.getHeight() * kTimelineScreenH);
+        const float screenPixelScale = juce::jmin(b.getWidth() / kTimelineCropW,
+                                                   b.getHeight() / kTimelineCropH);
+        const float cornerRadius = juce::jmax(0.75f, 2.0f * screenPixelScale);
+        const float borderWidth = juce::jlimit(0.50f, 1.20f, screenPixelScale);
+        g.setColour(juce::Colour(0xff010604));
+        g.fillRoundedRectangle(screen, cornerRadius);
+        g.setColour(juce::Colour(0xff1f4218));
+        g.drawRoundedRectangle(screen.reduced(borderWidth * 0.5f),
+                               juce::jmax(0.45f, cornerRadius - borderWidth * 0.5f),
+                               borderWidth);
+
+        const float insetX = juce::jmax(1.5f, screen.getWidth() * 0.025f);
+        const float insetY = juce::jmax(0.75f, screen.getHeight() * 0.055f);
+        const auto textArea = screen.reduced(insetX, insetY);
+        const float lineGap = juce::jmax(0.0f, screen.getHeight() * 0.025f);
+        const float lineHeight = (textArea.getHeight() - lineGap) * 0.5f;
+        const auto topLine = textArea.withHeight(lineHeight);
+        const auto bottomLine = textArea.withTrimmedTop(lineHeight + lineGap);
+
         g.setColour(juce::Colour(0xff4ee82a));
-        g.setFont(juce::Font(juce::FontOptions(6.8f).withStyle("Bold")));
-        auto topLine = screen.reduced(4.0f, 2.0f).removeFromTop(screen.getHeight() * 0.48f);
+        const float fontHeight = juce::jlimit(5.0f, 18.0f, screen.getHeight() * 0.245f);
+        g.setFont(juce::Font(juce::FontOptions(fontHeight).withStyle("Bold")));
         g.drawFittedText("100A  TIMELINE MX", topLine.toNearestInt(),
-                         juce::Justification::centredLeft, 1, 0.78f);
+                         juce::Justification::centred, 1, 0.72f);
         const int bpm = juce::roundToInt(60000.0 / juce::jmax(50.0, knob1.getValue()));
         const juce::String bottom = "1  SER  2  " + typeNames[type].substring(0, 7)
                                   + "  " + juce::String(bpm) + "BPM";
-        g.drawFittedText(bottom, screen.reduced(4.0f, 2.0f).withTrimmedTop(screen.getHeight() * 0.47f).toNearestInt(),
-                         juce::Justification::centredLeft, 1, 0.70f);
+        g.drawFittedText(bottom, bottomLine.toNearestInt(),
+                         juce::Justification::centred, 1, 0.66f);
 
         static constexpr float typeLedX[] = { 0.131f, 0.169f, 0.098f, 0.205f, 0.078f, 0.222f,
                                                0.066f, 0.212f, 0.099f, 0.205f, 0.131f, 0.169f };
@@ -1654,11 +1707,15 @@ void FXPedalComponent::resized()
 
     if (pedalName == "ROOM REVERB")
     {
-        const float aspect = 1.455f;
-        const int bodyHeight = juce::jmin(getHeight() - 6, juce::roundToInt((float) getWidth() / aspect));
+        const float aspect = kBigSkyFaceAspect;
+        const int availableWidth = getWidth() - 6;
+        const int availableHeight = getHeight() - 6;
+        const int bodyHeight = juce::jmin(availableHeight,
+                                          juce::roundToInt((float) availableWidth / aspect));
+        const int bodyWidth = juce::jmin(availableWidth,
+                                         juce::roundToInt((float) bodyHeight * aspect));
         const int bodyTop = (getHeight() - bodyHeight) / 2;
-        const int bodyLeft = 3;
-        const int bodyWidth = getWidth() - 6;
+        const int bodyLeft = (getWidth() - bodyWidth) / 2;
         auto place = [bodyLeft, bodyTop, bodyWidth, bodyHeight](juce::Slider& knob,
                                                                float nx, float ny, int size)
         {
@@ -1680,11 +1737,14 @@ void FXPedalComponent::resized()
 
     if (pedalName == "TAPE DELAY")
     {
-        const float aspect = 1.50f;
-        const int bodyHeight = juce::jmin(getHeight() - 6, juce::roundToInt((float) getWidth() / aspect));
+        const int availableWidth = getWidth() - 6;
+        const int availableHeight = getHeight() - 6;
+        const int bodyHeight = juce::jmin(availableHeight,
+                                          juce::roundToInt((float) availableWidth / kTimelineFaceAspect));
+        const int bodyWidth = juce::jmin(availableWidth,
+                                         juce::roundToInt((float) bodyHeight * kTimelineFaceAspect));
         const int bodyTop = (getHeight() - bodyHeight) / 2;
-        const int bodyLeft = 3;
-        const int bodyWidth = getWidth() - 6;
+        const int bodyLeft = (getWidth() - bodyWidth) / 2;
         auto place = [bodyLeft, bodyTop, bodyWidth, bodyHeight](juce::Slider& knob,
                                                                float nx, float ny, int size)
         {
@@ -1692,15 +1752,15 @@ void FXPedalComponent::resized()
             const int cy = bodyTop + juce::roundToInt((float) bodyHeight * ny);
             knob.setBounds(cx - size / 2, cy - size / 2, size, size);
         };
-        place(knob8, 0.145f, 0.180f, scaled(38)); // TYPE
-        place(knob9, 0.925f, 0.180f, scaled(36)); // VALUE
-        place(knob1, 0.066f, 0.440f, scaled(34)); // TIME
-        place(knob2, 0.215f, 0.440f, scaled(34)); // REPEATS
-        place(knob3, 0.360f, 0.440f, scaled(34)); // FILTER
-        place(knob4, 0.500f, 0.440f, scaled(34)); // GRIT
-        place(knob5, 0.640f, 0.440f, scaled(34)); // SPEED
-        place(knob6, 0.785f, 0.440f, scaled(34)); // DEPTH
-        place(knob7, 0.925f, 0.440f, scaled(34)); // MIX
+        place(knob8, timelineX(221.0f),  timelineY(190.0f), scaled(38)); // TYPE
+        place(knob9, timelineX(1414.0f), timelineY(190.0f), scaled(36)); // VALUE
+        place(knob1, timelineX(115.0f),  timelineY(445.0f), scaled(34)); // TIME
+        place(knob2, timelineX(336.0f),  timelineY(445.0f), scaled(34)); // REPEATS
+        place(knob3, timelineX(552.0f),  timelineY(445.0f), scaled(34)); // FILTER
+        place(knob4, timelineX(768.0f),  timelineY(445.0f), scaled(34)); // GRIT
+        place(knob5, timelineX(984.0f),  timelineY(445.0f), scaled(34)); // SPEED
+        place(knob6, timelineX(1204.0f), timelineY(445.0f), scaled(34)); // DEPTH
+        place(knob7, timelineX(1420.0f), timelineY(445.0f), scaled(34)); // MIX
         return;
     }
 

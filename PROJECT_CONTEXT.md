@@ -1,3 +1,101 @@
+# Tarea terminada: OLED real del TAPE DELAY / Timeline MX
+
+- Corregido el 2026-07-29 en `Source/LoopernicoWidgets.cpp` y, solamente para
+  mantener el hitbox alineado cuando el componente queda limitado por altura,
+  en `Source/LoopernicoWidgets.h`.
+- La inspeccion directa de
+  `Assets/Pedals/strymon-timeline-mx-face-v2.png` a 1536x1024 ubico el area
+  emisiva interior real del OLED en `x=649`, `y=133`, `w=479`, `h=126`.
+  El asset no se modifico; conserva SHA-256
+  `D0AC10442465D92B466BF104817A1B5484FCF69DC94FC0D2CDB23AF93A096736`.
+- El recorte que realmente dibuja `getPedalTextureCrop()` queda centralizado
+  en pixeles como `x=15`, `y=10`, `w=1505`, `h=1004`, equivalentes al recorte
+  anterior `0.010/0.010/0.980/0.980` despues del redondeo. La pantalla y los
+  nueve centros de knobs se convierten desde coordenadas del PNG completo al
+  espacio de ese recorte mediante constantes comunes.
+- El OLED dinamico tiene relleno totalmente opaco, borde y esquinas
+  proporcionales. Las dos lineas quedan centradas, con margenes proporcionales
+  y fuente escalable limitada a 18 px en HD. No cubren el bisel, el marco
+  blanco, `TYPE`, `VALUE`, `strymon`, `TIMELINE MX` ni otra serigrafia.
+- `paint()`, `resized()` y el hitbox de los tres footswitches usan la proporcion
+  1536:1024 y centran la carcasa tanto si limita el ancho como si limita la
+  altura. Los nueve knobs usan centros medidos en el PNG: TYPE `(221,190)`,
+  VALUE `(1414,190)` y la fila inferior en `y=445`, con `x=115,336,552,768,
+  984,1204,1420`.
+- No se modificaron DSP, audio, MIDI, sesiones reales, parametros, rangos,
+  comportamiento del delay ni otros pedales. La sesion usada para exponer el
+  pedal al inicio de la tira es temporal:
+  `tmp/timeline-compact-first.loopernico`.
+
+Verificacion y despliegue 2026-07-29:
+- `Release | x64` correcto con
+  `Builds/VisualStudio2026/Loopernico Refactorizado.sln`: 0 errores y
+  0 advertencias.
+- Capturas nativas revisadas:
+  `tmp/timeline-oled-compact-final.png` (SHA-256
+  `5C9AE2A6C63125599A9CB9B7D88A37C7C4DF0110AF683914D7F3057CE8BC7001`)
+  y `tmp/timeline-oled-focused-final.png` (SHA-256
+  `BBA98A0F0CBFC3D3A05C478D73D37CD33A4EEE2F5CC1CAC56B2416BA4416F05E`).
+  Ambas confirman OLED contenido por los cuatro lados, fondo opaco, dos lineas
+  legibles, proporcion consistente y knobs registrados con la impresion.
+- Humo del ejecutable desplegado correcto mediante
+  `tmp/timeline-deployed-smoke.png`, cierre normal y codigo 0.
+- `Builds/LocalDeployment/Current` SHA-256:
+  `3076703DBE6EFC7B279628D6011EBAEB5DA64FCEFE6695E44180AF7F7F96ABEB`.
+  `Previous` conserva la version funcional inmediatamente anterior, SHA-256
+  `624833F76A00B64EDD88615F8C934094990D2700BC73F1EC13E20B6E6A0A1BAE`.
+  Hay exactamente dos ejecutables en el despliegue local.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` fue recreado hacia `Current`, con
+  directorio de trabajo e icono de sesion correctos. `.loopernico` conserva
+  `Loopernico.Session`, tipo `Archivo de Loopernico`, comando con `%1` hacia
+  `Current` e icono de sesion.
+
+Proximo paso concreto: ninguno; el OLED del Timeline MX queda validado en
+miniatura, vista ampliada y ejecutable desplegado.
+
+# Tarea terminada: OLED real del ROOM REVERB / BigSky MX
+
+- Corregido el 2026-07-28 en `Source/LoopernicoWidgets.cpp`. La medicion
+  directa de `Assets/Pedals/strymon-bigsky-mx-face-v3.png` ubico el OLED
+  interior en `x=659`, `y=175`, `w=422`, `h=117` sobre el PNG de 1536x1024.
+  Esas coordenadas ahora se normalizan contra el recorte que realmente dibuja
+  la interfaz (`103,56,1330,916`), evitando mezclar coordenadas del PNG completo
+  con coordenadas del cuerpo renderizado.
+- El relleno dinamico es totalmente opaco, con esquinas y borde proporcionales.
+  `CLOUD` queda centrado dentro del OLED y su fuente escala con la pantalla,
+  limitada a 22 px en la vista HD. No cubre `BigSky MX`, `strymon`, `TYPE`,
+  `VALUE` ni ninguna otra serigrafia.
+- `paint()` y `resized()` usan la proporcion 1536:1024 y centran el cuerpo
+  tambien si la vista queda limitada por altura. Los nueve knobs conservan sus
+  coordenadas y quedaron alineados con los controles impresos.
+- No se modificaron DSP, audio, MIDI, sesiones, parametros ni otros pedales.
+
+Verificacion y despliegue 2026-07-28:
+- Release `x64` correcto con
+  `Builds/VisualStudio2026/Loopernico Refactorizado.sln`, codigo 0.
+- Capturas nativas revisadas:
+  `tmp/bigsky-oled-compact-final.png` y
+  `tmp/bigsky-oled-focused-final.png`. La miniatura se genero con una sesion
+  temporal en `tmp/` que solo llevo ROOM REVERB al primer slot para hacerlo
+  visible; no se altero ninguna sesion real.
+- Humo de `Builds/LocalDeployment/Current` correcto mediante
+  `tmp/bigsky-deployed-smoke.png`, cierre normal y codigo 0. El controlador
+  interactivo de Windows no pudo capturar la ventana por
+  `SetIsBorderRequired (0x80004002)`; la comprobacion visual completa se hizo
+  con `Component::createComponentSnapshot`.
+- `Current` SHA-256:
+  `624833F76A00B64EDD88615F8C934094990D2700BC73F1EC13E20B6E6A0A1BAE`.
+  `Previous` conserva la version funcional anterior:
+  `CB9B0C7A3D32DA57CB8A8BD0EF5E7775341EA12A51D0068BE9FA307AD8CD7DDA`.
+  Hay exactamente dos ejecutables desplegados.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` fue recreado hacia `Current`,
+  con directorio de trabajo e icono de sesion correctos. `.loopernico`
+  conserva `Loopernico.Session`, tipo `Archivo de Loopernico`, comando con
+  `%1` hacia `Current` e icono de sesion.
+
+Proximo paso concreto: ninguno; el OLED queda contenido y legible en ambas
+escalas.
+
 # Auditoria de estabilidad 2026-07-28
 
 # Ultimo ajuste comprobado: halo PAMPA FUZZ mas visible

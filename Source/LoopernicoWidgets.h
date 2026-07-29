@@ -482,8 +482,10 @@ public:
         {
             auto body = getLocalBounds().toFloat().reduced(3.0f);
             const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / 1.5f);
-            body = { body.getX(), body.getCentreY() - bodyHeight * 0.5f,
-                     body.getWidth(), bodyHeight };
+            const float bodyWidth = juce::jmin(body.getWidth(), bodyHeight * 1.5f);
+            body = { body.getCentreX() - bodyWidth * 0.5f,
+                     body.getCentreY() - bodyHeight * 0.5f,
+                     bodyWidth, bodyHeight };
             const auto mouse = e.position;
             const float footY = body.getY() + body.getHeight() * 0.842f;
             const float xs[] = { 0.115f, 0.500f, 0.880f };
