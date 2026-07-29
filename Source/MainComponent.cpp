@@ -1298,7 +1298,7 @@ void MainComponent::setupFXPedals()
         { "REMOVED",        0xff9a2b1f, "",        "",        ""      },
         { "SUSTAIN CHORDS", 0xff486d89, "LEVEL",   "RISE",    "DECAY" },
         { "FUZZ",           0xff0f3a88, "FUZZ",    "TONE",    "LEVEL" },
-        { "SUNSET",         0xffc91522, "LEVEL A", "DRIVE A", "TONE A" },
+        { "SUNSET",         0xffc91522, "VOLUME 1", "GAIN 1",  "TONE 1" },
         { "CHORUS",         0xff0f4e88, "MIX",     "RATE",    "DEPTH" },
         { "TREMOLO",        0xff0b7f73, "MIX",     "RATE",    "DEPTH" },
         { "TAPE DELAY",     0xffaa5a08, "MIX",     "TIME",    "FEEDB" },
@@ -1508,54 +1508,58 @@ void MainComponent::setupFXPedals()
     fxPedals[6]->knob2.onValueChange=[this](){ effectsChain.setFuzzTone((float)fxPedals[6]->knob2.getValue()); };
     fxPedals[6]->knob3.onValueChange=[this](){ effectsChain.setFuzzLevel((float)fxPedals[6]->knob3.getValue()); };
 
-    fxPedals[7]->configureNineKnobs("LEVEL A", "DRIVE A", "TONE A",
-                                    "LEVEL B", "DRIVE B", "TONE B",
-                                    "TYPE A", "TYPE B", "CONFIG");
-    for (auto* knob : { &fxPedals[7]->knob1, &fxPedals[7]->knob2, &fxPedals[7]->knob3,
-                        &fxPedals[7]->knob4, &fxPedals[7]->knob5, &fxPedals[7]->knob6 })
-        knob->setComponentID("sunsetKnob");
-    fxPedals[7]->knob7.setComponentID("sunsetToggle");
-    fxPedals[7]->knob8.setComponentID("sunsetToggle");
-    cfg(fxPedals[7]->knob1, 0.0, 1.0, 0.52); // LEVEL A
-    cfg(fxPedals[7]->knob2, 0.0, 1.0, 0.42); // DRIVE A
-    cfg(fxPedals[7]->knob3, 0.0, 1.0, 0.55); // TONE A
-    cfg(fxPedals[7]->knob4, 0.0, 1.0, 0.52); // LEVEL B
-    cfg(fxPedals[7]->knob5, 0.0, 1.0, 0.36); // DRIVE B
-    cfg(fxPedals[7]->knob6, 0.0, 1.0, 0.55); // TONE B
-    fxPedals[7]->knob7.setRange(0.0, 2.0, 1.0); fxPedals[7]->knob7.setValue(1.0); // texas
-    fxPedals[7]->knob8.setRange(0.0, 2.0, 1.0); fxPedals[7]->knob8.setValue(0.0); // 2stage
-    fxPedals[7]->knob9.setRange(0.0, 2.0, 1.0); fxPedals[7]->knob9.setValue(0.0); // A -> B
-    fxPedals[7]->knob9.setVisible(false); // CONFIG is operated on the rear/top lip.
-    fxPedals[7]->knob1.setTooltip("LEVEL A");
-    fxPedals[7]->knob2.setTooltip("DRIVE A");
-    fxPedals[7]->knob3.setTooltip("TONE A");
-    fxPedals[7]->knob4.setTooltip("LEVEL B");
-    fxPedals[7]->knob5.setTooltip("DRIVE B");
-    fxPedals[7]->knob6.setTooltip("TONE B");
-    fxPedals[7]->knob7.setTooltip("A: Ge / texas / treble");
-    fxPedals[7]->knob8.setTooltip("B: 2stage / hard / JFET");
-    fxPedals[7]->onBtn.onClick=[this](){ effectsChain.setDriveAEnabled(fxPedals[7]->onBtn.getToggleState()); };
-    fxPedals[7]->onTertiaryFootswitch=[this](){ effectsChain.setDriveBEnabled(fxPedals[7]->isTertiaryFootswitchLatched()); };
-    fxPedals[7]->knob1.onValueChange=[this](){ effectsChain.setDriveALevel((float)fxPedals[7]->knob1.getValue()); };
-    fxPedals[7]->knob2.onValueChange=[this](){ effectsChain.setDriveA((float)fxPedals[7]->knob2.getValue()); };
-    fxPedals[7]->knob3.onValueChange=[this](){ effectsChain.setDriveATone((float)fxPedals[7]->knob3.getValue()); };
-    fxPedals[7]->knob4.onValueChange=[this](){ effectsChain.setDriveBLevel((float)fxPedals[7]->knob4.getValue()); };
-    fxPedals[7]->knob5.onValueChange=[this](){ effectsChain.setDriveB((float)fxPedals[7]->knob5.getValue()); };
-    fxPedals[7]->knob6.onValueChange=[this](){ effectsChain.setDriveBTone((float)fxPedals[7]->knob6.getValue()); };
-    fxPedals[7]->knob7.onValueChange=[this](){ effectsChain.setDriveAType(juce::roundToInt(fxPedals[7]->knob7.getValue())); fxPedals[7]->repaint(); };
-    fxPedals[7]->knob8.onValueChange=[this](){ effectsChain.setDriveBType(juce::roundToInt(fxPedals[7]->knob8.getValue())); fxPedals[7]->repaint(); };
-    fxPedals[7]->knob9.onValueChange=[this](){ effectsChain.setDriveRouting(juce::roundToInt(fxPedals[7]->knob9.getValue())); fxPedals[7]->repaint(); };
-    fxPedals[7]->onSunsetBrightChange=[this](int mode){ effectsChain.setDriveBright(mode); };
-    effectsChain.setDriveALevel((float)fxPedals[7]->knob1.getValue());
-    effectsChain.setDriveA((float)fxPedals[7]->knob2.getValue());
-    effectsChain.setDriveATone((float)fxPedals[7]->knob3.getValue());
-    effectsChain.setDriveBLevel((float)fxPedals[7]->knob4.getValue());
-    effectsChain.setDriveB((float)fxPedals[7]->knob5.getValue());
-    effectsChain.setDriveBTone((float)fxPedals[7]->knob6.getValue());
-    effectsChain.setDriveAType(juce::roundToInt(fxPedals[7]->knob7.getValue()));
-    effectsChain.setDriveBType(juce::roundToInt(fxPedals[7]->knob8.getValue()));
-    effectsChain.setDriveRouting(juce::roundToInt(fxPedals[7]->knob9.getValue()));
-    effectsChain.setDriveBright(fxPedals[7]->getSunsetBrightMode());
+    fxPedals[7]->configureExtendedKnobs("VOLUME 1", "GAIN 1", "TONE 1",
+                                        "VOLUME 2", "GAIN 2", "TONE 2");
+    fxPedals[7]->setDisplayName("VOX COOLTRON DUEL OVERDRIVE");
+    for (auto* knob : { &fxPedals[7]->knob1, &fxPedals[7]->knob2,
+                        &fxPedals[7]->knob4, &fxPedals[7]->knob5 })
+        knob->setComponentID("voxCooltronLargeKnob");
+    fxPedals[7]->knob3.setComponentID("voxCooltronSmallKnob");
+    fxPedals[7]->knob6.setComponentID("voxCooltronSmallKnob");
+    fxPedals[7]->knob7.setComponentID("voxCooltronSmallKnob");
+    fxPedals[7]->knob7.setVisible(true);
+    fxPedals[7]->knob7.setRange(0.0, 2.0, 1.0);
+    fxPedals[7]->knob7.setRotaryParameters(-0.88f, 0.88f, true);
+    fxPedals[7]->knob7.setValue(0.0, juce::dontSendNotification);
+    cfg(fxPedals[7]->knob1, 0.0, 1.0, 0.52); // VOLUME 1
+    cfg(fxPedals[7]->knob2, 0.0, 1.0, 0.42); // GAIN 1
+    cfg(fxPedals[7]->knob3, 0.0, 1.0, 0.55); // TONE 1
+    cfg(fxPedals[7]->knob4, 0.0, 1.0, 0.52); // VOLUME 2
+    cfg(fxPedals[7]->knob5, 0.0, 1.0, 0.36); // GAIN 2
+    cfg(fxPedals[7]->knob6, 0.0, 1.0, 0.55); // TONE 2
+    fxPedals[7]->knob1.setTooltip("VOLUME 1");
+    fxPedals[7]->knob2.setTooltip("GAIN 1");
+    fxPedals[7]->knob3.setTooltip("TONE 1");
+    fxPedals[7]->knob4.setTooltip("VOLUME 2");
+    fxPedals[7]->knob5.setTooltip("GAIN 2");
+    fxPedals[7]->knob6.setTooltip("TONE 2");
+    fxPedals[7]->knob7.setTooltip("BASS BOOST: OFF / OD2 / BOTH");
+    fxPedals[7]->onBtn.setTooltip("EFFECT");
+    fxPedals[7]->onBtn.onClick=[this](){ effectsChain.setCooltronEnabled(fxPedals[7]->onBtn.getToggleState()); };
+    fxPedals[7]->onTertiaryFootswitch=[this](){
+        effectsChain.setCooltronOd2Selected(fxPedals[7]->isTertiaryFootswitchLatched());
+    };
+    fxPedals[7]->knob1.onValueChange=[this](){ effectsChain.setCooltronVolume1((float)fxPedals[7]->knob1.getValue()); };
+    fxPedals[7]->knob2.onValueChange=[this](){ effectsChain.setCooltronGain1((float)fxPedals[7]->knob2.getValue()); };
+    fxPedals[7]->knob3.onValueChange=[this](){ effectsChain.setCooltronTone1((float)fxPedals[7]->knob3.getValue()); };
+    fxPedals[7]->knob4.onValueChange=[this](){ effectsChain.setCooltronVolume2((float)fxPedals[7]->knob4.getValue()); };
+    fxPedals[7]->knob5.onValueChange=[this](){ effectsChain.setCooltronGain2((float)fxPedals[7]->knob5.getValue()); };
+    fxPedals[7]->knob6.onValueChange=[this](){ effectsChain.setCooltronTone2((float)fxPedals[7]->knob6.getValue()); };
+    fxPedals[7]->knob7.onValueChange=[this](){
+        fxPedals[7]->setCooltronBassBoost(juce::roundToInt(fxPedals[7]->knob7.getValue()));
+    };
+    fxPedals[7]->onCooltronBassBoostChange=[this](int position){
+        effectsChain.setCooltronBassBoost(position);
+    };
+    effectsChain.setCooltronVolume1((float)fxPedals[7]->knob1.getValue());
+    effectsChain.setCooltronGain1((float)fxPedals[7]->knob2.getValue());
+    effectsChain.setCooltronTone1((float)fxPedals[7]->knob3.getValue());
+    effectsChain.setCooltronVolume2((float)fxPedals[7]->knob4.getValue());
+    effectsChain.setCooltronGain2((float)fxPedals[7]->knob5.getValue());
+    effectsChain.setCooltronTone2((float)fxPedals[7]->knob6.getValue());
+    effectsChain.setCooltronEnabled(fxPedals[7]->onBtn.getToggleState());
+    effectsChain.setCooltronOd2Selected(fxPedals[7]->isTertiaryFootswitchLatched());
+    effectsChain.setCooltronBassBoost(fxPedals[7]->getCooltronBassBoost());
 
     fxPedals[8]->knob1.setComponentID("smallCloneMix");
     fxPedals[8]->knob2.setComponentID("smallCloneRateKnob");
@@ -2660,14 +2664,17 @@ juce::ValueTree MainComponent::createSessionTree(const LooperEngine::SessionSnap
         pedal.setProperty("knob4", fxPedals[i]->knob4.getValue(), nullptr);
         pedal.setProperty("knob5", fxPedals[i]->knob5.getValue(), nullptr);
         pedal.setProperty("knob6", fxPedals[i]->knob6.getValue(), nullptr);
-        pedal.setProperty("knob7", fxPedals[i]->knob7.getValue(), nullptr);
-        pedal.setProperty("knob8", fxPedals[i]->knob8.getValue(), nullptr);
-        pedal.setProperty("knob9", fxPedals[i]->knob9.getValue(), nullptr);
+        if (i != 7)
+        {
+            pedal.setProperty("knob7", fxPedals[i]->knob7.getValue(), nullptr);
+            pedal.setProperty("knob8", fxPedals[i]->knob8.getValue(), nullptr);
+            pedal.setProperty("knob9", fxPedals[i]->knob9.getValue(), nullptr);
+        }
         if (i == 7)
         {
-            pedal.setProperty("sunsetVersion", 1, nullptr);
-            pedal.setProperty("sunsetBOn", fxPedals[i]->isTertiaryFootswitchLatched(), nullptr);
-            pedal.setProperty("sunsetBright", fxPedals[i]->getSunsetBrightMode(), nullptr);
+            pedal.setProperty("voxCooltronVersion", 1, nullptr);
+            pedal.setProperty("voxOd2Selected", fxPedals[i]->isTertiaryFootswitchLatched(), nullptr);
+            pedal.setProperty("voxBassBoost", fxPedals[i]->getCooltronBassBoost(), nullptr);
         }
         if (i == 12)
         {
@@ -2823,6 +2830,7 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
         auto* pedalUi = fxPedals[pedalIndex].get();
         if (pedalUi == nullptr)
             continue;
+        bool pedalOn = (bool) pedal.getProperty("on", false);
 
         setSlider(pedalUi->knob1, (double) pedal.getProperty("knob1", pedalUi->knob1.getValue()));
         setSlider(pedalUi->knob2, (double) pedal.getProperty("knob2", pedalUi->knob2.getValue()));
@@ -2830,28 +2838,47 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
         setSlider(pedalUi->knob4, (double) pedal.getProperty("knob4", pedalUi->knob4.getValue()));
         setSlider(pedalUi->knob5, (double) pedal.getProperty("knob5", pedalUi->knob5.getValue()));
         setSlider(pedalUi->knob6, (double) pedal.getProperty("knob6", pedalUi->knob6.getValue()));
-        setSlider(pedalUi->knob7, (double) pedal.getProperty("knob7", pedalUi->knob7.getValue()));
-        setSlider(pedalUi->knob8, (double) pedal.getProperty("knob8", pedalUi->knob8.getValue()));
-        setSlider(pedalUi->knob9, (double) pedal.getProperty("knob9", pedalUi->knob9.getValue()));
+        if (pedalIndex != 7)
+        {
+            setSlider(pedalUi->knob7, (double) pedal.getProperty("knob7", pedalUi->knob7.getValue()));
+            setSlider(pedalUi->knob8, (double) pedal.getProperty("knob8", pedalUi->knob8.getValue()));
+            setSlider(pedalUi->knob9, (double) pedal.getProperty("knob9", pedalUi->knob9.getValue()));
+        }
         if (pedalIndex == 7)
         {
-            if (!pedal.hasProperty("sunsetVersion"))
+            bool od2Selected = false;
+            int bassBoost = 0;
+            if (pedal.hasProperty("voxCooltronVersion"))
             {
-                // Mirror Drive sessions used knob1=drive, knob2=tone and
-                // knob3=level.  Translate them into Sunset channel A once.
+                od2Selected = (bool) pedal.getProperty("voxOd2Selected", false);
+                bassBoost = (int) pedal.getProperty("voxBassBoost", 0);
+            }
+            else if (pedal.hasProperty("sunsetVersion"))
+            {
+                // Explicit Sunset -> Cooltron migration. Sunset allowed both
+                // engines at once; the physical VOX selects exactly one. OD2
+                // wins when it was active, and either active engine enables
+                // the global EFFECT switch. The old three-state control maps
+                // directly to OFF / OD2 / BOTH.
+                const bool sunsetOd2WasOn = (bool) pedal.getProperty("sunsetBOn", false);
+                od2Selected = sunsetOd2WasOn;
+                pedalOn = pedalOn || sunsetOd2WasOn;
+                bassBoost = (int) pedal.getProperty("sunsetBright", 1);
+            }
+            else
+            {
+                // Pre-Sunset Mirror Drive sessions used knob1=drive,
+                // knob2=tone and knob3=level. Translate them into OD1.
                 setSlider(pedalUi->knob1, (double) pedal.getProperty("knob3", 0.52));
                 setSlider(pedalUi->knob2, (double) pedal.getProperty("knob1", 0.42));
                 setSlider(pedalUi->knob3, (double) pedal.getProperty("knob2", 0.55));
                 setSlider(pedalUi->knob4, 0.52);
                 setSlider(pedalUi->knob5, 0.36);
                 setSlider(pedalUi->knob6, 0.55);
-                setSlider(pedalUi->knob7, 1.0);
-                setSlider(pedalUi->knob8, 0.0);
-                setSlider(pedalUi->knob9, 0.0);
             }
-            pedalUi->setSunsetBrightMode((int) pedal.getProperty("sunsetBright", 1));
-            pedalUi->setTertiaryFootswitchLatched((bool) pedal.getProperty("sunsetBOn", false));
-            effectsChain.setDriveBEnabled(pedalUi->isTertiaryFootswitchLatched());
+            pedalUi->setCooltronBassBoost(bassBoost);
+            pedalUi->setTertiaryFootswitchLatched(od2Selected);
+            effectsChain.setCooltronOd2Selected(od2Selected);
         }
         if (pedalIndex == 12)
         {
@@ -2864,7 +2891,7 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
                           (double)pedal.getProperty("eqBand" + juce::String(band + 1),
                                                     pedalUi->eqBandSliders[(size_t)band].getValue()));
         }
-        setToggle(pedalUi->onBtn, (bool) pedal.getProperty("on", false));
+        setToggle(pedalUi->onBtn, pedalOn);
     }
 
     closeExternalVst3Editor();
@@ -2995,7 +3022,7 @@ void MainComponent::toggleFxPedalFromMidi(int pedalIndex)
 
     static constexpr const char* pedalNames[kNumFxPedals] = {
         "NOISE GATE", "REMOVED", "COMPRESSOR", "HARMONIZER",
-        "REMOVED", "SUSTAIN CHORDS", "FUZZ", "SUNSET", "CHORUS",
+        "REMOVED", "SUSTAIN CHORDS", "FUZZ", "VOX COOLTRON DUEL OVERDRIVE", "CHORUS",
         "TREMOLO", "TAPE DELAY", "ROOM REVERB", "OUTPUT EQ"
     };
 

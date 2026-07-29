@@ -1513,9 +1513,9 @@ void EffectsChain::reset()
     chordFreezeHoldActive = false;
 
     std::memset(lowPassFilters, 0, sizeof(lowPassFilters));
-    std::memset(sunsetStateA, 0, sizeof(sunsetStateA));
-    std::memset(sunsetStateB, 0, sizeof(sunsetStateB));
-    std::memset(sunsetPreviousInput, 0, sizeof(sunsetPreviousInput));
+    std::memset(cooltronState1, 0, sizeof(cooltronState1));
+    std::memset(cooltronState2, 0, sizeof(cooltronState2));
+    std::memset(cooltronPreviousInput, 0, sizeof(cooltronPreviousInput));
     noiseGateEnv[0] = noiseGateEnv[1] = 0.0f;
     noiseGateGain[0] = noiseGateGain[1] = 1.0f;
     std::memset(chordBodyDamp,   0, sizeof(chordBodyDamp));
@@ -1622,9 +1622,8 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
     const bool drumOn = drumTriggerEnabled.load();
     const bool harmOn = harmonicEnabled.load();
     const bool fzOn   = fuzzEnabled.load();
-    const bool drAOn  = driveAEnabled.load();
-    const bool drBOn  = driveBEnabled.load();
-    const bool drOn   = drAOn || drBOn;
+    const bool cooltronOn = cooltronEnabled.load();
+    const bool cooltronUseOd2 = cooltronOd2Selected.load();
     const bool choOn  = chorusEnabled.load();
     const bool trOn   = tremoloEnabled.load();
     const bool delOn  = delayEnabled.load();
@@ -1699,16 +1698,13 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
     const bool  harmFlexOn = harmonicFlex.load();
     const float fzL     = fuzzLevel.load();
     const float fzT     = fuzzTone.load();
-    const float drADrive = driveA.load();
-    const float drATone  = driveATone.load();
-    const float drALevel = driveALevel.load();
-    const int drAType    = driveAType.load();
-    const float drBDrive = driveB.load();
-    const float drBTone  = driveBTone.load();
-    const float drBLevel = driveBLevel.load();
-    const int drBType    = driveBType.load();
-    const int drRoute    = driveRouting.load();
-    const int drBright   = driveBright.load();
+    const float cooltronGain1Value = cooltronGain1.load();
+    const float cooltronTone1Value = cooltronTone1.load();
+    const float cooltronVolume1Value = cooltronVolume1.load();
+    const float cooltronGain2Value = cooltronGain2.load();
+    const float cooltronTone2Value = cooltronTone2.load();
+    const float cooltronVolume2Value = cooltronVolume2.load();
+    const int cooltronBassBoostPosition = cooltronBassBoost.load();
     const float delM    = delayMix.load();
     const float delTime = delayTimeMs.load();
     const float delFB   = delayFeedback.load();
@@ -1925,37 +1921,33 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
     // Fuzz: factor constante por bloque.
     const float fuzzDriveFactor = fuzz.load() * 40.0f + 1.0f;
 
-    // Sunset dual drive.  The nonlinear core runs at 4x using interpolated
-    // sub-samples; all filter coefficients therefore target the oversampled
-    // rate.  Besides reducing aliasing, this preserves the different attack
-    // feel of the six circuit families when both sides are stacked.
-    constexpr int sunsetOversampling = 4;
-    const float sunsetRate = (float) sampleRate_ * (float) sunsetOversampling;
-    auto sunsetPole = [sunsetRate](float hz)
+    // Cooltron-style dual overdrive. The nonlinear core runs at 4x using
+    // interpolated sub-samples. All coefficients are scalars calculated once
+    // per block; the audio callback performs no allocation or locking.
+    constexpr int cooltronOversampling = 4;
+    const float cooltronRate = (float) sampleRate_ * (float) cooltronOversampling;
+    auto cooltronPole = [cooltronRate](float hz)
     {
-        return 1.0f - std::exp(-juce::MathConstants<float>::twoPi * hz / sunsetRate);
+        return 1.0f - std::exp(-juce::MathConstants<float>::twoPi * hz / cooltronRate);
     };
-    const float sunsetHp80 = sunsetPole(80.0f);
-    const float sunsetHp150 = sunsetPole(150.0f);
-    const float sunsetHp330 = sunsetPole(330.0f);
-    const float sunsetLp650 = sunsetPole(650.0f);
-    const float sunsetLp950 = sunsetPole(950.0f);
-    const float sunsetLp3800 = sunsetPole(3800.0f);
-    const float sunsetToneA = sunsetPole(juce::jmap(drATone, 1350.0f, 14500.0f));
-    const float sunsetToneB = sunsetPole(juce::jmap(drBTone, 1200.0f, 15000.0f));
-    const float sunsetTrebleHp = sunsetPole(juce::jmap(drATone, 90.0f, 2100.0f));
-    const float sunsetGainA = std::pow(10.0f, juce::jmap(drADrive, 5.0f, 38.0f) / 20.0f);
-    const float sunsetGainB = std::pow(10.0f, juce::jmap(drBDrive, 4.0f, 42.0f) / 20.0f);
-    auto sunsetOutputLevel = [](float level)
+    const float cooltronInputHighPass = cooltronPole(68.0f);
+    const float cooltronBassShelf = cooltronPole(230.0f);
+    const float cooltronPresence = cooltronPole(4200.0f);
+    const float cooltronTone1Pole = cooltronPole(juce::jmap(cooltronTone1Value, 1200.0f, 14500.0f));
+    const float cooltronTone2Pole = cooltronPole(juce::jmap(cooltronTone2Value, 1050.0f, 13200.0f));
+    const float cooltronDrive1 = std::pow(10.0f, juce::jmap(cooltronGain1Value, 6.0f, 37.0f) / 20.0f);
+    const float cooltronDrive2 = std::pow(10.0f, juce::jmap(cooltronGain2Value, 7.0f, 43.0f) / 20.0f);
+    auto cooltronOutputLevel = [](float level)
     {
         level = juce::jlimit(0.0f, 1.0f, level);
         if (level <= 0.5f)
             return juce::jmap(level, 0.0f, 0.5f, 0.0f, 1.0f);
         return std::pow(10.0f, juce::jmap(level, 0.5f, 1.0f, 0.0f, 8.0f) / 20.0f);
     };
-    const float sunsetLevelA = sunsetOutputLevel(drALevel);
-    const float sunsetLevelB = sunsetOutputLevel(drBLevel);
-    const float sunsetBrightAmount = drBright == 0 ? -0.20f : (drBright == 2 ? 0.18f : 0.0f);
+    const float cooltronLevel1 = cooltronOutputLevel(cooltronVolume1Value);
+    const float cooltronLevel2 = cooltronOutputLevel(cooltronVolume2Value);
+    const bool cooltronBoostOd1 = cooltronBassBoostPosition == 2;
+    const bool cooltronBoostOd2 = cooltronBassBoostPosition >= 1;
 
     // TimeLine MX delay: every parameter is reduced to scalar state before the sample loop.
     static constexpr float delayTypeRatios[] = {
@@ -3039,9 +3031,9 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
 
             auto processOverdrive = [&]()
             {
-                if (!drOn)
+                if (!cooltronOn)
                 {
-                    sunsetPreviousInput[ch] = sample;
+                    cooltronPreviousInput[ch] = sample;
                     return;
                 }
 
@@ -3051,112 +3043,50 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
                                      : std::tanh(x * negativeGain) / std::tanh(negativeGain);
                 };
 
-                auto processA = [&](float input)
+                auto processOd1 = [&](float input)
                 {
-                    auto* st = sunsetStateA;
-                    float wet = input;
-
-                    if (drAType == 0) // Ge: germanium asymmetry plus drive-dependent clean path.
-                    {
-                        st[0][ch] += sunsetHp80 * (input - st[0][ch]);
-                        st[1][ch] += sunsetLp650 * (input - st[1][ch]);
-                        const float driven = (input - st[0][ch] + st[1][ch] * 0.18f) * sunsetGainA;
-                        const float clipped = shapeAsymmetric(driven, 1.75f, 1.18f);
-                        const float dryBlend = juce::jmap(drADrive, 0.48f, 0.04f);
-                        wet = clipped * (1.0f - dryBlend) + input * dryBlend;
-                    }
-                    else if (drAType == 1) // texas: filtered single-stage soft clipper and mid push.
-                    {
-                        st[0][ch] += sunsetHp330 * (input - st[0][ch]);
-                        const float driven = (input - st[0][ch]) * sunsetGainA * 1.28f;
-                        wet = std::tanh(driven * 1.45f);
-                        st[1][ch] += sunsetLp950 * (wet - st[1][ch]);
-                        wet += st[1][ch] * 0.28f;
-                    }
-                    else // treble: variable low cut and up to roughly 20 dB of clean/JFET boost.
-                    {
-                        st[0][ch] += sunsetTrebleHp * (input - st[0][ch]);
-                        const float tightened = input - st[0][ch];
-                        const float boost = std::pow(10.0f, juce::jmap(drADrive, 0.0f, 20.0f) / 20.0f);
-                        wet = std::tanh(tightened * boost * 0.82f) / 0.82f;
-                    }
-
-                    if (drAType != 2)
-                    {
-                        st[2][ch] += sunsetToneA * (wet - st[2][ch]);
-                        wet = st[2][ch];
-                    }
-                    st[4][ch] += sunsetLp3800 * (wet - st[4][ch]);
-                    wet += (wet - st[4][ch]) * sunsetBrightAmount;
-                    return wet * sunsetLevelA;
-                };
-
-                auto processB = [&](float input)
-                {
-                    auto* st = sunsetStateB;
-                    float wet = input;
-
-                    if (drBType == 0) // 2stage: soft clipping followed by a firmer second stage.
-                    {
-                        st[0][ch] += sunsetHp80 * (input - st[0][ch]);
-                        const float first = std::tanh((input - st[0][ch] * 0.72f)
-                                                    * sunsetGainB * 0.72f);
-                        wet = std::atan(first * (1.7f + drBDrive * 4.4f))
-                            / juce::MathConstants<float>::halfPi * 1.18f;
-                    }
-                    else if (drBType == 1) // hard: high-headroom single-stage hard clipper.
-                    {
-                        st[0][ch] += sunsetHp150 * (input - st[0][ch]);
-                        const float driven = (input - st[0][ch] * 0.82f) * sunsetGainB * 1.18f;
-                        const float threshold = juce::jmap(drBDrive, 0.86f, 0.42f);
-                        wet = juce::jlimit(-threshold, threshold, driven) / threshold;
-                        wet = std::tanh(wet * 1.12f);
-                    }
-                    else // JFET: warm, asymmetric boost that rounds progressively with drive.
-                    {
-                        st[0][ch] += sunsetHp80 * (input - st[0][ch]);
-                        st[1][ch] += sunsetLp650 * (input - st[1][ch]);
-                        const float driven = (input - st[0][ch] * 0.35f + st[1][ch] * 0.16f)
-                                           * (1.0f + drBDrive * 8.5f);
-                        wet = shapeAsymmetric(driven, 1.08f + drBDrive * 0.62f,
-                                                       0.82f + drBDrive * 0.42f);
-                    }
-
-                    st[2][ch] += sunsetToneB * (wet - st[2][ch]);
+                    auto* st = cooltronState1;
+                    st[0][ch] += cooltronInputHighPass * (input - st[0][ch]);
+                    st[1][ch] += cooltronBassShelf * (input - st[1][ch]);
+                    const float bassLift = cooltronBoostOd1 ? st[1][ch] * 0.48f : 0.0f;
+                    const float driven = (input - st[0][ch] * 0.72f + bassLift) * cooltronDrive1;
+                    const float clipped = shapeAsymmetric(driven, 1.38f, 1.06f);
+                    const float cleanBlend = juce::jmap(cooltronGain1Value, 0.30f, 0.035f);
+                    float wet = clipped * (1.0f - cleanBlend) + input * cleanBlend;
+                    st[2][ch] += cooltronTone1Pole * (wet - st[2][ch]);
                     wet = st[2][ch];
-                    st[4][ch] += sunsetLp3800 * (wet - st[4][ch]);
-                    wet += (wet - st[4][ch]) * sunsetBrightAmount;
-                    return wet * sunsetLevelB;
+                    st[3][ch] += cooltronPresence * (wet - st[3][ch]);
+                    wet = st[3][ch] + (wet - st[3][ch]) * 0.12f;
+                    return wet * cooltronLevel1;
                 };
 
-                const float previous = sunsetPreviousInput[ch];
+                auto processOd2 = [&](float input)
+                {
+                    auto* st = cooltronState2;
+                    st[0][ch] += cooltronInputHighPass * (input - st[0][ch]);
+                    st[1][ch] += cooltronBassShelf * (input - st[1][ch]);
+                    const float bassLift = cooltronBoostOd2 ? st[1][ch] * 0.56f : 0.0f;
+                    const float first = shapeAsymmetric(
+                        (input - st[0][ch] * 0.62f + bassLift) * cooltronDrive2 * 0.68f,
+                        1.32f, 1.02f);
+                    float wet = std::atan(first * (1.65f + cooltronGain2Value * 4.75f))
+                              / juce::MathConstants<float>::halfPi * 1.16f;
+                    st[2][ch] += cooltronTone2Pole * (wet - st[2][ch]);
+                    wet = st[2][ch];
+                    st[3][ch] += cooltronPresence * (wet - st[3][ch]);
+                    wet = st[3][ch] + (wet - st[3][ch]) * 0.09f;
+                    return wet * cooltronLevel2;
+                };
+
+                const float previous = cooltronPreviousInput[ch];
                 float result = sample;
-                for (int os = 0; os < sunsetOversampling; ++os)
+                for (int os = 0; os < cooltronOversampling; ++os)
                 {
                     const float sub = previous + (sample - previous)
-                                               * ((float) (os + 1) / (float) sunsetOversampling);
-                    if (drRoute == 0)
-                    {
-                        result = drAOn ? processA(sub) : sub;
-                        if (drBOn)
-                            result = processB(result);
-                    }
-                    else if (drRoute == 1)
-                    {
-                        result = drBOn ? processB(sub) : sub;
-                        if (drAOn)
-                            result = processA(result);
-                    }
-                    else if (drAOn && drBOn)
-                    {
-                        result = (processA(sub) + processB(sub)) * 0.68f;
-                    }
-                    else
-                    {
-                        result = drAOn ? processA(sub) : processB(sub);
-                    }
+                                               * ((float) (os + 1) / (float) cooltronOversampling);
+                    result = cooltronUseOd2 ? processOd2(sub) : processOd1(sub);
                 }
-                sunsetPreviousInput[ch] = sample;
+                cooltronPreviousInput[ch] = sample;
                 sample = juce::jlimit(-2.5f, 2.5f, result);
             };
 
@@ -3416,7 +3346,7 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
             // CORRECCION: antes era std::tanh(sample) SIEMPRE, incluso con todos
             // los efectos apagados. Ahora solo se aplica si hay efectos de ganancia
             // activos que puedan llevar la señal fuera de rango.
-            if (fzOn || drOn || chordFreezeOn)
+            if (fzOn || cooltronOn || chordFreezeOn)
                 sample = std::tanh(sample);
 
             outPtr[ch][s] = sample;

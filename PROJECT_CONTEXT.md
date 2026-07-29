@@ -1,3 +1,84 @@
+# Tarea terminada: réplica VOX Cooltron Duel Overdrive
+
+- Finalizado el 2026-07-29 a partir de `C:\Users\Fernando\Downloads\vox.webp`
+  (2000x2000). El cuerpo visible medido ocupa aproximadamente 2000x1874 px,
+  proporción 1.0672:1; esa proporción se usa en miniatura y vista HD.
+- Se conserva el frente versionado
+  `Assets/Pedals/vox-cooltron-duel-overdrive-face-v1.png`. Rejilla, marco
+  cromado, emblemas, serigrafías, footswitches y siete alojamientos quedan
+  registrados con los controles interactivos. La válvula azul pertenece al
+  frente y permanece iluminada independientemente de EFFECT.
+- ImageGen produjo dos controles rasterizados específicos desde la referencia:
+  `Assets/Hardware/vox-cooltron-large-knob-v1.png` para los cuatro knobs
+  negros alargados y `Assets/Hardware/vox-cooltron-small-knob-v1.png` para los
+  tres knobs estriados con centro metálico. Se generaron aislados sobre chroma
+  verde y se procesaron con `remove_chroma_key.py`; ambos son RGBA 1254x1254,
+  tienen esquinas alpha 0 y no conservan contaminación verde parcial. SHA-256:
+  `E9CCF80856A262AF9C52B87B87A88C962C4DFF7F1CA3E89D7E871CE31A337046`
+  y `D2DC63C1D613F486B834D5CD4DCB0E4788C87EFA2795B47270E7B3F5072E763B`.
+- Los únicos controles visibles e interactivos son GAIN/VOLUME/TONE 1,
+  GAIN/VOLUME/TONE 2, BASS BOOST OFF/OD2/BOTH, EFFECT y OD1/OD2. Se retiraron
+  TYPE 1, TYPE 2, CONFIG, BRIGHT, sus zonas invisibles, tooltips y todo el
+  ruteo exclusivo del Sunset. Los LED rojos representan EFFECT y la selección
+  OD2 respectivamente.
+- Los LED del VOX usan una lente específica rojo rubí, con bisel metálico,
+  gradiente interno y reflejo cálido. La luz queda contenida dentro de la lente:
+  se eliminó el halo exterior y el rojo escarlata saturado del renderer común.
+  El estado apagado conserva una lente granate oscura claramente diferenciada.
+- Los dos footswitches usan `Assets/Hardware/footswitch-metal-v3.png`
+  superpuesto sobre los alojamientos impresos. El área alpha útil del raster
+  mide 383/512 de su lienzo: se dibuja a 12,8% del ancho del cuerpo para que
+  el metal visible ocupe 9,6%, igual que la impresión. Sus centros e hitboxes
+  se alinearon por separado y no invaden `EFFECT`, `OD1 / OD2` ni el emblema.
+- El DSP usa un modelo Cooltron fijo con oversampling 4x y carácter distinto
+  para OD1 y OD2. BASS BOOST es procesamiento real previo a la saturación:
+  OFF no refuerza, OD2 actúa solo sobre OD2 y BOTH actúa sobre ambos canales.
+  Sus estados y coeficientes están preasignados; el callback no asigna memoria
+  ni toma bloqueos.
+- El formato nuevo guarda `voxCooltronVersion=1`, `voxOd2Selected` y
+  `voxBassBoost`. La migración explícita lee sesiones Sunset históricas,
+  convierte `sunsetBOn` a selección OD2 y `sunsetBright` a OFF/OD2/BOTH; las
+  sesiones anteriores al Sunset también se convierten desde el antiguo Mirror.
+  El roundtrip `tmp/vox-sunset-migrated-roundtrip.loopernico` guarda solamente
+  propiedades VOX nuevas para el pedal.
+- El identificador interno histórico `SUNSET` se conserva exclusivamente para
+  mantener el índice 7 y cargar sesiones antiguas; no se muestra en UI, MIDI
+  ni tooltips.
+
+Verificación y despliegue 2026-07-29:
+- `Release | x64` compilado correctamente. El ejecutable pasó 31 pruebas
+  deterministas; cuatro mediciones específicas a 100 Hz verifican OFF, OD2 y
+  BOTH en OD1/OD2. Informe:
+  `tmp/vox-cooltron-switch-overlay-dsp-tests.txt`.
+- Capturas finales revisadas con los switches rasterizados:
+  `tmp/vox-cooltron-switch-overlay-compact.png` (SHA-256
+  `D810C9A9A65AE75043F4BE6C0578A36D3B47E90622E50B16EBE64C71F17A499A`),
+  `tmp/vox-cooltron-switch-overlay-off-hd.png`,
+  `tmp/vox-cooltron-switch-overlay-od1-hd.png` y
+  `tmp/vox-cooltron-switch-overlay-od2-hd.png` (SHA-256
+  `31466801EEA625708E7D3C653AD9D83F988CB676DC5BADB4524121404F19A924`).
+  Comprueban registro y separación de los dos footswitches en miniatura y HD,
+  tanto apagados como activos, además de ambos LED.
+- El acabado final de los LED se comprobó apagado, EFFECT, OD2 y ambos activos
+  en `tmp/vox-cooltron-led-realistic-off-hd.png`,
+  `tmp/vox-cooltron-led-realistic-od1-hd.png`,
+  `tmp/vox-cooltron-led-realistic-both-hd.png` (SHA-256
+  `C38683F5EC8CC4D178295FBEBE541E7112CC66274B7150A4F16228D337B16372`)
+  y `tmp/vox-cooltron-led-realistic-compact.png`.
+- El humo normal del Release y del `Current` desplegado permaneció responsivo
+  y cerró con código 0. `tmp/vox-cooltron-led-realistic-deployed.png` es byte
+  a byte igual a la captura final con ambos LED activos.
+- `Builds/LocalDeployment/Current` SHA-256:
+  `5E607AF3CC46FDDEF5DBA24C1133266AEC51BEB1C44FC72FE5FAC5DD1FD3745A`.
+  `Previous` conserva exactamente el Current anterior, SHA-256
+  `FACC3CB83AF7516445C5E6AEC9DAB76A2DFAC0BDBF63529963C91F34CF5BFD6A`.
+  Hay exactamente dos ejecutables en el despliegue local.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` fue recreado hacia `Current`, con
+  directorio de trabajo e icono correctos. `.loopernico` fue verificado como
+  `Loopernico.Session`, con comando entre comillas y `%1` hacia `Current`.
+
+Próximo paso concreto: ninguno; la réplica queda lista para uso diario.
+
 # Tarea terminada: OLED real del TAPE DELAY / Timeline MX
 
 - Corregido el 2026-07-29 en `Source/LoopernicoWidgets.cpp` y, solamente para

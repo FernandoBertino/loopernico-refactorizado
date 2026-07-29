@@ -215,25 +215,17 @@ public:
     void setFuzzTone(float t) { fuzzTone.store(t); }
     void setFuzzLevel(float l) { fuzzLevel.store(l); }
 
-    // Strymon Sunset: two independently switchable gain engines.  The legacy
-    // setters remain aliases for channel A so old sessions and integrations do
-    // not lose their overdrive settings.
-    void setDriveEnabled(bool b) { driveAEnabled.store(b); }
-    void setDriveAEnabled(bool b) { driveAEnabled.store(b); }
-    void setDriveBEnabled(bool b) { driveBEnabled.store(b); }
-    void setDrive(float d) { driveA.store(juce::jlimit(0.0f, 1.0f, d)); }
-    void setDriveTone(float t) { driveATone.store(juce::jlimit(0.0f, 1.0f, t)); }
-    void setDriveLevel(float l) { driveALevel.store(juce::jlimit(0.0f, 1.0f, l)); }
-    void setDriveA(float d) { setDrive(d); }
-    void setDriveATone(float t) { setDriveTone(t); }
-    void setDriveALevel(float l) { setDriveLevel(l); }
-    void setDriveAType(int type) { driveAType.store(juce::jlimit(0, 2, type)); }
-    void setDriveB(float d) { driveB.store(juce::jlimit(0.0f, 1.0f, d)); }
-    void setDriveBTone(float t) { driveBTone.store(juce::jlimit(0.0f, 1.0f, t)); }
-    void setDriveBLevel(float l) { driveBLevel.store(juce::jlimit(0.0f, 1.0f, l)); }
-    void setDriveBType(int type) { driveBType.store(juce::jlimit(0, 2, type)); }
-    void setDriveRouting(int routing) { driveRouting.store(juce::jlimit(0, 2, routing)); }
-    void setDriveBright(int bright) { driveBright.store(juce::jlimit(0, 2, bright)); }
+    // VOX Cooltron Duel Overdrive: EFFECT is the global bypass and OD1 / OD2
+    // selects one of the two channels. BASS BOOST is OFF, OD2-only or BOTH.
+    void setCooltronEnabled(bool enabled) { cooltronEnabled.store(enabled); }
+    void setCooltronOd2Selected(bool selected) { cooltronOd2Selected.store(selected); }
+    void setCooltronGain1(float value) { cooltronGain1.store(juce::jlimit(0.0f, 1.0f, value)); }
+    void setCooltronVolume1(float value) { cooltronVolume1.store(juce::jlimit(0.0f, 1.0f, value)); }
+    void setCooltronTone1(float value) { cooltronTone1.store(juce::jlimit(0.0f, 1.0f, value)); }
+    void setCooltronGain2(float value) { cooltronGain2.store(juce::jlimit(0.0f, 1.0f, value)); }
+    void setCooltronVolume2(float value) { cooltronVolume2.store(juce::jlimit(0.0f, 1.0f, value)); }
+    void setCooltronTone2(float value) { cooltronTone2.store(juce::jlimit(0.0f, 1.0f, value)); }
+    void setCooltronBassBoost(int position) { cooltronBassBoost.store(juce::jlimit(0, 2, position)); }
 
     void setChorusEnabled(bool b) { chorusEnabled.store(b); }
     void setChorusMix(float m) { chorusMix.store(m); }
@@ -488,24 +480,21 @@ private:
     std::atomic<float> fuzzTone{ 0.4f };
     std::atomic<float> fuzzLevel{ 0.7f };
 
-    std::atomic<bool> driveAEnabled{ false };
-    std::atomic<bool> driveBEnabled{ false };
-    std::atomic<float> driveA{ 0.42f };
-    std::atomic<float> driveATone{ 0.55f };
-    std::atomic<float> driveALevel{ 0.52f };
-    std::atomic<int> driveAType{ 1 };       // Ge, texas, treble
-    std::atomic<float> driveB{ 0.36f };
-    std::atomic<float> driveBTone{ 0.55f };
-    std::atomic<float> driveBLevel{ 0.52f };
-    std::atomic<int> driveBType{ 0 };       // 2stage, hard, JFET
-    std::atomic<int> driveRouting{ 0 };     // A->B, B->A, parallel
-    std::atomic<int> driveBright{ 1 };      // minus, neutral, plus
+    std::atomic<bool> cooltronEnabled{ false };
+    std::atomic<bool> cooltronOd2Selected{ false };
+    std::atomic<float> cooltronGain1{ 0.42f };
+    std::atomic<float> cooltronTone1{ 0.55f };
+    std::atomic<float> cooltronVolume1{ 0.52f };
+    std::atomic<float> cooltronGain2{ 0.36f };
+    std::atomic<float> cooltronTone2{ 0.55f };
+    std::atomic<float> cooltronVolume2{ 0.52f };
+    std::atomic<int> cooltronBassBoost{ 0 }; // OFF, OD2, BOTH
 
-    // Four-times oversampled nonlinear state.  Each engine owns its filters so
-    // routing changes do not cause the other engine's tone memory to jump.
-    float sunsetStateA[6][2]{};
-    float sunsetStateB[6][2]{};
-    float sunsetPreviousInput[2]{};
+    // Four-times oversampled nonlinear and filter state. Both channels keep
+    // their state warm so OD1 / OD2 switching does not allocate or lock.
+    float cooltronState1[6][2]{};
+    float cooltronState2[6][2]{};
+    float cooltronPreviousInput[2]{};
 
     std::atomic<bool> chorusEnabled{ false };
     std::atomic<float> chorusMix{ 0.5f };

@@ -150,6 +150,56 @@ public:
             return;
         }
 
+        const bool voxCooltronLargeKnob = slider.getComponentID() == "voxCooltronLargeKnob";
+        const bool voxCooltronSmallKnob = slider.getComponentID() == "voxCooltronSmallKnob";
+        if (voxCooltronLargeKnob || voxCooltronSmallKnob)
+        {
+            static const auto largeRaster = []
+            {
+                const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
+                const juce::File candidates[] = {
+                    sourceDirectory.getSiblingFile("Assets").getChildFile("Hardware/vox-cooltron-large-knob-v1.png"),
+                    juce::File::getCurrentWorkingDirectory().getChildFile("Assets/Hardware/vox-cooltron-large-knob-v1.png"),
+                    juce::File::getCurrentWorkingDirectory()
+                        .getChildFile("Loopernico Refactorizado/Assets/Hardware/vox-cooltron-large-knob-v1.png")
+                };
+                for (const auto& file : candidates)
+                    if (file.existsAsFile())
+                        if (auto image = juce::ImageFileFormat::loadFrom(file); image.isValid())
+                            return image;
+                return juce::Image{};
+            }();
+            static const auto smallRaster = []
+            {
+                const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
+                const juce::File candidates[] = {
+                    sourceDirectory.getSiblingFile("Assets").getChildFile("Hardware/vox-cooltron-small-knob-v1.png"),
+                    juce::File::getCurrentWorkingDirectory().getChildFile("Assets/Hardware/vox-cooltron-small-knob-v1.png"),
+                    juce::File::getCurrentWorkingDirectory()
+                        .getChildFile("Loopernico Refactorizado/Assets/Hardware/vox-cooltron-small-knob-v1.png")
+                };
+                for (const auto& file : candidates)
+                    if (file.existsAsFile())
+                        if (auto image = juce::ImageFileFormat::loadFrom(file); image.isValid())
+                            return image;
+                return juce::Image{};
+            }();
+
+            const auto& raster = voxCooltronLargeKnob ? largeRaster : smallRaster;
+            if (!raster.isValid())
+                return;
+
+            const float angle = startAngle + pos * (endAngle - startAngle);
+            const float imageScale = voxCooltronLargeKnob ? 1.10f : 1.05f;
+            const auto target = bounds.withSizeKeepingCentre(bounds.getWidth() * imageScale,
+                                                              bounds.getHeight() * imageScale);
+            juce::Graphics::ScopedSaveState state(g);
+            g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+            g.addTransform(juce::AffineTransform::rotation(angle, centre.x, centre.y));
+            g.drawImage(raster, target);
+            return;
+        }
+
         if (slider.getComponentID() != "bossNoiseKnob")
         {
             // Broad drop shadow from the physical height of the knob. The darker,
@@ -464,64 +514,6 @@ public:
             g.setColour(juce::Colours::white.withAlpha(0.28f));
             g.fillEllipse(centre.x - r * 0.50f, centre.y - r * 0.66f,
                           r * 0.78f, r * 0.24f);
-            return;
-        }
-
-        if (slider.getComponentID() == "sunsetToggle")
-        {
-            const float travel = radius * 0.72f;
-            const float leverY = centre.y + juce::jmap(pos, -travel, travel);
-            const float baseR = radius * 0.62f;
-            g.setColour(juce::Colours::black.withAlpha(0.50f));
-            g.fillEllipse(centre.x - baseR - 1.0f, centre.y - baseR + 1.5f,
-                          baseR * 2.0f + 2.0f, baseR * 2.0f + 2.0f);
-            juce::ColourGradient metal(juce::Colour(0xfff0eee8), centre.x - baseR, centre.y - baseR,
-                                       juce::Colour(0xff565653), centre.x + baseR, centre.y + baseR, true);
-            g.setGradientFill(metal);
-            g.fillEllipse(centre.x - baseR, centre.y - baseR, baseR * 2.0f, baseR * 2.0f);
-            g.setColour(juce::Colour(0xff171717));
-            g.fillEllipse(centre.x - baseR * 0.48f, centre.y - baseR * 0.48f,
-                          baseR * 0.96f, baseR * 0.96f);
-            g.setColour(juce::Colour(0xffc7c4bb));
-            g.drawLine(centre.x, centre.y, centre.x, leverY, juce::jmax(2.0f, radius * 0.22f));
-            g.setColour(juce::Colour(0xff2b211f));
-            g.fillEllipse(centre.x - radius * 0.25f, leverY - radius * 0.25f,
-                          radius * 0.50f, radius * 0.50f);
-            g.setColour(juce::Colours::white.withAlpha(0.34f));
-            g.fillEllipse(centre.x - radius * 0.15f, leverY - radius * 0.18f,
-                          radius * 0.22f, radius * 0.13f);
-            return;
-        }
-
-        if (slider.getComponentID() == "sunsetKnob")
-        {
-            const float r = radius * 0.92f;
-            const float angle = startAngle + pos * (endAngle - startAngle);
-            g.setColour(juce::Colours::black.withAlpha(0.48f));
-            g.fillEllipse(centre.x - r - 1.5f, centre.y - r + 2.5f,
-                          r * 2.0f + 3.0f, r * 2.0f + 3.0f);
-            g.setColour(juce::Colour(0xff090909));
-            g.fillEllipse(centre.x - r, centre.y - r, r * 2.0f, r * 2.0f);
-            for (int i = 0; i < 20; ++i)
-            {
-                const float a = juce::MathConstants<float>::twoPi * (float)i / 20.0f;
-                const auto p1 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * (r * 0.82f);
-                const auto p2 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * r;
-                g.setColour(juce::Colours::white.withAlpha(0.10f));
-                g.drawLine({ p1, p2 }, 1.0f);
-            }
-            const float capR = r * 0.67f;
-            juce::ColourGradient cap(juce::Colour(0xfff2f1ed), centre.x - capR * 0.55f, centre.y - capR * 0.65f,
-                                     juce::Colour(0xff5d5d5b), centre.x + capR * 0.60f, centre.y + capR * 0.68f, true);
-            cap.addColour(0.48, juce::Colour(0xffc8c8c5));
-            g.setGradientFill(cap);
-            g.fillEllipse(centre.x - capR, centre.y - capR, capR * 2.0f, capR * 2.0f);
-            g.setColour(juce::Colours::white.withAlpha(0.30f));
-            g.drawEllipse(centre.x - capR, centre.y - capR, capR * 2.0f, capR * 2.0f, 0.9f);
-            const auto markerStart = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.22f);
-            const auto markerEnd = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.78f);
-            g.setColour(juce::Colours::white.withAlpha(0.96f));
-            g.drawLine({ markerStart, markerEnd }, 2.2f);
             return;
         }
 

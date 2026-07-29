@@ -216,18 +216,19 @@ public:
         tertiaryFootswitchLatched = latched;
         repaint();
     }
-    int getSunsetBrightMode() const noexcept { return sunsetBrightMode; }
-    void setSunsetBrightMode(int mode)
+    int getCooltronBassBoost() const noexcept { return cooltronBassBoostPosition; }
+    void setCooltronBassBoost(int position)
     {
-        const int next = juce::jlimit(0, 2, mode);
-        if (sunsetBrightMode == next)
+        const int next = juce::jlimit(0, 2, position);
+        if (cooltronBassBoostPosition == next)
             return;
-        sunsetBrightMode = next;
-        if (onSunsetBrightChange)
-            onSunsetBrightChange(next);
+        cooltronBassBoostPosition = next;
+        knob7.setValue((double) next, juce::dontSendNotification);
+        if (onCooltronBassBoostChange)
+            onCooltronBassBoostChange(next);
         repaint();
     }
-    std::function<void(int)> onSunsetBrightChange;
+    std::function<void(int)> onCooltronBassBoostChange;
     std::function<void(FXPedalComponent&, const juce::MouseEvent&)> onDragStart;
     std::function<void(FXPedalComponent&, const juce::MouseEvent&)> onDragMove;
     std::function<void(FXPedalComponent&, const juce::MouseEvent&)> onDragEnd;
@@ -270,8 +271,9 @@ public:
         if (pedalName == "SUNSET")
         {
             auto body = getLocalBounds().toFloat().reduced(3.0f);
-            const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth());
-            const float bodyWidth = juce::jmin(body.getWidth(), bodyHeight);
+            constexpr float voxReferenceAspect = 2000.0f / 1874.0f;
+            const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / voxReferenceAspect);
+            const float bodyWidth = juce::jmin(body.getWidth(), bodyHeight * voxReferenceAspect);
             body = { body.getCentreX() - bodyWidth * 0.5f,
                      body.getCentreY() - bodyHeight * 0.5f,
                      bodyWidth, bodyHeight };
@@ -282,14 +284,16 @@ public:
                 const float dy = mouse.y - centre.y;
                 return dx * dx + dy * dy <= radius * radius;
             };
-            const float footY = body.getY() + body.getHeight() * 0.837f;
-            if (inside({ body.getX() + body.getWidth() * 0.208f, footY }, 28.0f))
+            const float footY = body.getY() + body.getHeight() * 0.778f;
+            // Match the printed switch housing without extending into either label.
+            const float footHitRadius = body.getWidth() * 0.050f;
+            if (inside({ body.getX() + body.getWidth() * 0.248f, footY }, footHitRadius))
             {
                 onBtn.setToggleState(!onBtn.getToggleState(), juce::sendNotification);
                 repaint();
                 return;
             }
-            if (inside({ body.getX() + body.getWidth() * 0.805f, footY }, 28.0f))
+            if (inside({ body.getX() + body.getWidth() * 0.742f, footY }, footHitRadius))
             {
                 tertiaryFootswitchLatched = !tertiaryFootswitchLatched;
                 if (onTertiaryFootswitch)
@@ -298,15 +302,11 @@ public:
                 return;
             }
 
-            // The physical CONFIG and BRIGHT switches live on the rear panel.
-            // Their slim hit areas sit on the rolled top lip in the virtual unit.
-            if (mouse.y <= body.getY() + body.getHeight() * 0.075f)
+            const auto bassBoost = juce::Point<float>(body.getCentreX(),
+                                                       body.getY() + body.getHeight() * 0.492f);
+            if (inside(bassBoost, body.getWidth() * 0.055f))
             {
-                if (mouse.x < body.getCentreX())
-                    knob9.setValue((juce::roundToInt(knob9.getValue()) + 1) % 3,
-                                   juce::sendNotificationSync);
-                else
-                    setSunsetBrightMode((sunsetBrightMode + 1) % 3);
+                setCooltronBassBoost((cooltronBassBoostPosition + 1) % 3);
                 repaint();
                 return;
             }
@@ -581,7 +581,7 @@ private:
     bool dragHintVisible = false;
     bool secondaryFootswitchDown = false;
     bool tertiaryFootswitchLatched = false;
-    int sunsetBrightMode = 1;
+    int cooltronBassBoostPosition = 0;
     juce::String infoMain, infoSub;
     std::function<juce::String(double)> knobValueFormatters[9];
 

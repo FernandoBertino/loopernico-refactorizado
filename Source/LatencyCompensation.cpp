@@ -1,7 +1,9 @@
 #include "LatencyCompensation.h"
 #include "DrumMidiMap.h"
 #include "DrumMidiPattern.h"
+#include "EffectsChain.h"
 
+#include <cmath>
 #include <limits>
 #include <vector>
 
@@ -156,10 +158,69 @@ namespace LoopernicoLatency
         expect("patron limpia pasos fuera al reducir", 0,
                pattern.getVelocity(LoopernicoMidi::DrumLane::Kick, 32));
 
+        EffectsChain cooltron;
+        cooltron.prepare(48000.0, 256);
+        cooltron.setCooltronEnabled(true);
+        cooltron.setCooltronGain1(0.5f);
+        cooltron.setCooltronVolume1(0.5f);
+        cooltron.setCooltronTone1(0.5f);
+        cooltron.setCooltronGain2(0.5f);
+        cooltron.setCooltronVolume2(0.5f);
+        cooltron.setCooltronTone2(0.5f);
+        auto measureCooltronLowFrequency = [&cooltron](bool od2Selected, int bassBoost)
+        {
+            constexpr int blockSize = 256;
+            constexpr int blockCount = 16;
+            constexpr double sampleRate = 48000.0;
+            constexpr double frequency = 100.0;
+            juce::AudioBuffer<float> audio(2, blockSize);
+            juce::AudioBuffer<float> rhythm(2, blockSize);
+            cooltron.reset();
+            cooltron.setCooltronOd2Selected(od2Selected);
+            cooltron.setCooltronBassBoost(bassBoost);
+            double sumSquares = 0.0;
+            int measuredSamples = 0;
+            for (int block = 0; block < blockCount; ++block)
+            {
+                for (int sample = 0; sample < blockSize; ++sample)
+                {
+                    const int absoluteSample = block * blockSize + sample;
+                    const float input = 0.035f * std::sin(
+                        juce::MathConstants<double>::twoPi * frequency
+                        * (double) absoluteSample / sampleRate);
+                    audio.setSample(0, sample, input);
+                    audio.setSample(1, sample, input);
+                }
+                rhythm.clear();
+                cooltron.processBlock(audio, rhythm, 0, blockSize);
+                if (block >= blockCount / 2)
+                    for (int sample = 0; sample < blockSize; ++sample)
+                    {
+                        const double value = audio.getSample(0, sample);
+                        sumSquares += value * value;
+                        ++measuredSamples;
+                    }
+            }
+            return std::sqrt(sumSquares / (double) juce::jmax(1, measuredSamples));
+        };
+
+        const double od1Off = measureCooltronLowFrequency(false, 0);
+        const double od1Od2Only = measureCooltronLowFrequency(false, 1);
+        const double od1Both = measureCooltronLowFrequency(false, 2);
+        const double od2Off = measureCooltronLowFrequency(true, 0);
+        const double od2Only = measureCooltronLowFrequency(true, 1);
+        const double od2Both = measureCooltronLowFrequency(true, 2);
+        expect("BASS BOOST OD2 no altera OD1", 1,
+               std::abs(od1Off - od1Od2Only) < 1.0e-6 ? 1 : 0);
+        expect("BASS BOOST BOTH refuerza OD1", 1, od1Both > od1Off * 1.05 ? 1 : 0);
+        expect("BASS BOOST OD2 refuerza OD2", 1, od2Only > od2Off * 1.05 ? 1 : 0);
+        expect("BASS BOOST BOTH conserva refuerzo OD2", 1,
+               std::abs(od2Only - od2Both) < 1.0e-6 ? 1 : 0);
+
         if (failures.empty())
         {
-            report = "OK: 27 pruebas deterministas de compensacion, buses y patron MIDI pasaron; "
-                     "el rhythm entra al looper sin duplicarse en monitoreo.";
+            report = "OK: 31 pruebas deterministas pasaron, incluidas las tres posiciones "
+                     "DSP de BASS BOOST en OD1 y OD2.";
             return true;
         }
 

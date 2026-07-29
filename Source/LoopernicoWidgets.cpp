@@ -729,11 +729,41 @@ void drawH90LedLens(juce::Graphics& g, float cx, float cy, float bodyWidth,
                   lensR * 0.66f, lensR * 0.38f);
 }
 
+void drawCooltronLedLens(juce::Graphics& g, float cx, float cy, float r, bool on)
+{
+    // The real Cooltron uses a small, deep-red lens. Keep the light contained
+    // inside its bezel: no synthetic exterior halo or saturated scarlet disc.
+    g.setColour(juce::Colours::black.withAlpha(0.52f));
+    g.fillEllipse(cx - r - 1.6f, cy - r - 0.8f, r * 2.0f + 3.2f, r * 2.0f + 3.2f);
+
+    juce::ColourGradient bezel(juce::Colour(0xff887c76), cx - r * 0.72f, cy - r * 0.78f,
+                                juce::Colour(0xff211b1a), cx + r * 0.72f, cy + r * 0.78f, true);
+    bezel.addColour(0.55, juce::Colour(0xff514744));
+    g.setGradientFill(bezel);
+    g.fillEllipse(cx - r - 0.9f, cy - r - 0.9f, r * 2.0f + 1.8f, r * 2.0f + 1.8f);
+
+    const auto lensTop = on ? juce::Colour(0xffd05a50) : juce::Colour(0xff50181a);
+    const auto lensMid = on ? juce::Colour(0xffa51f24) : juce::Colour(0xff321012);
+    const auto lensBottom = on ? juce::Colour(0xff5b080d) : juce::Colour(0xff160506);
+    juce::ColourGradient lens(lensTop, cx - r * 0.38f, cy - r * 0.62f,
+                              lensBottom, cx + r * 0.42f, cy + r * 0.58f, true);
+    lens.addColour(0.48, lensMid);
+    g.setGradientFill(lens);
+    g.fillEllipse(cx - r, cy - r, r * 2.0f, r * 2.0f);
+
+    g.setColour(juce::Colour(0xff160507).withAlpha(0.72f));
+    g.drawEllipse(cx - r, cy - r, r * 2.0f, r * 2.0f, 0.72f);
+    g.setColour(juce::Colour(0xffffe1d4).withAlpha(on ? 0.34f : 0.13f));
+    g.fillEllipse(cx - r * 0.48f, cy - r * 0.62f, r * 0.56f, r * 0.28f);
+    g.setColour(juce::Colour(0xffffb2a4).withAlpha(on ? 0.12f : 0.03f));
+    g.fillEllipse(cx - r * 0.64f, cy - r * 0.70f, r * 1.28f, r * 0.64f);
+}
+
 const juce::Image& getPedalEnamelTexture(const juce::String& name)
 {
     static const auto noiseGate = loadPedalTexture("Pedals/boss-ns2-noise-suppressor-face-v8.png");
     static const auto pampaFuzz = loadPedalTexture("Pedals/pampa-fuzz-face-v8.png");
-    static const auto sunset = loadPedalTexture("Pedals/strymon-sunset-face-v2.png");
+    static const auto voxCooltron = loadPedalTexture("Pedals/vox-cooltron-duel-overdrive-face-v1.png");
     static const auto dedaloJet = loadPedalTexture("Pedals/dedalo-jet-compressor-face-v4.png");
     static const auto dedaloTres = loadPedalTexture("Pedals/dedalo-tres-tremolo-face-v1.png");
     static const auto harmonizer = loadPedalTexture("Pedals/eventide-h90-harmonizer-face-v2.png");
@@ -756,7 +786,7 @@ const juce::Image& getPedalEnamelTexture(const juce::String& name)
     if (name == "FUZZ")
         return pampaFuzz;
     if (name == "SUNSET")
-        return sunset;
+        return voxCooltron;
     if (name == "COMPRESSOR")
         return dedaloJet;
     if (name == "TREMOLO")
@@ -921,7 +951,7 @@ void FXPedalComponent::paint(juce::Graphics& g)
     const float hardwareScale = getPedalHardwareScale(*this);
     auto b = getLocalBounds().toFloat().reduced(3.0f);
     const bool wideFuzzArtwork = pedalName == "FUZZ";
-    const bool sunsetArtwork = pedalName == "SUNSET";
+    const bool voxCooltronArtwork = pedalName == "SUNSET"; // Historical session ID.
     const bool dedaloJetArtwork = pedalName == "COMPRESSOR";
     const bool dedaloTresArtwork = pedalName == "TREMOLO";
     const bool harmonizerArtwork = pedalName == "HARMONIZER";
@@ -934,13 +964,13 @@ void FXPedalComponent::paint(juce::Graphics& g)
     const bool timeLineArtwork = pedalName == "TAPE DELAY";
     const bool smallCloneArtwork = pedalName == "CHORUS";
     const bool bossNoiseArtwork = pedalName.containsIgnoreCase("NOISE GATE");
-    const bool customArtwork = wideFuzzArtwork || sunsetArtwork || dedaloJetArtwork || dedaloTresArtwork || harmonizerArtwork
+    const bool customArtwork = wideFuzzArtwork || voxCooltronArtwork || dedaloJetArtwork || dedaloTresArtwork || harmonizerArtwork
                             || sustainChordsArtwork || bossNoiseArtwork
                             || beatBuddyArtwork || modelHostArtwork || tenBandEqArtwork || bigSkyArtwork || timeLineArtwork
                             || smallCloneArtwork;
     if (customArtwork)
     {
-        const float aspect = sunsetArtwork ? 1.0f
+        const float aspect = voxCooltronArtwork ? (2000.0f / 1874.0f)
                            : (smallCloneArtwork ? (3.38f / 5.25f)
                            : (wideFuzzArtwork ? (977.0f / 1610.0f)
                            : (timeLineArtwork ? kTimelineFaceAspect
@@ -1086,28 +1116,15 @@ void FXPedalComponent::paint(juce::Graphics& g)
         }
     }
 
-    if (sunsetArtwork)
+    if (voxCooltronArtwork)
     {
         const bool aOn = onBtn.getToggleState();
         const bool bOn = tertiaryFootswitchLatched;
-        const auto redLed = juce::Colour(0xffff755f);
-        drawLedLens(g, b.getX() + b.getWidth() * 0.208f,
-                    b.getY() + b.getHeight() * 0.694f, 3.5f, redLed, aOn);
-        drawLedLens(g, b.getX() + b.getWidth() * 0.805f,
-                    b.getY() + b.getHeight() * 0.694f, 3.5f, redLed, bOn);
+        drawCooltronLedLens(g, b.getX() + b.getWidth() * 0.248f,
+                            b.getY() + b.getHeight() * 0.682f, 3.5f * hardwareScale, aOn);
+        drawCooltronLedLens(g, b.getX() + b.getWidth() * 0.742f,
+                            b.getY() + b.getHeight() * 0.682f, 3.5f * hardwareScale, bOn);
 
-        static const juce::StringArray routes { "A>B", "B>A", "A+B" };
-        static const juce::StringArray bright { "-", "N", "+" };
-        const int route = juce::jlimit(0, 2, juce::roundToInt(knob9.getValue()));
-        const int brightness = juce::jlimit(0, 2, sunsetBrightMode);
-        g.setColour(juce::Colours::white.withAlpha(0.88f));
-        g.setFont(juce::Font(juce::FontOptions(5.8f).withStyle("Bold")));
-        g.drawText("CONFIG " + routes[route],
-                   juce::Rectangle<float>(b.getX() + b.getWidth() * 0.18f, b.getY() + 3.0f,
-                                          b.getWidth() * 0.28f, 9.0f), juce::Justification::centred);
-        g.drawText("BRIGHT " + bright[brightness],
-                   juce::Rectangle<float>(b.getX() + b.getWidth() * 0.54f, b.getY() + 3.0f,
-                                          b.getWidth() * 0.28f, 9.0f), juce::Justification::centred);
     }
 
     if (beatBuddyArtwork)
@@ -1502,7 +1519,7 @@ void FXPedalComponent::paint(juce::Graphics& g)
     if (!beatBuddyArtwork && !bossNoiseArtwork && !dedaloTresArtwork && !bigSkyArtwork && !smallCloneArtwork
         && !wideFuzzArtwork
         && !plusPedalArtwork
-        && !harmonizerArtwork && !sunsetArtwork && !timeLineArtwork)
+        && !harmonizerArtwork && !voxCooltronArtwork && !timeLineArtwork)
     {
     float ledCX = customArtwork ? (dedaloJetArtwork ? b.getX() + b.getWidth() * 0.156f
                                                      : ((harmonizerArtwork || sustainChordsArtwork) ? b.getCentreX() - 31.0f
@@ -1565,10 +1582,14 @@ void FXPedalComponent::paint(juce::Graphics& g)
             drawAt(0.500f, 0.805f, size, secondaryFootswitchDown);
             drawAt(0.795f, 0.805f, size, false);
         }
-        else if (sunsetArtwork)
+        else if (voxCooltronArtwork)
         {
-            drawAt(0.208f, 0.837f, 40.0f * hardwareScale, on);
-            drawAt(0.805f, 0.837f, 40.0f * hardwareScale, tertiaryFootswitchLatched);
+            // The raster has transparent padding: 383 of its 512 pixels contain
+            // the metal housing. A 12.8% target therefore covers the 9.6%-wide
+            // switches printed in the VOX face without covering either label.
+            const float size = b.getWidth() * 0.128f;
+            drawAt(0.248f, 0.778f, size, on);
+            drawAt(0.742f, 0.778f, size, tertiaryFootswitchLatched);
         }
         else if (dedaloTresArtwork)
         {
@@ -1820,24 +1841,32 @@ void FXPedalComponent::resized()
 
     if (pedalName == "SUNSET")
     {
-        const int bodySize = juce::jmin(getWidth() - 6, getHeight() - 6);
-        const int bodyLeft = (getWidth() - bodySize) / 2;
-        const int bodyTop = (getHeight() - bodySize) / 2;
-        auto place = [bodyLeft, bodyTop, bodySize](juce::Slider& knob, float x, float y, int size)
+        constexpr float voxReferenceAspect = 2000.0f / 1874.0f;
+        const int bodyHeight = juce::jmin(getHeight() - 6,
+                                          juce::roundToInt((float) (getWidth() - 6) / voxReferenceAspect));
+        const int bodyWidth = juce::jmin(getWidth() - 6,
+                                         juce::roundToInt((float) bodyHeight * voxReferenceAspect));
+        const int bodyLeft = (getWidth() - bodyWidth) / 2;
+        const int bodyTop = (getHeight() - bodyHeight) / 2;
+        auto place = [bodyLeft, bodyTop, bodyWidth, bodyHeight](juce::Slider& knob,
+                                                               float x, float y, int size)
         {
-            const int cx = bodyLeft + juce::roundToInt((float) bodySize * x);
-            const int cy = bodyTop + juce::roundToInt((float) bodySize * y);
+            const int cx = bodyLeft + juce::roundToInt((float) bodyWidth * x);
+            const int cy = bodyTop + juce::roundToInt((float) bodyHeight * y);
             knob.setBounds(cx - size / 2, cy - size / 2, size, size);
         };
 
-        place(knob1, 0.175f, 0.167f, scaled(48)); // LEVEL A
-        place(knob2, 0.175f, 0.417f, scaled(48)); // DRIVE A
-        place(knob3, 0.385f, 0.356f, scaled(48)); // TONE A
-        place(knob4, 0.829f, 0.167f, scaled(48)); // LEVEL B
-        place(knob5, 0.829f, 0.417f, scaled(48)); // DRIVE B
-        place(knob6, 0.617f, 0.356f, scaled(48)); // TONE B
-        place(knob7, 0.443f, 0.169f, scaled(28)); // TYPE A
-        place(knob8, 0.582f, 0.169f, scaled(28)); // TYPE B
+        const int largeKnobSize = juce::roundToInt((float) bodyWidth * 0.165f);
+        const int smallKnobSize = juce::roundToInt((float) bodyWidth * 0.154f);
+        place(knob2, 0.164f, 0.315f, largeKnobSize); // GAIN 1
+        place(knob1, 0.384f, 0.315f, largeKnobSize); // VOLUME 1
+        place(knob5, 0.614f, 0.315f, largeKnobSize); // GAIN 2
+        place(knob4, 0.837f, 0.315f, largeKnobSize); // VOLUME 2
+        place(knob3, 0.272f, 0.492f, smallKnobSize); // TONE 1
+        place(knob7, 0.500f, 0.492f, smallKnobSize); // BASS BOOST
+        place(knob6, 0.729f, 0.492f, smallKnobSize); // TONE 2
+
+        knob8.setBounds(0, 0, 0, 0);
         knob9.setBounds(0, 0, 0, 0);
         return;
     }
