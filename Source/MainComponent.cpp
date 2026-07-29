@@ -1294,7 +1294,7 @@ void MainComponent::setupFXPedals()
         { "NOISE GATE",     0xffd8d7d1, "THRESH",  "ATTACK",  "REL"   },
         { "REMOVED",        0xff9a2b1f, "",        "",        ""      },
         { "COMPRESSOR",     0xffb8880a, "THRESH",  "RATIO",   "LEVEL" },
-        { "HARMONIZER",     0xfff1f1f1, "SHIFT A", "SHIFT B", "MIX"   },
+        { "HARMONIZER",     0xfff1f1f1, "VOL",     "BLEND",   "SWEEP" },
         { "REMOVED",        0xff9a2b1f, "",        "",        ""      },
         { "SUSTAIN CHORDS", 0xff486d89, "LEVEL",   "RISE",    "DECAY" },
         { "FUZZ",           0xff0f3a88, "FUZZ",    "TONE",    "LEVEL" },
@@ -1353,6 +1353,8 @@ void MainComponent::setupFXPedals()
             d.name, juce::Colour(d.col), d.l1, d.l2, d.l3);
         if (i == EffectsChain::SustainChordsPedal)
             fxPedals[i]->setDisplayName("Gamechanger Audio Plus Pedal II");
+        if (i == EffectsChain::HarmonizerPedal)
+            fxPedals[i]->setDisplayName("Electro-Harmonix Pico Pitch Fork");
         fxPedals[i]->onDragStart = [this](FXPedalComponent& pedal, const juce::MouseEvent& e)
         {
             beginFxPedalDrag(pedal, e);
@@ -1425,50 +1427,45 @@ void MainComponent::setupFXPedals()
     fxPedals[2]->knob5.onValueChange=[this](){ effectsChain.setCompTail((float)fxPedals[2]->knob5.getValue()); };
     fxPedals[2]->knob6.onValueChange=[this](){ effectsChain.setCompEq((float)fxPedals[2]->knob6.getValue()); };
 
-    fxPedals[3]->configureExtendedKnobs("SHIFT A", "SHIFT B", "MIX", "DELAY", "FEEDBACK", "");
-    for (auto* knob : { &fxPedals[3]->knob1, &fxPedals[3]->knob2, &fxPedals[3]->knob3,
-                        &fxPedals[3]->knob4, &fxPedals[3]->knob5 })
-        knob->setComponentID("eventideH90Knob");
-    fxPedals[3]->knob1.setRange(-24.0, 24.0, 1.0); fxPedals[3]->knob1.setValue(7.0);
-    fxPedals[3]->knob2.setRange(-24.0, 24.0, 1.0); fxPedals[3]->knob2.setValue(12.0);
-    cfg(fxPedals[3]->knob3, 0.0, 1.0, 0.40);
-    cfg(fxPedals[3]->knob4, 0.0, 1000.0, 25.0);
-    cfg(fxPedals[3]->knob5, 0.0, 0.92, 0.0);
+    // The historical HARMONIZER slot now models the compact EHX Pico Pitch
+    // Fork. Hidden knobs 5 and 6 persist MODE and LATCH/MOMENTARY without
+    // changing the generic session layout or the pedal's historical index.
+    fxPedals[3]->configureExtendedKnobs("VOL", "BLEND", "SWEEP", "SHIFT", "", "");
+    for (auto* knob : { &fxPedals[3]->knob1, &fxPedals[3]->knob2,
+                        &fxPedals[3]->knob3, &fxPedals[3]->knob4 })
+        knob->setComponentID("ehxPicoKnob");
+    cfg(fxPedals[3]->knob1, 0.0, 1.0, 0.50);
+    cfg(fxPedals[3]->knob2, 0.0, 1.0, 0.40);
+    cfg(fxPedals[3]->knob3, 0.0, 4.0, 0.0);
+    fxPedals[3]->knob4.setRange(0.0, 9.0, 1.0); fxPedals[3]->knob4.setValue(7.0);
+    fxPedals[3]->knob5.setRange(0.0, 2.0, 1.0); fxPedals[3]->knob5.setValue(2.0);
+    fxPedals[3]->knob6.setRange(0.0, 1.0, 1.0); fxPedals[3]->knob6.setValue(0.0);
+    fxPedals[3]->knob5.setVisible(false);
     fxPedals[3]->knob6.setVisible(false);
     fxPedals[3]->knob7.setVisible(false);
     fxPedals[3]->knob8.setVisible(false);
     fxPedals[3]->knob9.setVisible(false);
     fxPedals[3]->onBtn.onClick=[this](){ effectsChain.setHarmonicEnabled(fxPedals[3]->onBtn.getToggleState()); };
-    fxPedals[3]->knob1.onValueChange=[this](){ effectsChain.setHarmonicInterval((int)fxPedals[3]->knob1.getValue()); fxPedals[3]->repaint(); };
-    fxPedals[3]->knob2.onValueChange=[this](){ effectsChain.setHarmonicIntervalB((int)fxPedals[3]->knob2.getValue()); fxPedals[3]->repaint(); };
-    fxPedals[3]->knob3.onValueChange=[this](){ effectsChain.setHarmonicMix((float)fxPedals[3]->knob3.getValue()); fxPedals[3]->repaint(); };
-    fxPedals[3]->knob4.onValueChange=[this](){ effectsChain.setHarmonicDelayMs((float)fxPedals[3]->knob4.getValue()); fxPedals[3]->repaint(); };
-    fxPedals[3]->knob5.onValueChange=[this](){ effectsChain.setHarmonicFeedback((float)fxPedals[3]->knob5.getValue()); fxPedals[3]->repaint(); };
-    fxPedals[3]->onSecondaryFootswitch=[this](){ effectsChain.setHarmonicFlex(true); };
-    fxPedals[3]->onSecondaryFootswitchRelease=[this](){ effectsChain.setHarmonicFlex(false); };
-    fxPedals[3]->onTertiaryFootswitch=[this]()
+    fxPedals[3]->knob1.onValueChange=[this](){ effectsChain.setPicoVolume((float)fxPedals[3]->knob1.getValue()); };
+    fxPedals[3]->knob2.onValueChange=[this](){ effectsChain.setPicoBlend((float)fxPedals[3]->knob2.getValue()); };
+    fxPedals[3]->knob3.onValueChange=[this](){ effectsChain.setPicoSweepSeconds((float)fxPedals[3]->knob3.getValue()); };
+    fxPedals[3]->knob4.onValueChange=[this](){ effectsChain.setPicoShiftIndex((int)fxPedals[3]->knob4.getValue()); fxPedals[3]->repaint(); };
+    fxPedals[3]->knob5.onValueChange=[this](){ effectsChain.setPicoMode((int)fxPedals[3]->knob5.getValue()); fxPedals[3]->repaint(); };
+    fxPedals[3]->setKnobValueFormatter(0, formatPercent01);
+    fxPedals[3]->setKnobValueFormatter(1, formatPercent01);
+    fxPedals[3]->setKnobValueFormatter(2, [](double v){ return juce::String(v, 2) + " s"; });
+    fxPedals[3]->setKnobValueFormatter(3, [](double v)
     {
-        static constexpr int h90Programs[][2] = { { 7, 12 }, { -12, 7 }, { -5, 7 }, { 12, 24 } };
-        int currentProgram = 0;
-        for (int i = 0; i < (int) juce::numElementsInArray(h90Programs); ++i)
-            if (juce::roundToInt(fxPedals[3]->knob1.getValue()) == h90Programs[i][0]
-                && juce::roundToInt(fxPedals[3]->knob2.getValue()) == h90Programs[i][1])
-                currentProgram = i + 1;
-        const auto& next = h90Programs[currentProgram % (int) juce::numElementsInArray(h90Programs)];
-        fxPedals[3]->knob1.setValue(next[0], juce::sendNotificationSync);
-        fxPedals[3]->knob2.setValue(next[1], juce::sendNotificationSync);
-    };
-    fxPedals[3]->setKnobValueFormatter(0, [](double v){ return (v > 0.0 ? "+" : "") + juce::String(juce::roundToInt(v)) + " st"; });
-    fxPedals[3]->setKnobValueFormatter(1, [](double v){ return (v > 0.0 ? "+" : "") + juce::String(juce::roundToInt(v)) + " st"; });
-    fxPedals[3]->setKnobValueFormatter(2, formatPercent01);
-    fxPedals[3]->setKnobValueFormatter(3, formatMs);
-    fxPedals[3]->setKnobValueFormatter(4, formatPercent01);
-    effectsChain.setHarmonicInterval((int) fxPedals[3]->knob1.getValue());
-    effectsChain.setHarmonicIntervalB((int) fxPedals[3]->knob2.getValue());
-    effectsChain.setHarmonicMix((float) fxPedals[3]->knob3.getValue());
-    effectsChain.setHarmonicLevel(1.0f);
-    effectsChain.setHarmonicDelayMs((float) fxPedals[3]->knob4.getValue());
-    effectsChain.setHarmonicFeedback((float) fxPedals[3]->knob5.getValue());
+        static const juce::StringArray names {
+            "DETUNE", "m2", "M2", "M3", "P4", "P5", "M6", "1 OCT", "2 OCT", "3 OCT"
+        };
+        return names[juce::jlimit(0, names.size() - 1, juce::roundToInt(v))];
+    });
+    effectsChain.setPicoVolume((float) fxPedals[3]->knob1.getValue());
+    effectsChain.setPicoBlend((float) fxPedals[3]->knob2.getValue());
+    effectsChain.setPicoSweepSeconds((float) fxPedals[3]->knob3.getValue());
+    effectsChain.setPicoShiftIndex((int) fxPedals[3]->knob4.getValue());
+    effectsChain.setPicoMode((int) fxPedals[3]->knob5.getValue());
 
     // Keep the historical knob indices for session compatibility while placing
     // the controls according to the Plus Pedal II artwork in resized().
@@ -1788,7 +1785,7 @@ int MainComponent::fxPedalBodyWidth(int pedalIndex) const
     if (pedalIndex == 1) return 180;
     if (pedalIndex == 2) return 245;
     if (pedalIndex == 9) return 245;
-    if (pedalIndex == 3) return 310;
+    if (pedalIndex == 3) return 156;
     if (pedalIndex == 6) return 156;
     if (pedalIndex == 7) return 270;
     if (pedalIndex == 8) return 158;
@@ -2676,6 +2673,12 @@ juce::ValueTree MainComponent::createSessionTree(const LooperEngine::SessionSnap
             pedal.setProperty("voxOd2Selected", fxPedals[i]->isTertiaryFootswitchLatched(), nullptr);
             pedal.setProperty("voxBassBoost", fxPedals[i]->getCooltronBassBoost(), nullptr);
         }
+        if (i == EffectsChain::HarmonizerPedal)
+        {
+            pedal.setProperty("picoPitchForkVersion", 1, nullptr);
+            pedal.setProperty("picoMode", juce::roundToInt(fxPedals[i]->knob5.getValue()), nullptr);
+            pedal.setProperty("picoMomentary", fxPedals[i]->knob6.getValue() >= 0.5, nullptr);
+        }
         if (i == 12)
         {
             pedal.setProperty("eqVolume", fxPedals[i]->eqVolumeSlider.getValue(), nullptr);
@@ -2843,6 +2846,50 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
             setSlider(pedalUi->knob7, (double) pedal.getProperty("knob7", pedalUi->knob7.getValue()));
             setSlider(pedalUi->knob8, (double) pedal.getProperty("knob8", pedalUi->knob8.getValue()));
             setSlider(pedalUi->knob9, (double) pedal.getProperty("knob9", pedalUi->knob9.getValue()));
+        }
+        if (pedalIndex == EffectsChain::HarmonizerPedal)
+        {
+            if (pedal.hasProperty("picoPitchForkVersion"))
+            {
+                setSlider(pedalUi->knob5, (double) pedal.getProperty("picoMode", 2));
+                setSlider(pedalUi->knob6, (bool) pedal.getProperty("picoMomentary", false) ? 1.0 : 0.0);
+            }
+            else
+            {
+                // Explicit H90 -> Pico migration. Preserve the wet balance and
+                // choose the closest published DUAL pairing to the two former
+                // chromatic voices; delay/feedback have no physical Pico
+                // equivalent and become an instantaneous sweep.
+                static constexpr float dualPairs[][2] = {
+                    { -0.08f, 0.08f }, { -0.17f, 0.17f }, { 2.0f, 9.0f },
+                    { 4.0f, 7.0f }, { 5.0f, -7.0f }, { 7.0f, -12.0f },
+                    { 9.0f, -7.0f }, { 12.0f, -12.0f }, { 24.0f, -12.0f },
+                    { 36.0f, -12.0f }
+                };
+                const float oldA = (float) pedal.getProperty("knob1", 7.0);
+                const float oldB = (float) pedal.getProperty("knob2", 12.0);
+                int closest = 0;
+                float closestError = std::numeric_limits<float>::max();
+                for (int pair = 0; pair < (int) juce::numElementsInArray(dualPairs); ++pair)
+                {
+                    const float direct = std::pow(oldA - dualPairs[pair][0], 2.0f)
+                                       + std::pow(oldB - dualPairs[pair][1], 2.0f);
+                    const float swapped = std::pow(oldA - dualPairs[pair][1], 2.0f)
+                                        + std::pow(oldB - dualPairs[pair][0], 2.0f);
+                    const float error = juce::jmin(direct, swapped);
+                    if (error < closestError)
+                    {
+                        closestError = error;
+                        closest = pair;
+                    }
+                }
+                setSlider(pedalUi->knob1, 0.50);
+                setSlider(pedalUi->knob2, (double) pedal.getProperty("knob3", 0.40));
+                setSlider(pedalUi->knob3, 0.0);
+                setSlider(pedalUi->knob4, (double) closest);
+                setSlider(pedalUi->knob5, 2.0);
+                setSlider(pedalUi->knob6, 0.0);
+            }
         }
         if (pedalIndex == 7)
         {
@@ -3375,7 +3422,7 @@ void MainComponent::showAudioSettings()
 
     closeFxPedalFocus();
     audioSettingsPanel->setBounds(getLocalBounds());
-    audioSettingsPanel->refresh(effectsChain.getActiveExternalPluginLatencySamples());
+    audioSettingsPanel->refresh(effectsChain.getActiveEffectsLatencySamples());
     audioSettingsPanel->setVisible(true);
     audioSettingsPanel->toFront(true);
     audioSettingsPanel->grabKeyboardFocus();
@@ -3451,7 +3498,7 @@ void MainComponent::updateRecordingLatencyCompensation()
     LoopernicoLatency::Breakdown latency;
     latency.inputSamples = status.inputLatencySamples;
     latency.outputSamples = status.outputLatencySamples;
-    latency.pluginSamples = effectsChain.getActiveExternalPluginLatencySamples();
+    latency.pluginSamples = effectsChain.getActiveEffectsLatencySamples();
     latency.calibrationSamples = status.manualCalibrationSamples;
     looper.setRecordingCompensationSamples(latency.effectiveSamples());
 }
@@ -3470,7 +3517,7 @@ void MainComponent::updateAudioStatusUi()
     LoopernicoLatency::Breakdown latency;
     latency.inputSamples = status.inputLatencySamples;
     latency.outputSamples = status.outputLatencySamples;
-    latency.pluginSamples = effectsChain.getActiveExternalPluginLatencySamples();
+    latency.pluginSamples = effectsChain.getActiveEffectsLatencySamples();
     latency.calibrationSamples = status.manualCalibrationSamples;
     const double totalMs = status.sampleRate > 0.0
         ? 1000.0 * latency.driverRoundTripSamples() / status.sampleRate : 0.0;
@@ -3484,7 +3531,7 @@ void MainComponent::updateAudioStatusUi()
          << "  |  IN " << status.inputLatencySamples
          << " + OUT " << status.outputLatencySamples
          << " = " << juce::String(totalMs, 3) << " ms"
-         << "  |  VST " << latency.pluginSamples
+         << "  |  FX " << latency.pluginSamples
          << "  |  COMP " << latency.effectiveSamples()
          << "  |  MON " << (status.softwareInputMonitoringEnabled ? "SW" : "DIRECT")
          << "  |  XRUN "

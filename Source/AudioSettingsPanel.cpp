@@ -151,7 +151,7 @@ void AudioSettingsPanel::styleButton(juce::TextButton& button, juce::Colour acce
     button.setMouseCursor(juce::MouseCursor::PointingHandCursor);
 }
 
-void AudioSettingsPanel::refresh(int activePluginLatencySamples)
+void AudioSettingsPanel::refresh(int activeEffectsLatencySamples)
 {
     const auto status = controller.getStatus();
     currentSampleRate = status.sampleRate > 0.0 ? status.sampleRate : 48000.0;
@@ -159,7 +159,7 @@ void AudioSettingsPanel::refresh(int activePluginLatencySamples)
     LoopernicoLatency::Breakdown latency;
     latency.inputSamples = status.inputLatencySamples;
     latency.outputSamples = status.outputLatencySamples;
-    latency.pluginSamples = activePluginLatencySamples;
+    latency.pluginSamples = activeEffectsLatencySamples;
     latency.calibrationSamples = status.manualCalibrationSamples;
 
     juce::String text;
@@ -178,7 +178,7 @@ void AudioSettingsPanel::refresh(int activePluginLatencySamples)
              << "LATENCIA SALIDA: " << samplesAndMs(status.outputLatencySamples, status.sampleRate) << "\n"
              << "IDA Y VUELTA REPORTADA: "
              << samplesAndMs(latency.driverRoundTripSamples(), status.sampleRate) << "\n"
-             << "LATENCIA VST3 ACTIVA: " << samplesAndMs(activePluginLatencySamples, status.sampleRate) << "\n"
+             << "LATENCIA DE EFECTOS ACTIVA: " << samplesAndMs(activeEffectsLatencySamples, status.sampleRate) << "\n"
              << "COMPENSACION AUTOMATICA: " << samplesAndMs(latency.automaticSamples(), status.sampleRate) << "\n"
              << "OFFSET MANUAL: " << samplesAndMs(status.manualCalibrationSamples, status.sampleRate) << "\n"
              << "TOTAL EFECTIVO USADO: " << samplesAndMs(latency.effectiveSamples(), status.sampleRate) << "\n"

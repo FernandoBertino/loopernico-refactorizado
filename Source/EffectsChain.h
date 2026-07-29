@@ -7,6 +7,8 @@
 #include "DrumMidiMap.h"
 #include "DrumMidiPattern.h"
 
+class PicoPitchShifter;
+
 class EffectsChain : private juce::Thread,
                      private juce::AudioProcessorListener
 {
@@ -135,6 +137,7 @@ public:
     void resetExternalPluginDrumMap(int slot = 0);
     int getExternalPluginReportedLatencySamples(int slot = 0) const;
     int getActiveExternalPluginLatencySamples() const;
+    int getActiveEffectsLatencySamples() const;
     bool consumeExternalPluginLatencyRefreshRequest()
     {
         return externalPluginLatencyRefreshRequested.exchange(false);
@@ -202,13 +205,11 @@ public:
     int getDrumActiveVoiceCount() const { return drumActiveVoices.load(); }
 
     void setHarmonicEnabled(bool b) { harmonicEnabled.store(b); }
-    void setHarmonicInterval(int i) { harmonicInterval.store(i); }
-    void setHarmonicIntervalB(int i) { harmonicIntervalB.store(i); }
-    void setHarmonicMix(float m) { harmonicMix.store(m); }
-    void setHarmonicLevel(float l) { harmonicLevel.store(l); }
-    void setHarmonicDelayMs(float ms) { harmonicDelayMs.store(juce::jlimit(0.0f, 1000.0f, ms)); }
-    void setHarmonicFeedback(float f) { harmonicFeedback.store(juce::jlimit(0.0f, 0.92f, f)); }
-    void setHarmonicFlex(bool pressed) { harmonicFlex.store(pressed); }
+    void setPicoVolume(float value) { picoVolume.store(juce::jlimit(0.0f, 1.0f, value)); }
+    void setPicoBlend(float value) { picoBlend.store(juce::jlimit(0.0f, 1.0f, value)); }
+    void setPicoSweepSeconds(float seconds) { picoSweepSeconds.store(juce::jlimit(0.0f, 4.0f, seconds)); }
+    void setPicoShiftIndex(int index) { picoShiftIndex.store(juce::jlimit(0, 9, index)); }
+    void setPicoMode(int mode) { picoMode.store(juce::jlimit(0, 2, mode)); }
 
     void setFuzzEnabled(bool b) { fuzzEnabled.store(b); }
     void setFuzz(float f) { fuzz.store(f); } // CORRECCIÓN: Nombre correcto
@@ -467,13 +468,12 @@ private:
     std::atomic<int> drumActiveVoices{ 0 };
 
     std::atomic<bool> harmonicEnabled{ false };
-    std::atomic<int>  harmonicInterval{ 7 };
-    std::atomic<int>  harmonicIntervalB{ 12 };
-    std::atomic<float> harmonicMix{ 0.4f };
-    std::atomic<float> harmonicLevel{ 1.0f };
-    std::atomic<float> harmonicDelayMs{ 25.0f };
-    std::atomic<float> harmonicFeedback{ 0.0f };
-    std::atomic<bool> harmonicFlex{ false };
+    std::atomic<float> picoVolume{ 0.5f };
+    std::atomic<float> picoBlend{ 0.4f };
+    std::atomic<float> picoSweepSeconds{ 0.0f };
+    std::atomic<int> picoShiftIndex{ 7 };
+    std::atomic<int> picoMode{ 2 };
+    std::atomic<int> picoLatencySamples{ 0 };
 
     std::atomic<bool> fuzzEnabled{ false };
     std::atomic<float> fuzz{ 0.4f }; // CORRECCIÓN: Ahora es el atómico oficial
@@ -609,8 +609,6 @@ private:
     juce::AudioBuffer<float> delayBuffer;
     juce::AudioBuffer<float> chorusBuffer;
     juce::AudioBuffer<float> pitchBuffer;
-    juce::AudioBuffer<float> harmonicDelayBufferA;
-    juce::AudioBuffer<float> harmonicDelayBufferB;
     juce::AudioBuffer<float> freezeBuffer;
     juce::AudioBuffer<float> chordFreezeInputBuffer;
     juce::AudioBuffer<float> chordBodyBuffer;
@@ -624,7 +622,6 @@ private:
     int delayWritePos{ 0 };
     int chorusWritePos{ 0 };
     int pitchWritePos{ 0 };
-    int harmonicDelayWritePos{ 0 };
     int freezeWritePos{ 0 };
     int chordBodyWritePos{ 0 };
     int reverbPreDelayWritePos{ 0 };
@@ -710,9 +707,7 @@ private:
     juce::int64 drumLastTriggerSample{ -1 };
     std::array<int, 4> drumRecentIntervals{};
 
-    double pitchPhaseHarm{ 0.0 };
-    double pitchPhaseHarmB{ 0.0 };
-    float harmonicAutoEqState[2][2]{};
+    std::array<std::unique_ptr<PicoPitchShifter>, 2> picoPitchShifters;
     double chorusPhase{ 0.0 };
     double delayModPhase{ 0.0 };
     double tremoloPhase{ 0.0 };

@@ -1,3 +1,94 @@
+# Tarea terminada: geometria final del EHX Pico Pitch Fork
+
+- Corregido el 2026-07-29 contra la referencia frontal aportada por Fernando.
+  La carcasa conserva la proporcion fisica `976:1781` (`2.0 / 3.65`) y el
+  frente activo es `Assets/Pedals/ehx-pico-pitch-fork-face-v4.png`.
+- Los cuatro potes ahora miden `0.330` del ancho del cuerpo y se centran en
+  `x=0.211/0.767`, `y=0.157/0.370`. Esto corrige la escala 24-30 % menor y las
+  columnas demasiado juntas de la implementacion anterior.
+- El footswitch rasterizado se centra en `0.500/0.878`; su lienzo mide `0.535`
+  del ancho para que el metal visible, descontando el alpha del asset, ocupe
+  aproximadamente `0.40`, igual que en la referencia. MODE permanece en
+  `0.500/0.053` y el LED en `0.500/0.262`.
+- Pintado, bounds e hitboxes usan las mismas coordenadas normalizadas, por lo
+  que miniatura y vista HD quedan registrados con el frente. No se modificaron
+  DSP, parametros, MIDI, sesiones ni comportamiento de los controles.
+
+Verificacion y despliegue 2026-07-29:
+- `Release | x64` compilado correctamente con
+  `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- Pasaron las 31 pruebas deterministas. Capturas revisadas:
+  `tmp/pico-pitch-fork/pico-geometry-final-compact.png` y
+  `tmp/pico-pitch-fork/pico-geometry-final-hd.png`; ambas confirman proporcion,
+  escala y alineacion sin solapamientos.
+- El humo normal del candidato y de `Builds/LocalDeployment/Current` fue
+  responsivo y cerro normalmente con codigo 0.
+- `Builds/LocalDeployment/Current` SHA-256:
+  `6809E6A6B27C6B9377651CABA896DE25F9E641DF6FEE2F99B1EACED3AC78EDDB`.
+  `Previous` conserva la version funcional inmediatamente anterior, SHA-256
+  `E707D38DB19A5FF6DD0D25B95B8874386000A645F64513549A484F9510AA632E`;
+  hay exactamente dos EXE desplegados.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` fue recreado hacia `Current`, con
+  directorio de trabajo e icono correctos. `.loopernico` conserva
+  `Loopernico.Session`, tipo `Archivo de Loopernico`, comando con `%1` hacia
+  `Current` e icono de sesion.
+
+Proximo paso concreto: ninguno; la geometria queda lista para uso diario.
+
+# Tarea terminada: Eventide H90 reemplazado por EHX Pico Pitch Fork
+
+- Finalizado el 2026-07-29. El pedal interno historico de indice 3 conserva el
+  identificador `HARMONIZER` solamente para compatibilidad, pero en UI, MIDI y
+  sesiones nuevas se presenta como `Electro-Harmonix Pico Pitch Fork`.
+- El gabinete ahora es compacto (proporcion 976x1781) y usa el frente versionado
+  `Assets/Pedals/ehx-pico-pitch-fork-face-v4.png`, evolucionado desde la primera
+  integracion y ajustado contra la referencia frontal de EHX. La miniatura y la vista HD comparten la
+  misma proporcion; la captura revisada esta en
+  `tmp/pico-pitch-fork/pico-ui.png`.
+- Controles implementados: VOL, BLEND, SWEEP 0-4 s, diez posiciones SHIFT,
+  MODE UP/DOWN/DUAL y footswitch LATCH/MOMENTARY. Una pulsacion corta de MODE
+  recorre los tres modos; mantenerlo 2 s alterna latch/momentary. Los intervalos
+  simples y los diez pares DUAL siguen la tabla publicada para el pedal fisico.
+- El pitch shifting usa Signalsmith Stretch 1.3.2, fijado al commit
+  `57b93f4e9206a089a45387eaa39bdc9f310d3308`, con Signalsmith Linear 0.3.1
+  (`5668673560146a9cfe38c25315071e3fd68c8317`) y sus licencias dentro de
+  `ThirdParty/Signalsmith`. La configuracion es estereo, dual, determinista,
+  preasignada y con calculo FFT repartido; no asigna memoria desde
+  `processSample()`. La latencia medida a 48 kHz es 1728 muestras y se suma a
+  la compensacion activa de grabacion junto con la latencia VST3.
+- Las sesiones nuevas guardan `picoPitchForkVersion=1`, `picoMode` y
+  `picoMomentary`. Las sesiones H90 anteriores se migran explicitamente:
+  conservan el balance wet y convierten las dos voces al par DUAL oficial mas
+  cercano. Se verifico guardado, apertura y segundo guardado con
+  `tmp/pico-pitch-fork/pico-roundtrip.loopernico` y
+  `pico-roundtrip-2.loopernico`, ambos con cierre normal codigo 0.
+
+Verificacion y despliegue 2026-07-29:
+- `Release | x64` compilado correctamente. El algoritmo de terceros quedo
+  encapsulado y no emite avisos en los consumidores; el build muestra solamente
+  dos C4244 preexistentes en `LatencyCompensation.cpp:188`.
+- Las 31 pruebas deterministas internas pasaron. La prueba DSP independiente
+  obtuvo 880 Hz para +12 semitonos desde 440 Hz y 221 Hz para -12 (objetivo
+  220 Hz). El modo estereo dual proceso 5 s en 0,677481 s, equivalente a 7,38x
+  tiempo real en esta maquina.
+- Captura HD revisada: controles legibles, proporcion correcta y sin regresiones
+  evidentes. El cierre programado inmediatamente despues de esa captura encontro
+  el problema externo conocido `Windows.Devices.Midi.dll_unloaded`; el flujo
+  normal fue probado por separado tanto en el candidato como en `Current`, con
+  ventana responsiva y cierre limpio codigo 0.
+- `Builds/LocalDeployment/Current` SHA-256:
+  `E707D38DB19A5FF6DD0D25B95B8874386000A645F64513549A484F9510AA632E`.
+  `Previous` conserva la version funcional anterior, SHA-256
+  `5E607AF3CC46FDDEF5DBA24C1133266AEC51BEB1C44FC72FE5FAC5DD1FD3745A`;
+  hay exactamente dos EXE desplegados.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` fue recreado hacia `Current`, con
+  directorio de trabajo e icono correctos. `.loopernico` conserva
+  `Loopernico.Session`, tipo `Archivo de Loopernico`, comando con `%1` hacia
+  `Current` e icono de sesion.
+
+Proximo paso concreto: probarlo con guitarra real y ajustar VOL/BLEND al gusto;
+la sustitucion, migracion y version diaria ya estan terminadas.
+
 # Limpieza segura de bancos WAV retirados
 
 - Realizada el 2026-07-29 después del retiro de BeatBuddy/Rhythm Box.

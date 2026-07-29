@@ -348,34 +348,44 @@ public:
         if (pedalName == "HARMONIZER")
         {
             auto body = getLocalBounds().toFloat().reduced(3.0f);
-            constexpr float aspect = 1578.0f / 1240.0f;
+            constexpr float aspect = 976.0f / 1781.0f;
             const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / aspect);
             const float bodyWidth = juce::jmin(body.getWidth(), bodyHeight * aspect);
             body = { body.getCentreX() - bodyWidth * 0.5f,
                      body.getCentreY() - bodyHeight * 0.5f,
                      bodyWidth, bodyHeight };
-            const float footY = body.getY() + body.getHeight() * 0.850f;
-            const float footXs[] = { 0.119f, 0.500f, 0.881f };
-            for (int i = 0; i < 3; ++i)
+
+            const auto modeButton = juce::Point<float>(body.getCentreX(),
+                                                        body.getY() + body.getHeight() * 0.053f);
+            const float modeDx = e.position.x - modeButton.x;
+            const float modeDy = e.position.y - modeButton.y;
+            const float modeRadius = body.getWidth() * 0.070f;
+            if (modeDx * modeDx + modeDy * modeDy <= modeRadius * modeRadius)
             {
-                const float dx = e.position.x - (body.getX() + body.getWidth() * footXs[i]);
-                const float dy = e.position.y - footY;
-                const float hitRadius = body.getWidth() * 0.090f;
-                if (dx * dx + dy * dy <= hitRadius * hitRadius)
+                picoModeButtonPressed = true;
+                picoModeButtonDownMs = juce::Time::getMillisecondCounter();
+                repaint();
+                return;
+            }
+
+            const auto foot = juce::Point<float>(body.getCentreX(),
+                                                  body.getY() + body.getHeight() * 0.878f);
+            const float footDx = e.position.x - foot.x;
+            const float footDy = e.position.y - foot.y;
+            const float footRadius = body.getWidth() * 0.200f;
+            if (footDx * footDx + footDy * footDy <= footRadius * footRadius)
+            {
+                if (knob6.getValue() >= 0.5)
                 {
-                    if (i == 0)
-                        onBtn.setToggleState(!onBtn.getToggleState(), juce::sendNotification);
-                    else if (i == 1)
-                    {
-                        secondaryFootswitchDown = true;
-                        if (onSecondaryFootswitch)
-                            onSecondaryFootswitch();
-                    }
-                    else if (onTertiaryFootswitch)
-                        onTertiaryFootswitch();
-                    repaint();
-                    return;
+                    picoMomentaryFootswitchDown = true;
+                    onBtn.setToggleState(true, juce::sendNotification);
                 }
+                else
+                {
+                    onBtn.setToggleState(!onBtn.getToggleState(), juce::sendNotification);
+                }
+                repaint();
+                return;
             }
         }
 
@@ -557,6 +567,25 @@ public:
 
     void mouseUp(const juce::MouseEvent& e) override
     {
+        if (picoModeButtonPressed)
+        {
+            picoModeButtonPressed = false;
+            const auto heldMs = juce::Time::getMillisecondCounter() - picoModeButtonDownMs;
+            if (heldMs >= 2000u)
+                knob6.setValue(knob6.getValue() >= 0.5 ? 0.0 : 1.0, juce::sendNotificationSync);
+            else
+                knob5.setValue((juce::roundToInt(knob5.getValue()) + 1) % 3,
+                               juce::sendNotificationSync);
+            repaint();
+            return;
+        }
+        if (picoMomentaryFootswitchDown)
+        {
+            picoMomentaryFootswitchDown = false;
+            onBtn.setToggleState(false, juce::sendNotification);
+            repaint();
+            return;
+        }
         if (secondaryFootswitchDown)
         {
             secondaryFootswitchDown = false;
@@ -581,6 +610,9 @@ private:
     bool dragHintVisible = false;
     bool secondaryFootswitchDown = false;
     bool tertiaryFootswitchLatched = false;
+    bool picoModeButtonPressed = false;
+    bool picoMomentaryFootswitchDown = false;
+    juce::uint32 picoModeButtonDownMs = 0;
     int cooltronBassBoostPosition = 0;
     juce::String infoMain, infoSub;
     std::function<juce::String(double)> knobValueFormatters[9];

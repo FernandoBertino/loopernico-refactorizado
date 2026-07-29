@@ -1,4 +1,5 @@
 #include "EffectsChain.h"
+#include "PicoPitchShifter.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -83,6 +84,9 @@ namespace
 EffectsChain::EffectsChain()
     : juce::Thread("Rhythm sample loader")
 {
+    for (auto& shifter : picoPitchShifters)
+        shifter = std::make_unique<PicoPitchShifter>();
+
     std::array<int, kChainItemCount> initialOrder{};
     initialOrder[0] = kPedalCount;
     int nextOrderSlot = 1;
@@ -464,6 +468,14 @@ int EffectsChain::getActiveExternalPluginLatencySamples() const
         if (isExternalPluginEnabled(slot))
             total += externalPlugins[(size_t) slot].latencySamples.load() + maxBlockSize_;
     return total;
+}
+
+int EffectsChain::getActiveEffectsLatencySamples() const
+{
+    return getActiveExternalPluginLatencySamples()
+         + (harmonicEnabled.load(std::memory_order_relaxed)
+                ? picoLatencySamples.load(std::memory_order_relaxed)
+                : 0);
 }
 
 void EffectsChain::setPedalOrder(const std::array<int, kChainItemCount>& order)
@@ -1405,8 +1417,9 @@ void EffectsChain::prepare(double sampleRate, int maxBlockSize)
     delayBuffer.setSize(2, (int)(sampleRate_ * 3.0));
     chorusBuffer.setSize(2, juce::jmax(1024, (int)(sampleRate_ * 0.08)));
     pitchBuffer.setSize(2, kPitchBufLen);
-    harmonicDelayBufferA.setSize(2, juce::jmax(1024, (int) (sampleRate_ * 1.05)));
-    harmonicDelayBufferB.setSize(2, juce::jmax(1024, (int) (sampleRate_ * 1.05)));
+    for (auto& shifter : picoPitchShifters)
+        shifter->prepare(sampleRate_);
+    picoLatencySamples.store(picoPitchShifters[0]->latencySamples(), std::memory_order_relaxed);
     freezeBuffer.setSize(2, kFreezeBufLen);
     chordFreezeInputBuffer.setSize(2, kFreezeBufLen);
     chordBodyBuffer.setSize(2, juce::jmax(4096, (int) (sampleRate_ * 0.070)));
@@ -1457,8 +1470,8 @@ void EffectsChain::reset()
     delayBuffer.clear();
     chorusBuffer.clear();
     pitchBuffer.clear();
-    harmonicDelayBufferA.clear();
-    harmonicDelayBufferB.clear();
+    for (auto& shifter : picoPitchShifters)
+        shifter->reset();
     freezeBuffer.clear();
     chordFreezeInputBuffer.clear();
     chordBodyBuffer.clear();
@@ -1501,7 +1514,6 @@ void EffectsChain::reset()
     delayWritePos   = 0;
     chorusWritePos  = 0;
     pitchWritePos   = 0;
-    harmonicDelayWritePos = 0;
     freezeWritePos  = 0;
     chordBodyWritePos = 0;
     reverbPreDelayWritePos = 0;
@@ -1537,9 +1549,6 @@ void EffectsChain::reset()
     drumOutputDisplay = 0.0f;
     rhythmToneState[0] = 0.0f;
     rhythmToneState[1] = 0.0f;
-    pitchPhaseHarm = 0.0;
-    pitchPhaseHarmB = 0.0;
-    std::memset(harmonicAutoEqState, 0, sizeof(harmonicAutoEqState));
     chorusPhase    = 0.0;
     tremoloPhase   = 0.0;
     tremoloFootSpeedAmount = 0.0f;
@@ -1689,13 +1698,11 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
     const float drumSnarePitch = drumSnarePitchHz.load();
     const float drumHatPitch = drumHatPitchHz.load();
     const int   drumPlacement = drumTriggerPlacement.load();
-    const int   harmInterval = harmonicInterval.load();
-    const int   harmIntervalBValue = harmonicIntervalB.load();
-    const float harmM   = harmonicMix.load();
-    const float harmL   = harmonicLevel.load();
-    const float harmDelay = harmonicDelayMs.load();
-    const float harmFeedbackValue = harmonicFeedback.load();
-    const bool  harmFlexOn = harmonicFlex.load();
+    const float picoVolumeValue = picoVolume.load();
+    const float picoBlendValue = picoBlend.load();
+    const float picoSweepValue = picoSweepSeconds.load();
+    const int picoShiftValue = picoShiftIndex.load();
+    const int picoModeValue = picoMode.load();
     const float fzL     = fuzzLevel.load();
     const float fzT     = fuzzTone.load();
     const float cooltronGain1Value = cooltronGain1.load();
@@ -1912,12 +1919,28 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
     const float drumRearmTransientThresh = drumTransientThresh * 0.34f;
     const float rhythmToneCoeff = juce::jmap(juce::jlimit(0.0f, 1.0f, rhythmToneValue), 0.045f, 0.22f);
 
-    // H90-style dual pitch engine: two independently shifted voices. FLEX raises
-    // both voices one octave, matching the H90 performance gesture.
-    const int effectiveHarmIntervalA = juce::jlimit(-24, 36, harmInterval + (harmFlexOn ? 12 : 0));
-    const int effectiveHarmIntervalB = juce::jlimit(-24, 36, harmIntervalBValue + (harmFlexOn ? 12 : 0));
-    const float pitchDeltaHarm = 1.0f - std::pow(2.0f, (float) effectiveHarmIntervalA / 12.0f);
-    const float pitchDeltaHarmB = 1.0f - std::pow(2.0f, (float) effectiveHarmIntervalB / 12.0f);
+    // Pico Pitch Fork interval table. The first position is a 17-cent detune;
+    // DUAL follows the ten pairings published in the physical pedal manual.
+    static constexpr float singleIntervals[] = {
+        0.17f, 1.0f, 2.0f, 4.0f, 5.0f, 7.0f, 9.0f, 12.0f, 24.0f, 36.0f
+    };
+    static constexpr float dualIntervals[][2] = {
+        { -0.08f, 0.08f }, { -0.17f, 0.17f }, { 2.0f, 9.0f },
+        { 4.0f, 7.0f }, { 5.0f, -7.0f }, { 7.0f, -12.0f },
+        { 9.0f, -7.0f }, { 12.0f, -12.0f }, { 24.0f, -12.0f },
+        { 36.0f, -12.0f }
+    };
+    const int safePicoShift = juce::jlimit(0, 9, picoShiftValue);
+    const int safePicoMode = juce::jlimit(0, 2, picoModeValue);
+    const bool picoDual = safePicoMode == 2;
+    const float picoIntervalA = picoDual
+        ? dualIntervals[safePicoShift][0]
+        : singleIntervals[safePicoShift] * (safePicoMode == 1 ? -1.0f : 1.0f);
+    const float picoIntervalB = picoDual ? dualIntervals[safePicoShift][1] : 0.0f;
+    const float picoBlendAmount = juce::jlimit(0.0f, 1.0f, picoBlendValue);
+    const float picoOutputGain = juce::jlimit(0.0f, 2.0f, picoVolumeValue * 2.0f);
+    for (auto& shifter : picoPitchShifters)
+        shifter->setParameters(picoIntervalA, picoIntervalB, picoDual, harmOn, picoSweepValue);
     // Fuzz: factor constante por bloque.
     const float fuzzDriveFactor = fuzz.load() * 40.0f + 1.0f;
 
@@ -1986,17 +2009,10 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
     const double deltaChorusPhase = (2.0 * juce::MathConstants<double>::pi * (double)choRate) / sampleRate_;
 
     // Pitch: valores de ventana como floats, calculados una vez
-    const int   winSize  = juce::jmax(256, (int)(0.04 * sampleRate_));
-    const float winSizeF = (float)winSize;
-    const float halfWinF = winSizeF * 0.5f;
-    const float kPBLenF  = (float)kPitchBufLen;
-
     // Stutter setup (igual que antes — logica de estado)
     int channels = juce::jmin(recordableInput.getNumChannels(), 2);
     channels = juce::jmin(channels, rhythmMonitor.getNumChannels());
     channels = juce::jmin(channels, pitchBuffer.getNumChannels());
-    channels = juce::jmin(channels, harmonicDelayBufferA.getNumChannels());
-    channels = juce::jmin(channels, harmonicDelayBufferB.getNumChannels());
     channels = juce::jmin(channels, delayBuffer.getNumChannels());
     channels = juce::jmin(channels, chorusBuffer.getNumChannels());
     channels = juce::jmin(channels, freezeBuffer.getNumChannels());
@@ -2004,18 +2020,6 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
     if (channels <= 0 || numSamples <= 0)
         return;
     const int delayBufLen  = delayBuffer.getNumSamples();
-    const int harmonicDelayBufLen = harmonicDelayBufferA.getNumSamples();
-    const int harmonicDelaySamplesA = juce::jlimit(0, harmonicDelayBufLen - 2,
-        juce::roundToInt(harmDelay * 0.001f * (float) sampleRate_));
-    const int harmonicDelaySamplesB = juce::jlimit(0, harmonicDelayBufLen - 2,
-        juce::roundToInt(harmDelay * 0.001f * (float) sampleRate_ * 1.17f));
-    const float harmonicFeedbackAmount = juce::jlimit(0.0f, 0.92f, harmFeedbackValue);
-    const float harmonicWetMix = juce::jlimit(0.0f, 1.0f, harmM);
-    const float harmonicOutput = juce::jlimit(0.0f, 1.5f, harmL);
-    const float harmonicEqCoeffA = juce::jmap(juce::jlimit(0.0f, 1.0f, (float) juce::jmax(0, effectiveHarmIntervalA) / 24.0f),
-                                               0.34f, 0.075f);
-    const float harmonicEqCoeffB = juce::jmap(juce::jlimit(0.0f, 1.0f, (float) juce::jmax(0, effectiveHarmIntervalB) / 24.0f),
-                                               0.34f, 0.075f);
     const int chorusBufLen = chorusBuffer.getNumSamples();
     const int freezeBufLen = freezeBuffer.getNumSamples();
     const int chordBodyBufLen = chordBodyBuffer.getNumSamples();
@@ -2060,8 +2064,6 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
     //    en cada muestra de cada canal.
     // =========================================================================
     float* pitchPtr[2]   = {};
-    float* harmonicDelayAPtr[2] = {};
-    float* harmonicDelayBPtr[2] = {};
     float* delayPtr[2]   = {};
     float* chorusPtr[2]  = {};
     float* freezePtr[2]  = {};
@@ -2073,8 +2075,6 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
     for (int ch = 0; ch < channels; ++ch)
     {
         pitchPtr[ch]   = pitchBuffer.getWritePointer(ch);
-        harmonicDelayAPtr[ch] = harmonicDelayBufferA.getWritePointer(ch);
-        harmonicDelayBPtr[ch] = harmonicDelayBufferB.getWritePointer(ch);
         delayPtr[ch]   = delayBuffer.getWritePointer(ch);
         chorusPtr[ch]  = chorusBuffer.getWritePointer(ch);
         freezePtr[ch]  = freezeBuffer.getWritePointer(ch);
@@ -2864,77 +2864,15 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
             // --- ARMONIZADOR ---
             auto processHarmonizer = [&]()
             {
-                // Mantener la historia viva en bypass evita reproducir audio
-                // antiguo al encender el pedal despues de haberlo reordenado.
-                pitchPtr[ch][pitchWritePos] = sample;
-                if (!harmOn)
-                    return;
                 const float dry = sample;
-                auto readPitchVoice = [&](double phase)
-                {
-                    float readPositionA = (float) pitchWritePos - kPitchLookbackSamples - (float) phase;
-                    while (readPositionA < 0.0f) readPositionA += kPBLenF;
-                    while (readPositionA >= kPBLenF) readPositionA -= kPBLenF;
-                    const int indexA = (int) readPositionA;
-                    const int indexB = (indexA + 1) % kPitchBufLen;
-                    const float fractionA = readPositionA - (float) indexA;
-                    const float grainA = pitchPtr[ch][indexA]
-                                       + fractionA * (pitchPtr[ch][indexB] - pitchPtr[ch][indexA]);
-
-                    float oppositePhase = (float) phase + halfWinF;
-                    if (oppositePhase >= winSizeF) oppositePhase -= winSizeF;
-                    float readPositionB = (float) pitchWritePos - kPitchLookbackSamples - oppositePhase;
-                    while (readPositionB < 0.0f) readPositionB += kPBLenF;
-                    while (readPositionB >= kPBLenF) readPositionB -= kPBLenF;
-                    const int indexC = (int) readPositionB;
-                    const int indexD = (indexC + 1) % kPitchBufLen;
-                    const float fractionB = readPositionB - (float) indexC;
-                    const float grainB = pitchPtr[ch][indexC]
-                                       + fractionB * (pitchPtr[ch][indexD] - pitchPtr[ch][indexC]);
-
-                    const float windowA = ((float) phase < halfWinF)
-                        ? ((float) phase / halfWinF)
-                        : ((winSizeF - (float) phase) / halfWinF);
-                    return grainA * windowA + grainB * (1.0f - windowA);
-                };
-
-                float voiceA = readPitchVoice(pitchPhaseHarm);
-                float voiceB = readPitchVoice(pitchPhaseHarmB);
-
-                // The H90 Polyphony Auto EQ softens high-frequency buildup on
-                // upward shifts while preserving the attack of downward voices.
-                harmonicAutoEqState[0][ch] += harmonicEqCoeffA * (voiceA - harmonicAutoEqState[0][ch]);
-                harmonicAutoEqState[1][ch] += harmonicEqCoeffB * (voiceB - harmonicAutoEqState[1][ch]);
-                const float autoEqBlendA = juce::jlimit(0.0f, 0.78f, (float) juce::jmax(0, effectiveHarmIntervalA) / 30.0f);
-                const float autoEqBlendB = juce::jlimit(0.0f, 0.78f, (float) juce::jmax(0, effectiveHarmIntervalB) / 30.0f);
-                voiceA = juce::jmap(autoEqBlendA, voiceA, harmonicAutoEqState[0][ch]);
-                voiceB = juce::jmap(autoEqBlendB, voiceB, harmonicAutoEqState[1][ch]);
-
-                auto processVoiceDelay = [&](float shifted, float* history, int delaySamples)
-                {
-                    if (delaySamples <= 0)
-                    {
-                        history[harmonicDelayWritePos] = shifted;
-                        return shifted;
-                    }
-
-                    int readIndex = harmonicDelayWritePos - delaySamples;
-                    while (readIndex < 0) readIndex += harmonicDelayBufLen;
-                    const float delayed = history[readIndex];
-                    history[harmonicDelayWritePos] = shifted + delayed * harmonicFeedbackAmount;
-                    return delayed;
-                };
-
-                voiceA = processVoiceDelay(voiceA, harmonicDelayAPtr[ch], harmonicDelaySamplesA);
-                voiceB = processVoiceDelay(voiceB, harmonicDelayBPtr[ch], harmonicDelaySamplesB);
-
-                // Two equal-power voices, subtly spread in stereo like the H90.
-                float wet = 0.5f * (voiceA + voiceB);
-                if (channels > 1)
-                    wet = ch == 0 ? voiceA * 0.68f + voiceB * 0.32f
-                                  : voiceA * 0.32f + voiceB * 0.68f;
-                sample = dry * (1.0f - harmonicWetMix)
-                       + wet * (harmonicWetMix * harmonicOutput * 0.82f);
+                pitchPtr[ch][pitchWritePos] = dry;
+                const auto shifted = picoPitchShifters[(size_t) ch]->processSample(dry);
+                const float wet = picoDual
+                    ? 0.5f * (shifted.voiceA + shifted.voiceB)
+                    : shifted.voiceA;
+                const float activeBlend = picoBlendAmount * shifted.engagement;
+                const float activeGain = 1.0f + shifted.engagement * (picoOutputGain - 1.0f);
+                sample = (dry * (1.0f - activeBlend) + wet * activeBlend) * activeGain;
             };
 
             #if 0
@@ -3360,7 +3298,6 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
             delayModPhase -= juce::MathConstants<double>::twoPi;
         chorusWritePos  = (chorusWritePos  + 1) % chorusBufLen;
         pitchWritePos   = (pitchWritePos   + 1) % kPitchBufLen;
-        harmonicDelayWritePos = (harmonicDelayWritePos + 1) % harmonicDelayBufLen;
         freezeWritePos  = (freezeWritePos  + 1) % freezeBufLen;
         chordBodyWritePos = (chordBodyWritePos + 1) % chordBodyBufLen;
         reverbPreDelayWritePos = (reverbPreDelayWritePos + 1) % reverbPreDelaySize;
@@ -3451,14 +3388,6 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
         drumLastTriggerLevel *= 0.9992f;
 
         ++drumSampleCounter;
-
-        // Avance de fase del harmonizer.
-        pitchPhaseHarm += pitchDeltaHarm;
-        while (pitchPhaseHarm >= winSizeF) pitchPhaseHarm -= winSizeF;
-        while (pitchPhaseHarm <  0.0)     pitchPhaseHarm += winSizeF;
-        pitchPhaseHarmB += pitchDeltaHarmB;
-        while (pitchPhaseHarmB >= winSizeF) pitchPhaseHarmB -= winSizeF;
-        while (pitchPhaseHarmB <  0.0)     pitchPhaseHarmB += winSizeF;
 
         // Avance de fase del chorus
         // CORRECCION: deltaChorusPhase pre-calculado fuera del loop

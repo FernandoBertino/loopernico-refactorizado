@@ -218,10 +218,11 @@ public:
                           shadowRadius * 2.0f, shadowRadius * 2.0f);
         }
 
-        if (slider.getComponentID() == "smallCloneRateKnob")
+        if (slider.getComponentID() == "smallCloneRateKnob"
+            || slider.getComponentID() == "ehxPicoKnob")
         {
             const float angle = startAngle + pos * (endAngle - startAngle);
-            const float r = radius * 0.96f;
+            const float r = radius * (slider.getComponentID() == "ehxPicoKnob" ? 1.08f : 0.96f);
             g.setColour(juce::Colours::black.withAlpha(0.55f));
             g.fillEllipse(centre.x - r - 1.5f, centre.y - r + 2.2f,
                           r * 2.0f + 3.0f, r * 2.0f + 3.0f);
@@ -246,47 +247,6 @@ public:
             g.drawLine({ markerStart.translated(0.9f, 1.0f), markerEnd.translated(0.9f, 1.0f) }, 3.0f);
             g.setColour(juce::Colour(0xfff1f0ea));
             g.drawLine({ markerStart, markerEnd }, 2.1f);
-            return;
-        }
-
-        if (slider.getComponentID() == "eventideH90Knob")
-        {
-            const float angle = startAngle + pos * (endAngle - startAngle);
-            const float r = radius * 0.96f;
-            const bool mainEncoder = juce::jmin(w, h) >= 50;
-            if (mainEncoder)
-            {
-                g.setColour(juce::Colour(0xffff5c5c).withAlpha(0.24f));
-                g.fillEllipse(centre.x - r - 4.0f, centre.y - r - 4.0f,
-                              (r + 4.0f) * 2.0f, (r + 4.0f) * 2.0f);
-                g.setColour(juce::Colour(0xffff5c5c).withAlpha(0.88f));
-                g.drawEllipse(centre.x - r - 2.0f, centre.y - r - 2.0f,
-                              (r + 2.0f) * 2.0f, (r + 2.0f) * 2.0f, 2.0f);
-            }
-            g.setColour(juce::Colours::black.withAlpha(0.46f));
-            g.fillEllipse(centre.x - r - 1.4f, centre.y - r + 2.0f,
-                          r * 2.0f + 2.8f, r * 2.0f + 2.8f);
-            for (int i = 0; i < 40; ++i)
-            {
-                const float a = juce::MathConstants<float>::twoPi * (float) i / 40.0f;
-                const auto p1 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * (r * 0.86f);
-                const auto p2 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * r;
-                g.setColour(juce::Colours::white.withAlpha(i % 2 == 0 ? 0.13f : 0.045f));
-                g.drawLine({ p1, p2 }, 0.75f);
-            }
-            juce::ColourGradient cap(juce::Colour(0xff56585c), centre.x - r * 0.55f, centre.y - r * 0.65f,
-                                      juce::Colour(0xff050607), centre.x + r * 0.48f, centre.y + r * 0.58f, true);
-            cap.addColour(0.42, juce::Colour(0xff222428));
-            g.setGradientFill(cap);
-            g.fillEllipse(centre.x - r * 0.86f, centre.y - r * 0.86f, r * 1.72f, r * 1.72f);
-            g.setColour(juce::Colours::white.withAlpha(0.12f));
-            g.fillEllipse(centre.x - r * 0.46f, centre.y - r * 0.62f, r * 0.76f, r * 0.23f);
-            const auto markerStart = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.20f);
-            const auto markerEnd = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.70f);
-            g.setColour(juce::Colours::black.withAlpha(0.80f));
-            g.drawLine({ markerStart.translated(0.9f, 1.1f), markerEnd.translated(0.9f, 1.1f) }, 2.8f);
-            g.setColour(juce::Colour(0xffeeeeea));
-            g.drawLine({ markerStart, markerEnd }, 1.7f);
             return;
         }
 

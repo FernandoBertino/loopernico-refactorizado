@@ -12,7 +12,7 @@ public:
     void resized() override;
     bool keyPressed(const juce::KeyPress& key) override;
 
-    void refresh(int activePluginLatencySamples);
+    void refresh(int activeEffectsLatencySamples);
 
     std::function<void()> onClose;
     std::function<void()> onConfigurationChanged;

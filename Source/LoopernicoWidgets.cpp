@@ -690,45 +690,6 @@ void drawMetalFootswitch(juce::Graphics& g, float cx, float cy, float size, bool
     g.drawImage(footswitch, target);
 }
 
-void drawH90LedLens(juce::Graphics& g, float cx, float cy, float bodyWidth,
-                    juce::Colour colour, bool on)
-{
-    // Measured from the official 789 px-wide front photograph: the complete
-    // metal LED bezel is about 32 px across. Keep every part proportional so
-    // the lens remains registered with the artwork at any pedal size.
-    const float outerR = bodyWidth * (16.0f / 789.0f);
-    const float lensR = outerR * 0.61f;
-
-    if (on)
-    {
-        for (int layer = 4; layer >= 1; --layer)
-        {
-            const float glowR = outerR * (1.0f + 0.48f * (float) layer);
-            g.setColour(colour.withAlpha(0.030f * (float) (5 - layer)));
-            g.fillEllipse(cx - glowR, cy - glowR, glowR * 2.0f, glowR * 2.0f);
-        }
-    }
-
-    g.setColour(juce::Colours::black.withAlpha(0.48f));
-    g.fillEllipse(cx - outerR, cy - outerR + outerR * 0.08f,
-                  outerR * 2.0f, outerR * 2.0f);
-    juce::ColourGradient bezel(juce::Colour(0xfff0e4cf), cx - outerR * 0.55f, cy - outerR * 0.62f,
-                                juce::Colour(0xff7b6b5f), cx + outerR * 0.62f, cy + outerR * 0.68f, true);
-    bezel.addColour(0.54, juce::Colour(0xffc9b9a5));
-    g.setGradientFill(bezel);
-    g.fillEllipse(cx - outerR, cy - outerR, outerR * 2.0f, outerR * 2.0f);
-
-    const auto lensHi = on ? colour.brighter(0.48f) : colour.withMultipliedBrightness(0.30f);
-    const auto lensLo = on ? colour.darker(0.28f) : colour.withMultipliedBrightness(0.09f);
-    juce::ColourGradient lens(lensHi, cx - lensR * 0.42f, cy - lensR * 0.56f,
-                              lensLo, cx + lensR * 0.38f, cy + lensR * 0.48f, true);
-    g.setGradientFill(lens);
-    g.fillEllipse(cx - lensR, cy - lensR, lensR * 2.0f, lensR * 2.0f);
-    g.setColour(juce::Colours::white.withAlpha(on ? 0.82f : 0.24f));
-    g.fillEllipse(cx - lensR * 0.52f, cy - lensR * 0.68f,
-                  lensR * 0.66f, lensR * 0.38f);
-}
-
 void drawCooltronLedLens(juce::Graphics& g, float cx, float cy, float r, bool on)
 {
     // The real Cooltron uses a small, deep-red lens. Keep the light contained
@@ -766,7 +727,7 @@ const juce::Image& getPedalEnamelTexture(const juce::String& name)
     static const auto voxCooltron = loadPedalTexture("Pedals/vox-cooltron-duel-overdrive-face-v1.png");
     static const auto dedaloJet = loadPedalTexture("Pedals/dedalo-jet-compressor-face-v4.png");
     static const auto dedaloTres = loadPedalTexture("Pedals/dedalo-tres-tremolo-face-v1.png");
-    static const auto harmonizer = loadPedalTexture("Pedals/eventide-h90-harmonizer-face-v2.png");
+    static const auto harmonizer = loadPedalTexture("Pedals/ehx-pico-pitch-fork-face-v4.png");
     static const auto gamechangerPlus = loadPedalTexture("Pedals/gamechanger-plus-pedal-ii-face-v1.png");
     static const auto modelHost = loadPedalTexture("Pedals/model-host-face-v3.png");
     static const auto tenBandEq = loadPedalTexture("Pedals/ten-band-eq-aluminum-face-v1.png");
@@ -977,7 +938,7 @@ void FXPedalComponent::paint(juce::Graphics& g)
                            : (bigSkyArtwork ? kBigSkyFaceAspect
                            : (dedaloJetArtwork ? 1.23f
                            : (dedaloTresArtwork ? (4.0f / 3.0f)
-                           : (harmonizerArtwork ? (1578.0f / 1240.0f)
+                           : (harmonizerArtwork ? (976.0f / 1781.0f)
                             : (plusPedalArtwork ? kGamechangerPlusFaceAspect
                             : (beatBuddyArtwork ? 0.72f
                            : (bossNoiseArtwork ? (976.0f / 1612.0f)
@@ -1184,37 +1145,68 @@ void FXPedalComponent::paint(juce::Graphics& g)
 
     if (harmonizerArtwork)
     {
-        const auto signedSemitones = [](double value)
+        const auto ink = juce::Colour(0xff111111);
+        const float labelFont = juce::jlimit(7.0f, 29.0f, b.getWidth() * 0.060f);
+        auto drawPicoLabel = [&](const juce::String& text, float nx, float ny, float width)
         {
-            const int semitones = juce::roundToInt(value);
-            return juce::String(semitones > 0 ? "+" : "") + juce::String(semitones);
+            const auto area = juce::Rectangle<float>(b.getWidth() * width,
+                                                      b.getHeight() * 0.042f)
+                                  .withCentre({ b.getX() + b.getWidth() * nx,
+                                                b.getY() + b.getHeight() * ny });
+            g.setColour(ink);
+            g.setFont(juce::Font(juce::FontOptions(labelFont).withStyle("Bold")));
+            g.drawFittedText(text, area.toNearestInt(), juce::Justification::centred, 1, 0.86f);
         };
-        auto display = juce::Rectangle<float>(b.getX() + b.getWidth() * 0.274f,
-                                               b.getY() + b.getHeight() * 0.300f,
-                                               b.getWidth() * 0.464f,
-                                               b.getHeight() * 0.064f);
-        g.setColour(juce::Colour(0xff06090a));
-        g.fillRoundedRectangle(display, 2.0f);
-        g.setColour(juce::Colour(0xfff4f5ed));
-        g.setFont(juce::Font(juce::FontOptions(juce::jmax(7.0f, b.getHeight() * 0.041f))));
-        const auto text = "A " + signedSemitones(knob1.getValue())
-                        + "   B " + signedSemitones(knob2.getValue())
-                        + "   MIX " + juce::String(juce::roundToInt(knob3.getValue() * 100.0)) + "%";
-        g.drawFittedText(text, display.toNearestInt(), juce::Justification::centred, 1, 0.72f);
 
-        constexpr float ledYNorm = (587.0f - 163.0f) / 620.0f;
-        constexpr float ledXNorm[] = {
-            (384.0f - 290.0f) / 789.0f,
-            (684.0f - 290.0f) / 789.0f,
-            (985.0f - 290.0f) / 789.0f
-        };
-        const float ledY = b.getY() + b.getHeight() * ledYNorm;
-        drawH90LedLens(g, b.getX() + b.getWidth() * ledXNorm[0], ledY, b.getWidth(),
-                       juce::Colour(0xff16df7f), onBtn.getToggleState());
-        drawH90LedLens(g, b.getX() + b.getWidth() * ledXNorm[1], ledY, b.getWidth(),
-                       juce::Colour(0xffff4f3f), secondaryFootswitchDown);
-        drawH90LedLens(g, b.getX() + b.getWidth() * ledXNorm[2], ledY, b.getWidth(),
-                       juce::Colour(0xffff4f3f), false);
+        drawPicoLabel("MODE",  0.500f, 0.105f, 0.280f);
+        drawPicoLabel("VOL",   0.211f, 0.258f, 0.245f);
+        drawPicoLabel("BLEND", 0.767f, 0.258f, 0.285f);
+        drawPicoLabel("SWEEP", 0.211f, 0.463f, 0.285f);
+        drawPicoLabel("SHIFT", 0.767f, 0.463f, 0.265f);
+
+        const float modeX = b.getCentreX();
+        const float modeY = b.getY() + b.getHeight() * 0.053f;
+        const float modeDiameter = b.getWidth() * 0.140f;
+        const float modeRadius = modeDiameter * 0.5f;
+        g.setColour(juce::Colours::black.withAlpha(0.44f));
+        g.fillEllipse(modeX - modeRadius + modeDiameter * 0.045f,
+                      modeY - modeRadius + modeDiameter * 0.075f,
+                      modeDiameter, modeDiameter);
+        juce::ColourGradient modeBezel(juce::Colour(0xff686865),
+                                       modeX - modeRadius, modeY - modeRadius,
+                                       juce::Colour(0xff101010),
+                                       modeX + modeRadius, modeY + modeRadius, true);
+        g.setGradientFill(modeBezel);
+        g.fillEllipse(modeX - modeRadius, modeY - modeRadius,
+                      modeDiameter, modeDiameter);
+        const float capRadius = modeRadius * 0.78f;
+        juce::ColourGradient modeCap(juce::Colour(0xff3d3d3a),
+                                     modeX - capRadius * 0.55f, modeY - capRadius * 0.70f,
+                                     juce::Colour(0xff090909),
+                                     modeX + capRadius * 0.55f, modeY + capRadius * 0.65f, true);
+        g.setGradientFill(modeCap);
+        g.fillEllipse(modeX - capRadius, modeY - capRadius,
+                      capRadius * 2.0f, capRadius * 2.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.12f));
+        g.fillEllipse(modeX - capRadius * 0.45f, modeY - capRadius * 0.58f,
+                      capRadius * 0.82f, capRadius * 0.34f);
+
+        const int mode = juce::jlimit(0, 2, juce::roundToInt(knob5.getValue()));
+        const auto modeColour = mode == 0 ? juce::Colour(0xffff322f)
+                              : (mode == 1 ? juce::Colour(0xff37dc62)
+                                           : juce::Colour(0xffff9f24));
+        drawLedLens(g, b.getCentreX(), b.getY() + b.getHeight() * 0.262f,
+                    juce::jmax(2.2f, b.getWidth() * 0.039f), modeColour,
+                    onBtn.getToggleState());
+
+        if (picoModeButtonPressed)
+        {
+            g.setColour(juce::Colours::white.withAlpha(0.13f));
+            const float radius = b.getWidth() * 0.070f;
+            g.fillEllipse(b.getCentreX() - radius,
+                          b.getY() + b.getHeight() * 0.053f - radius,
+                          radius * 2.0f, radius * 2.0f);
+        }
     }
 
     if (bigSkyArtwork)
@@ -1443,9 +1435,8 @@ void FXPedalComponent::paint(juce::Graphics& g)
         g.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
         g.setColour(juce::Colours::white.withAlpha(0.80f));
     };
-    // The H90 presents A, B and MIX in its physical OLED. Repeating formatted
-    // values above its five encoders obscures the artwork and becomes illegible
-    // over the white enclosure.
+    // Custom faceplates already carry their own labels; extra values would
+    // obscure the printed hardware artwork in compact view.
     if (!bossNoiseArtwork && !tenBandEqArtwork && !smallCloneArtwork && !beatBuddyArtwork
         && !harmonizerArtwork && !plusPedalArtwork)
     {
@@ -1558,7 +1549,7 @@ void FXPedalComponent::paint(juce::Graphics& g)
     }
     }
 
-    // All round stomp switches, including the H90, share the same functional
+    // All round stomp switches, including the Pico Pitch Fork, share the same functional
     // rasterized steel hardware without changing hit areas, callbacks or MIDI.
     if (!bossNoiseArtwork && !plusPedalArtwork)
     {
@@ -1570,10 +1561,9 @@ void FXPedalComponent::paint(juce::Graphics& g)
 
         if (harmonizerArtwork)
         {
-            const float size = b.getWidth() * (100.0f / 789.0f);
-            drawAt(0.119f, 0.850f, size, on);
-            drawAt(0.500f, 0.850f, size, secondaryFootswitchDown);
-            drawAt(0.881f, 0.850f, size, false);
+            const float size = b.getWidth() * 0.535f;
+            drawAt(0.500f, 0.878f, size,
+                   knob6.getValue() >= 0.5 ? picoMomentaryFootswitchDown : on);
         }
         else if (beatBuddyArtwork)
         {
@@ -1939,33 +1929,21 @@ void FXPedalComponent::resized()
 
     if (pedalName == "HARMONIZER")
     {
-        const float aspect = 1578.0f / 1240.0f;
+        const float aspect = 976.0f / 1781.0f;
         const int bodyHeight = juce::jmin(getHeight() - 6, juce::roundToInt((float) (getWidth() - 6) / aspect));
         const int bodyWidth = juce::jmin(getWidth() - 6, juce::roundToInt((float) bodyHeight * aspect));
         const int bodyTop = (getHeight() - bodyHeight) / 2;
         const int bodyLeft = (getWidth() - bodyWidth) / 2;
-        const int quickKnobSize = juce::jmax(28, juce::roundToInt(bodyWidth * 0.112f));
-        const int quickKnobY = bodyTop + juce::roundToInt(bodyHeight * ((464.0f - 163.0f) / 620.0f));
-        const float quickCentres[] = {
-            (552.0f - 290.0f) / 789.0f,
-            (683.0f - 290.0f) / 789.0f,
-            (813.0f - 290.0f) / 789.0f
-        };
-        juce::Slider* quickKnobs[] = { &knob1, &knob2, &knob3 };
-        for (int i = 0; i < 3; ++i)
-        {
-            const int cx = bodyLeft + juce::roundToInt(bodyWidth * quickCentres[i]);
-            quickKnobs[i]->setBounds(cx - quickKnobSize / 2, quickKnobY - quickKnobSize / 2,
-                                     quickKnobSize, quickKnobSize);
-        }
-        const int mainKnobSize = juce::jmax(46, juce::roundToInt(bodyWidth * 0.174f));
-        const int mainKnobY = bodyTop + juce::roundToInt(bodyHeight * ((312.0f - 163.0f) / 620.0f));
-        const int leftKnobX = bodyLeft + juce::roundToInt(bodyWidth * ((382.0f - 290.0f) / 789.0f));
-        const int rightKnobX = bodyLeft + juce::roundToInt(bodyWidth * ((983.0f - 290.0f) / 789.0f));
-        knob4.setBounds(leftKnobX - mainKnobSize / 2, mainKnobY - mainKnobSize / 2,
-                        mainKnobSize, mainKnobSize);
-        knob5.setBounds(rightKnobX - mainKnobSize / 2, mainKnobY - mainKnobSize / 2,
-                        mainKnobSize, mainKnobSize);
+        const int knobSize = juce::jmax(32, juce::roundToInt(bodyWidth * 0.330f));
+        const int leftX = bodyLeft + juce::roundToInt(bodyWidth * 0.211f);
+        const int rightX = bodyLeft + juce::roundToInt(bodyWidth * 0.767f);
+        const int topY = bodyTop + juce::roundToInt(bodyHeight * 0.157f);
+        const int lowerY = bodyTop + juce::roundToInt(bodyHeight * 0.370f);
+        knob1.setBounds(leftX - knobSize / 2, topY - knobSize / 2, knobSize, knobSize);
+        knob2.setBounds(rightX - knobSize / 2, topY - knobSize / 2, knobSize, knobSize);
+        knob3.setBounds(leftX - knobSize / 2, lowerY - knobSize / 2, knobSize, knobSize);
+        knob4.setBounds(rightX - knobSize / 2, lowerY - knobSize / 2, knobSize, knobSize);
+        knob5.setBounds(0, 0, 0, 0);
         knob6.setBounds(0, 0, 0, 0);
         knob7.setBounds(0, 0, 0, 0);
         knob8.setBounds(0, 0, 0, 0);
