@@ -927,7 +927,11 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
         btnMuteAll.setToggleState(muted, juce::dontSendNotification);
         repaint();
     };
-    btnPauseAll.onClick = [this]() { looper.togglePauseAll(); };
+    btnPauseAll.onClick = [this]()
+    {
+        looper.togglePauseAll();
+        btnRecConfirm.setEnabled(!looper.isGlobalPaused());
+    };
     btnReset.onClick    = [this]() {
         looper.resetAll();
         for (int i = 0; i < LooperEngine::kMaxTracks; ++i) looper.refreshThumbnail(i, formatManager);
@@ -2898,6 +2902,41 @@ bool MainComponent::saveCurrentSessionToFile(const juce::File& sessionFile,
     if (!captureLooperSnapshotIncrementally(looperSnapshot, errorMessage))
         return false;
 
+    const auto snapshotHasCompleteActiveAudio = [] (const LooperEngine::SessionSnapshot& candidate)
+    {
+        if (candidate.totalTracks <= 0 || candidate.baseLoopLengthSamples <= 0)
+            return candidate.totalTracks == 0 && candidate.baseLoopLengthSamples == 0;
+
+        if (candidate.totalTracks > LooperEngine::kMaxTracks)
+            return false;
+
+        for (int track = 0; track < candidate.totalTracks; ++track)
+        {
+            const auto& activeTrack = candidate.tracks[(size_t) track];
+            const int requiredSamples = juce::jmax(candidate.baseLoopLengthSamples,
+                                                   activeTrack.lengthSamples);
+            if (requiredSamples <= 0
+                || activeTrack.audio.getNumChannels() < 2
+                || activeTrack.audio.getNumSamples() < requiredSamples)
+                return false;
+        }
+        return true;
+    };
+
+    // The incremental capture is the normal path. If its own metadata and
+    // buffers disagree, retry once as one coherent point-in-time snapshot.
+    if (!snapshotHasCompleteActiveAudio(looperSnapshot))
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        looperSnapshot = looper.createSessionSnapshot();
+    }
+    if (!snapshotHasCompleteActiveAudio(looperSnapshot))
+    {
+        errorMessage = "El estado del loop y sus buffers de audio no coinciden. "
+                       "La sesion no se guardo para evitar perder la grabacion.";
+        return false;
+    }
+
     std::array<juce::AudioPluginInstance*, kMaxVst3Pedals> suspendedPlugins{};
     {
         const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
@@ -2932,6 +2971,199 @@ bool MainComponent::saveSessionFileForSnapshot(const juce::File& sessionFile,
         ? "Diagnostico de guardado durante reproduccion correcto: " + sessionFile.getFullPathName()
         : "Diagnostico de guardado fallo: " + errorMessage);
     return saved;
+}
+
+bool MainComponent::runSessionPersistenceDiagnostic(const juce::File& sessionFile,
+                                                    juce::String& report)
+{
+    constexpr int testSamples = 4096;
+    constexpr int testPedal = EffectsChain::NoiseGatePedal;
+    const juce::String initialPresetName("SESSION TEST PRESET OLD");
+    const juce::String testPresetName("SESSION TEST PRESET");
+    juce::StringArray stages;
+    auto fail = [&report, &stages] (const juce::String& reason)
+    {
+        stages.add("FALLO: " + reason);
+        report = stages.joinIntoString("\n");
+        return false;
+    };
+
+    LooperEngine::SessionSnapshot beforeSave;
+    std::array<int, kChainItemCount> expectedOrder{};
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        looper.resetAll();
+        looper.setBarsPerLoop(0);
+        looper.setQuantizeEnabled(false);
+        looper.setSilenceThresholdDb(-80.0f);
+        looper.recConfirm();
+
+        juce::AudioBuffer<float> input(2, testSamples);
+        juce::AudioBuffer<float> output(2, testSamples);
+        for (int sample = 0; sample < testSamples; ++sample)
+        {
+            const float value = 0.35f * std::sin(
+                juce::MathConstants<float>::twoPi * 440.0f
+                * (float) sample / juce::jmax(1.0f, looper.getSampleRate()));
+            input.setSample(0, sample, value);
+            input.setSample(1, sample, value * 0.75f);
+        }
+        output.clear();
+        looper.processBlock(input, 0, output, 0, testSamples, false);
+        if (looper.getState() != LooperEngine::State::RecordingBase)
+            return fail("la entrada determinista no inicio la grabacion base");
+        looper.recConfirm();
+        if (looper.getState() != LooperEngine::State::Playing
+            || looper.getTotalTracks() != 1
+            || looper.getBaseLoopSamples() <= 0)
+            return fail("la transicion grabacion -> reproduccion no publico el loop");
+
+        input.clear();
+        output.clear();
+        looper.processBlock(input, 0, output, 0, testSamples / 4, false);
+        looper.pauseAll();
+    }
+    stages.add("OK grabacion: 1 pista, " + juce::String(looper.getBaseLoopSamples())
+               + " muestras");
+
+    moveFxPedalToSlot(testPedal, 2);
+    expectedOrder = fxOrder;
+    auto& presetSelector = pedalPresetSelectors[(size_t) testPedal];
+    const int testPresetId = 30000;
+    if (presetSelector.indexOfItemId(testPresetId) < 0)
+        presetSelector.addItem(initialPresetName, testPresetId);
+    presetSelector.setSelectedId(testPresetId, juce::dontSendNotification);
+
+    juce::String error;
+    if (!captureLooperSnapshotIncrementally(beforeSave, error))
+        return fail("captura previa: " + error);
+    if (beforeSave.totalTracks != 1
+        || beforeSave.baseLoopLengthSamples <= 0
+        || beforeSave.tracks[0].audio.getNumSamples() < beforeSave.baseLoopLengthSamples
+        || beforeSave.tracks[0].audio.getMagnitude(0, beforeSave.baseLoopLengthSamples) < 0.01f
+        || !beforeSave.globalPaused
+        || beforeSave.tracks[0].pausedReadPos <= 0)
+        return fail("el snapshot previo al guardado no contiene el audio grabado");
+    for (int track = 1; track < LooperEngine::kMaxTracks; ++track)
+        if (beforeSave.tracks[(size_t) track].audio.getNumSamples() != 0
+            || beforeSave.tracks[(size_t) track].pausedReadPos != 0)
+            return fail("una pista vacia heredo el cursor de pausa global");
+    stages.add("OK snapshot previo: audio no nulo y longitudes coherentes");
+
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        const double activeSampleRate = looper.getSampleRate();
+        looper.releaseResources();
+        looper.prepare(activeSampleRate, 512, formatManager);
+    }
+    LooperEngine::SessionSnapshot afterDeviceRestart;
+    if (!captureLooperSnapshotIncrementally(afterDeviceRestart, error))
+        return fail("captura posterior a reinicializar audio: " + error);
+    if (afterDeviceRestart.totalTracks != beforeSave.totalTracks
+        || afterDeviceRestart.baseLoopLengthSamples != beforeSave.baseLoopLengthSamples
+        || afterDeviceRestart.tracks[0].audio.getNumSamples()
+             != beforeSave.tracks[0].audio.getNumSamples())
+        return fail("reinicializar el dispositivo borro o cambio el loop");
+    for (int channel = 0; channel < 2; ++channel)
+        if (std::memcmp(afterDeviceRestart.tracks[0].audio.getReadPointer(channel),
+                        beforeSave.tracks[0].audio.getReadPointer(channel),
+                        (size_t) beforeSave.tracks[0].audio.getNumSamples() * sizeof(float)) != 0)
+            return fail("reinicializar el dispositivo cambio las muestras del loop");
+    beforeSave = std::move(afterDeviceRestart);
+    stages.add("OK reinicializacion de audio: el loop permanece exacto");
+
+    if (!sessionFile.getParentDirectory().createDirectory())
+        return fail("no se pudo crear la carpeta temporal del diagnostico");
+    if (!saveCurrentSessionToFile(sessionFile, error))
+        return fail("primera escritura: " + error);
+
+    moveFxPedalToSlot(testPedal, 3);
+    expectedOrder = fxOrder;
+    const int finalPresetId = testPresetId + 1;
+    if (presetSelector.indexOfItemId(finalPresetId) < 0)
+        presetSelector.addItem(testPresetName, finalPresetId);
+    presetSelector.setSelectedId(finalPresetId, juce::dontSendNotification);
+    if (!saveCurrentSessionToFile(sessionFile, error))
+        return fail("sobrescritura: " + error);
+
+    juce::ValueTree storedTree;
+    LooperEngine::SessionSnapshot storedSnapshot;
+    juce::MemoryBlock storedVstState;
+    if (!SessionManager::readSessionFile(sessionFile, storedTree, storedSnapshot,
+                                         storedVstState, error))
+        return fail("lectura inmediata: " + error);
+
+    const auto storedFx = storedTree.getChildWithName("FX");
+    const auto storedOrder = storedFx.getChildWithName("ORDER");
+    if (!storedOrder.isValid())
+        return fail("el archivo no contiene el nodo ORDER");
+    for (int slot = 0; slot < kChainItemCount; ++slot)
+        if ((int) storedOrder.getProperty("slot" + juce::String(slot), -1)
+            != expectedOrder[(size_t) slot])
+            return fail("el orden binario/XML difiere en el slot " + juce::String(slot));
+
+    juce::String storedPreset;
+    for (int i = 0; i < storedFx.getNumChildren(); ++i)
+    {
+        const auto node = storedFx.getChild(i);
+        if (node.hasType("PEDAL") && (int) node.getProperty("index", -1) == testPedal)
+            storedPreset = node.getProperty("presetName", "").toString();
+    }
+    if (storedPreset != testPresetName)
+        return fail("el archivo no conserva el nombre del preset seleccionado");
+    if (storedSnapshot.totalTracks != beforeSave.totalTracks
+        || storedSnapshot.baseLoopLengthSamples != beforeSave.baseLoopLengthSamples
+        || storedSnapshot.tracks[0].audio.getNumSamples()
+             != beforeSave.tracks[0].audio.getNumSamples())
+        return fail("la escritura/lectura binaria cambio las longitudes del loop");
+    for (int channel = 0; channel < 2; ++channel)
+        if (std::memcmp(storedSnapshot.tracks[0].audio.getReadPointer(channel),
+                        beforeSave.tracks[0].audio.getReadPointer(channel),
+                        (size_t) beforeSave.tracks[0].audio.getNumSamples() * sizeof(float)) != 0)
+            return fail("la escritura/lectura binaria cambio las muestras de audio");
+    stages.add("OK archivo sobrescrito: audio exacto, ORDER nuevo y presetName nuevo");
+
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        looper.resetAll();
+    }
+    moveFxPedalToSlot(testPedal, 0);
+    presetSelector.setSelectedItemIndex(-1, juce::dontSendNotification);
+    if (!applySessionTree(storedTree, storedSnapshot, storedVstState, error))
+        return fail("restauracion: " + error);
+
+    LooperEngine::SessionSnapshot afterLoad;
+    if (!captureLooperSnapshotIncrementally(afterLoad, error))
+        return fail("captura posterior: " + error);
+    if (afterLoad.totalTracks != 1
+        || afterLoad.baseLoopLengthSamples != storedSnapshot.baseLoopLengthSamples
+        || afterLoad.tracks[0].audio.getNumSamples()
+             != storedSnapshot.tracks[0].audio.getNumSamples()
+        || afterLoad.tracks[0].audio.getMagnitude(0, afterLoad.baseLoopLengthSamples) < 0.01f)
+        return fail("el looper restaurado no contiene el audio esperado");
+    if (fxOrder != expectedOrder)
+        return fail("la UI/DSP no restauro el orden guardado");
+    if (presetSelector.getText() != testPresetName)
+        return fail("la UI no muestra el preset guardado");
+
+    if (!looper.isGlobalPaused() || btnRecConfirm.isEnabled())
+        return fail("REC no quedo bloqueado al reabrir el loop pausado");
+    const auto stateBeforeBlockedRecord = looper.getState();
+    const int tracksBeforeBlockedRecord = looper.getTotalTracks();
+    looper.recConfirm();
+    if (looper.getState() != stateBeforeBlockedRecord
+        || looper.getTotalTracks() != tracksBeforeBlockedRecord)
+        return fail("una orden de grabacion evadio el bloqueo de pausa");
+    if (btnPauseAll.onClick)
+        btnPauseAll.onClick();
+    if (looper.isGlobalPaused() || !btnRecConfirm.isEnabled())
+        return fail("REC no se habilito al reanudar el loop");
+    if (btnPauseAll.onClick)
+        btnPauseAll.onClick();
+
+    stages.add("OK reapertura: audio, orden, preset y bloqueo de REC restaurados");
+    report = stages.joinIntoString("\n");
+    return true;
 }
 
 void MainComponent::loadSessionFromFile()
@@ -3118,6 +3350,10 @@ juce::ValueTree MainComponent::createSessionTree(const LooperEngine::SessionSnap
 
     juce::ValueTree fx("FX");
     fx.setProperty("outputMono", outputMono.load(std::memory_order_relaxed), nullptr);
+    juce::ValueTree orderNode("ORDER");
+    for (int slot = 0; slot < kChainItemCount; ++slot)
+        orderNode.setProperty("slot" + juce::String(slot), fxOrder[(size_t) slot], nullptr);
+    fx.addChild(orderNode, -1, nullptr);
     for (int i = 0; i < kNumFxPedals; ++i)
     {
         if (fxPedals[i] == nullptr)
@@ -3125,6 +3361,9 @@ juce::ValueTree MainComponent::createSessionTree(const LooperEngine::SessionSnap
         juce::ValueTree pedal("PEDAL");
         pedal.setProperty("index", i, nullptr);
         pedal.setProperty("slot", (int) (std::find(fxOrder.begin(), fxOrder.end(), i) - fxOrder.begin()), nullptr);
+        const auto presetName = pedalPresetSelectors[(size_t) i].getText();
+        if (presetName.isNotEmpty() && presetName != "PRESETS")
+            pedal.setProperty("presetName", presetName, nullptr);
         pedal.setProperty("on", fxPedals[i]->onBtn.getToggleState(), nullptr);
         pedal.setProperty("knob1", fxPedals[i]->knob1.getValue(), nullptr);
         pedal.setProperty("knob2", fxPedals[i]->knob2.getValue(), nullptr);
@@ -3170,6 +3409,9 @@ juce::ValueTree MainComponent::createSessionTree(const LooperEngine::SessionSnap
         vst.setProperty("path", effectsChain.getExternalPluginPath(slot), nullptr);
         vst.setProperty("enabled", effectsChain.isExternalPluginEnabled(slot), nullptr);
         vst.setProperty("hasState", vstState.getSize() > 0, nullptr);
+        const auto presetName = vstPresetSelectors[(size_t) slot].getText();
+        if (presetName.isNotEmpty() && presetName != "PRESETS")
+            vst.setProperty("presetName", presetName, nullptr);
         const auto& pattern = effectsChain.getExternalPluginDrumPattern(slot);
         vst.setProperty("patternBars", pattern.getBars(), nullptr);
         vst.setProperty("patternData", serializeDrumPattern(pattern), nullptr);
@@ -3200,6 +3442,31 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
             box.onChange();
     };
 
+    auto restorePresetName = [] (juce::ComboBox& box, const juce::String& presetName)
+    {
+        if (presetName.isEmpty())
+        {
+            box.setSelectedItemIndex(-1, juce::dontSendNotification);
+            return;
+        }
+
+        for (int item = 0; item < box.getNumItems(); ++item)
+            if (box.getItemText(item) == presetName)
+            {
+                box.setSelectedItemIndex(item, juce::dontSendNotification);
+                return;
+            }
+
+        // Keep the session informative even if its separate preset-library
+        // entry was moved or deleted. This temporary item is not written to
+        // pedal-presets.xml and disappears when the selector is refreshed.
+        int temporaryId = 30000;
+        while (box.indexOfItemId(temporaryId) >= 0)
+            ++temporaryId;
+        box.addItem(presetName, temporaryId);
+        box.setSelectedId(temporaryId, juce::dontSendNotification);
+    };
+
     auto setToggle = [](auto& button, bool state)
     {
         button.setToggleState(state, juce::dontSendNotification);
@@ -3215,6 +3482,7 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
     std::array<bool, kMaxVst3Pedals> pluginEnabled{};
     std::array<int, kMaxVst3Pedals> patternBars{};
     std::array<juce::String, kMaxVst3Pedals> patternData;
+    std::array<juce::String, kMaxVst3Pedals> presetNames;
     std::array<EffectsChain::PreparedExternalPlugin, kMaxVst3Pedals> candidates;
     int vstNodeCount = 0;
     for (int i = 0; i < fx.getNumChildren(); ++i)
@@ -3229,6 +3497,7 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
         pluginEnabled[(size_t) slot] = (bool) node.getProperty("enabled", true);
         patternBars[(size_t) slot] = (int) node.getProperty("patternBars", 1);
         patternData[(size_t) slot] = node.getProperty("patternData", "").toString();
+        presetNames[(size_t) slot] = node.getProperty("presetName", "").toString();
         if (pluginPaths[(size_t) slot].isNotEmpty())
         {
             juce::String pluginError;
@@ -3290,6 +3559,33 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
             break;
         loadedOrder[(size_t) slot] = nextItem;
         seenItems[(size_t) loadedOrder[(size_t) slot]] = true;
+    }
+
+    // New sessions carry one authoritative order node.  Keep the per-pedal
+    // slot fallback above for older files, but prefer the explicit sequence
+    // whenever it is present and valid.
+    const auto savedOrder = fx.getChildWithName("ORDER");
+    if (savedOrder.isValid())
+    {
+        std::array<int, kChainItemCount> explicitOrder{};
+        std::array<bool, kChainItemIdLimit> explicitSeen{};
+        bool validOrder = true;
+        for (int slot = 0; slot < kChainItemCount; ++slot)
+        {
+            const int item = (int) savedOrder.getProperty("slot" + juce::String(slot), -1);
+            if (item < 0 || item >= kChainItemIdLimit
+                || item == EffectsChain::RhythmPedal
+                || item == EffectsChain::LegacySustainGranPedal
+                || explicitSeen[(size_t) item])
+            {
+                validOrder = false;
+                break;
+            }
+            explicitOrder[(size_t) slot] = item;
+            explicitSeen[(size_t) item] = true;
+        }
+        if (validOrder)
+            loadedOrder = explicitOrder;
     }
     fxOrder = loadedOrder;
     refreshFxUiOrder();
@@ -3409,6 +3705,8 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
                           (double)pedal.getProperty("eqBand" + juce::String(band + 1),
                                                     pedalUi->eqBandSliders[(size_t)band].getValue()));
         }
+        const auto presetName = pedal.getProperty("presetName", "").toString();
+        restorePresetName(pedalPresetSelectors[(size_t) pedalIndex], presetName);
         setToggle(pedalUi->onBtn, pedalOn);
     }
 
@@ -3444,6 +3742,8 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
     }
 
     updateExternalVstUi();
+    for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
+        restorePresetName(vstPresetSelectors[(size_t) slot], presetNames[(size_t) slot]);
 
     refreshTrackUiFromLooper();
     for (int i = 0; i < looperNode.getNumChildren() && i < (int) visualTracks.size(); ++i)
@@ -3460,6 +3760,8 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
 
 void MainComponent::refreshTrackUiFromLooper()
 {
+    btnRecConfirm.setEnabled(!looper.isGlobalPaused());
+
     const int totalTracks = looper.getTotalTracks();
     for (int i = 0; i < (int) visualTracks.size(); ++i)
     {
@@ -4157,6 +4459,7 @@ void MainComponent::timerCallback()
     btnRecConfirm.setToggleState(gArm || gRec || gOvd, juce::dontSendNotification);
     btnMuteAll.setToggleState(looper.isGlobalMuted(), juce::dontSendNotification);
     btnPauseAll.setToggleState(looper.isGlobalPaused(), juce::dontSendNotification);
+    btnRecConfirm.setEnabled(!looper.isGlobalPaused());
 
     if (gRec)
     {

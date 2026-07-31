@@ -1819,14 +1819,23 @@ void FXPedalComponent::resized()
     {
         // The face artwork is control-free: place the interactive knobs
         // inside the printed QUILOMBO / TONO / VOLUMEN ornaments using the
-        // same normalized coordinates as the visible crop.
-        const int knobSize = juce::jmax(16, juce::roundToInt((float) b.getWidth() * 0.300f));
-        const int knobCY = b.getY() + juce::roundToInt((float) b.getHeight() * 0.271f);
+        // same aspect-fitted body rectangle used by paint().
+        constexpr float aspect = 977.0f / 1610.0f;
+        auto body = getLocalBounds().toFloat().reduced(3.0f);
+        const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / aspect);
+        const float bodyWidth = juce::jmin(body.getWidth(), bodyHeight * aspect);
+        body = { body.getCentreX() - bodyWidth * 0.5f,
+                 body.getCentreY() - bodyHeight * 0.5f,
+                 bodyWidth, bodyHeight };
+
+        const int knobSize = juce::jmax(16, juce::roundToInt(body.getWidth() * 0.300f));
+        // The three printed rings are centred at y=400 in the 1610 px face.
+        const int knobCY = juce::roundToInt(body.getY() + body.getHeight() * (400.0f / 1610.0f));
         const float knobCentres[] = { 0.200f, 0.500f, 0.800f };
         juce::Slider* knobs[] = { &knob1, &knob2, &knob3 };
         for (int i = 0; i < 3; ++i)
         {
-            const int cx = b.getX() + juce::roundToInt((float) b.getWidth() * knobCentres[i]);
+            const int cx = juce::roundToInt(body.getX() + body.getWidth() * knobCentres[i]);
             knobs[i]->setBounds(cx - knobSize / 2, knobCY - knobSize / 2,
                                 knobSize, knobSize);
         }

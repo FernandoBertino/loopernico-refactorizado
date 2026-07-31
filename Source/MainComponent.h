@@ -178,6 +178,8 @@ public:
     void setSoftwareInputMonitoringForSnapshot(bool enabled);
     bool loadExternalVst3ForSnapshot(const juce::File& pluginFile, bool enabled);
     bool saveSessionFileForSnapshot(const juce::File& sessionFile, juce::String& errorMessage);
+    bool runSessionPersistenceDiagnostic(const juce::File& sessionFile,
+                                         juce::String& report);
 
 private:
     class LoopRangeMarker final : public juce::Component

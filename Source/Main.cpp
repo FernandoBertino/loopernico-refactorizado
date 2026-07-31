@@ -26,6 +26,7 @@ namespace
         juce::String vst3Path;
         bool vst3Bypass = false;
         juce::String saveSessionPath;
+        juce::String sessionPersistenceTestPath;
     };
 
     SnapshotLaunchRequest parseSnapshotLaunchRequest(const juce::String& commandLine)
@@ -88,6 +89,12 @@ namespace
             else if (argument.startsWithIgnoreCase("--snapshot-save-session="))
             {
                 request.saveSessionPath = argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            }
+            else if (argument.startsWithIgnoreCase("--run-session-persistence-test="))
+            {
+                request.enabled = true;
+                request.sessionPersistenceTestPath =
+                    argument.fromFirstOccurrenceOf("=", false, false).unquoted();
             }
             else if (argument.endsWithIgnoreCase(".loopernico"))
             {
@@ -245,6 +252,29 @@ public:
                     });
             }
 
+            if (snapshotRequest.sessionPersistenceTestPath.isNotEmpty())
+            {
+                juce::Timer::callAfterDelay(750,
+                    [safeWindow = juce::Component::SafePointer<MainWindow>(this),
+                     outputFile = juce::File(snapshotRequest.sessionPersistenceTestPath)]
+                    {
+                        bool passed = false;
+                        juce::String report;
+                        if (auto* window = safeWindow.getComponent())
+                            if (auto* main = dynamic_cast<MainComponent*> (window->getContentComponent()))
+                                passed = main->runSessionPersistenceDiagnostic(outputFile, report);
+
+                        const auto reportFile = outputFile.withFileExtension(".report.txt");
+                        reportFile.getParentDirectory().createDirectory();
+                        reportFile.replaceWithText(report + "\n");
+                        if (auto* app = JUCEApplication::getInstance())
+                        {
+                            app->setApplicationReturnValue(passed ? 0 : 1);
+                            app->quit();
+                        }
+                    });
+            }
+
             if (snapshotRequest.enabled && snapshotRequest.focusPedal >= -1)
                 if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
                     main->focusFxPedalForSnapshot(snapshotRequest.focusPedal);
@@ -257,7 +287,8 @@ public:
                 if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
                     main->showAudioSettingsForSnapshot();
 
-            if (snapshotRequest.enabled)
+            if (snapshotRequest.enabled
+                && snapshotRequest.sessionPersistenceTestPath.isEmpty())
                 scheduleUiSnapshot(snapshotRequest.outputPath, true, snapshotRequest.delayMs);
         }
 

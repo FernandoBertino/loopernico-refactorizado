@@ -1,3 +1,143 @@
+# Ultimo ajuste comprobado: perillas de PAMPA FUZZ alineadas con el frente
+
+- Corregido el 2026-07-31 en `Source/LoopernicoWidgets.cpp`. El frente del
+  Pampa se pintaba dentro de un rectangulo centrado y ajustado a su proporcion
+  `977:1610`, mientras los tres controles seguian usando el rectangulo generico
+  completo del componente. Al cambiar la altura disponible de la tira, esos
+  dos sistemas divergieron y las perillas quedaron desplazadas hacia abajo.
+- `resized()` calcula ahora para FUZZ exactamente el mismo cuerpo, margen y
+  proporcion que `paint()`. Una primera comprobacion mantuvo `y=0.271`, pero
+  el aro impreso todavia asomaba. La medicion directa del frente nativo ubico
+  el centro circular en `y=400/1610` (`0.2484`), coordenada que usa ahora el
+  layout. El tamano permanece en `0.300` del ancho y los centros horizontales
+  en `x=0.200/0.500/0.800`. No se modificaron asset, DSP, parametros, MIDI,
+  sesiones, footswitch ni otros pedales.
+
+Verificacion y despliegue 2026-07-31:
+- `Release | x64` compilado correctamente con
+  `Builds/VisualStudio2026/Loopernico Refactorizado.sln`: 0 errores y 0
+  advertencias. Las 31 pruebas deterministas pasaron.
+- Capturas finales revisadas en `tmp/pampa-fuzz-ring-centered-v2.png` y
+  `tmp/pampa-fuzz-ring-centered-overview-v2.png`: los tres knobs cubren y se
+  centran sobre los aros tanto en vista HD como en la tira compacta.
+- El humo de `Builds/LocalDeployment/Current` genero
+  `tmp/pampa-fuzz-ring-centered-deployed-v2.png` y cerro normalmente con
+  codigo 0.
+- `Current` SHA-256:
+  `20C0C02FB1CCBB3A0A1E20B5C802317F99C823C0710BF589FDDEFA2CEF4BCDEA`.
+  `Previous` conserva la version funcional anterior:
+  `6DEDC0F49AE6849765A3E04B3FC5123712DB5E73AB0E5CC0B46D33EAEC21B70E`.
+  Hay exactamente dos ejecutables desplegados.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` fue recreado hacia `Current`,
+  con directorio de trabajo e icono correctos. `.loopernico` conserva
+  `Loopernico.Session`, tipo `Archivo de Loopernico`, comando con `%1` hacia
+  `Current` e icono de sesion.
+
+Proximo paso concreto: ninguno; confirmar al tacto visual en uso diario si se
+desea, pero la geometria queda registrada con el asset en ambas escalas.
+
+# Ultimo ajuste comprobado: REC bloqueado mientras el loop esta pausado
+
+- Corregido el 2026-07-31 en `Source/LooperEngine.cpp` y
+  `Source/MainComponent.cpp`. `recConfirm()` rechaza cualquier orden mientras
+  la pausa global este activa, por lo que ni el boton ni MIDI pueden iniciar
+  un overdub al reabrir una sesion pausada. La UI deshabilita REC al cargar o
+  pausar y lo habilita inmediatamente al reanudar.
+- El diagnostico de persistencia ahora comprueba la reapertura pausada, el
+  estado visual deshabilitado, que una orden directa no cambie estado ni
+  cantidad de pistas y que REC vuelva a habilitarse al quitar PAUSE.
+- No se modificaron el formato `.loopernico`, el audio guardado, DSP, pedales,
+  orden, presets ni controles de transporte ajenos.
+
+Verificacion y despliegue 2026-07-31:
+- `Release | x64` compilado correctamente con
+  `Builds/VisualStudio2026/Loopernico Refactorizado.sln`, codigo 0.
+- El diagnostico completo paso tanto en el candidato como en
+  `Builds/LocalDeployment/Current`: audio exacto, reinicio de dispositivo,
+  sobrescritura, ORDER, preset y bloqueo/desbloqueo de REC. Informes en
+  `tmp/session-persistence/record-lock-roundtrip.report.txt` y
+  `record-lock-deployed-roundtrip.report.txt`.
+- Las 31 pruebas deterministas pasaron en el ejecutable desplegado; informe en
+  `tmp/session-persistence/record-lock-latency-tests.txt`.
+- Captura revisada en
+  `tmp/session-persistence/record-lock-paused.png`: el loop restaurado conserva
+  forma de onda, PAUSE activo y REC atenuado. Los humos normales del candidato
+  y de `Current` cerraron con codigo 0.
+- La reapertura automatica en proceso fresco resulto sensible al cambio tardio
+  del dispositivo ASIO ya contemplado por `applySessionTree()` y algunas
+  corridas mostraron la sesion parcialmente aplicada; no se amplio esta tarea
+  para cambiar ese flujo. La reapertura determinista dentro del diagnostico
+  paso en ambos binarios.
+- `Builds/LocalDeployment/Current` SHA-256:
+  `36ADBABBE21A7A8A8DC413D9EA4DF7298FB5024FC445BB5DE73D38569C521107`.
+  `Previous` conserva el Current funcional anterior:
+  `429D598576386AA6947FF92183A46AE6B483C212BE0DE05B380A6D0DF4B8A05B`.
+  Hay exactamente dos ejecutables desplegados.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` fue recreado hacia `Current`,
+  con directorio de trabajo e icono correctos. `.loopernico` conserva
+  `Loopernico.Session`, tipo `Archivo de Loopernico`, comando con `%1` hacia
+  `Current` e icono de sesion.
+
+Proximo paso concreto: confirmar en uso diario que, al abrir una sesion pausada,
+REC permanezca bloqueado hasta pulsar PAUSE para reanudar. Si la apertura inicial
+coincide con un reinicio tardio de ASIO, evaluar por separado un reintento
+automatico de restauracion despues de estabilizar el dispositivo.
+
+# Ultimo ajuste comprobado: sesiones pausadas vuelven a abrir correctamente
+
+- Corregido el 2026-07-31 a partir del archivo real
+  `C:\Users\Fernando\Desktop\ff.loopernico`. El audio no estaba truncado: el
+  archivo contiene 192000 muestras estereo, pico 0.142115 y 383998 valores no
+  nulos. El rechazo ocurria porque `pauseAll()` copiaba el cursor global
+  `116480` tambien a las once pistas vacias y el lector trataba ese cursor de
+  reproduccion como si fuera una longitud de audio invalida.
+- `pauseAll()` ahora deja cursor cero en pistas inactivas. Las capturas directa
+  e incremental normalizan `pausedReadPos` contra el audio efectivamente
+  copiado. El lector mantiene estrictas las longitudes de audio, pero normaliza
+  el cursor residual; asi abre las sesiones ya afectadas, incluido `ff`, sin
+  descartar su grabacion.
+- Se mantiene la correccion previa de escritura atomica con
+  `juce::TemporaryFile`, la preservacion del loop al reiniciar el dispositivo,
+  la validacion del snapshot, el nodo `ORDER` autoritativo y `presetName` para
+  pedales internos/VST3 con fallback compatible para sesiones antiguas.
+- `--run-session-persistence-test=<archivo>` ahora reproduce el caso real:
+  genera audio, avanza el cursor, pausa globalmente, exige cursores cero en
+  pistas vacias, reinicia audio, sobrescribe, lee y compara muestras exactas,
+  y restaura audio, orden y preset en la UI.
+
+Verificacion y despliegue 2026-07-31:
+- `Release | x64` compilado correctamente con
+  `Builds/VisualStudio2026/Loopernico Refactorizado.sln`, codigo 0.
+- Roundtrip determinista:
+  `tmp/session-persistence/paused-roundtrip.loopernico` y su reporte. Declara
+  una pista de 4095 muestras estereo, pico 0.350209, cursor activo 1024, cursores
+  cero en las once pistas vacias,
+  `ORDER=13,2,3,0,5,6,7,8,9,10,11,12,14,15,16` y
+  `presetName=SESSION TEST PRESET`. La lectura binaria coincide muestra por
+  muestra con el snapshot previo y la restauracion completa paso.
+- La reapertura en otro proceso se reviso en
+  `tmp/session-persistence/paused-roundtrip-fresh-process.png`: forma de onda,
+  Noise Suppressor en la cuarta posicion y preset visible. El archivo real
+  `ff.loopernico` abre sin alerta y muestra su forma de onda, orden
+  `13,6,0,2,3,5,7,8,9,10,11,12,14,15,16` y preset `Poco Quilombo`; capturas en
+  `ff-reopen-candidate.png` y `ff-reopen-current.png`.
+- El controlador interactivo de Windows sigue sin capturar esta ventana por
+  `SetIsBorderRequired (0x80004002)`; la verificacion visual se completo con el
+  snapshot nativo de JUCE. Los procesos de prueba terminaron con codigo 0.
+- `Builds/LocalDeployment/Current` SHA-256:
+  `429D598576386AA6947FF92183A46AE6B483C212BE0DE05B380A6D0DF4B8A05B`.
+  `Previous` conserva el Current funcional anterior:
+  `4C3DC3F59BDB5E37846BA6B27D44869823DA20580C5CFF7F60F376968707E1D6`.
+  Hay exactamente dos ejecutables desplegados.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` fue recreado hacia `Current`, con
+  directorio de trabajo e icono correctos. `.loopernico` conserva
+  `Loopernico.Session`, tipo `Archivo de Loopernico`, comando con `%1` hacia
+  `Current` e icono de sesion.
+
+Proximo paso concreto: confirmar en uso diario que `ff.loopernico` reproduce su
+audio al reanudar y guardar una nueva sesion pausada; el flujo automatizado y el
+despliegue quedan terminados.
+
 # Ultimo ajuste comprobado: borrar y sobrescribir presets por pedal
 
 - Corregido el 2026-07-30 en `Source/MainComponent.cpp` y

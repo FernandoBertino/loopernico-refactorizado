@@ -22,6 +22,18 @@ void LooperEngine::ensureTrackBufferCapacity(int track, int samples)
 void LooperEngine::prepare(double sr, int maxBlockSize,
     juce::AudioFormatManager& fmt)
 {
+    // AudioSource::prepareToPlay() is not a one-shot initialiser: JUCE calls it
+    // again after device restarts and configuration changes. Preserve the
+    // current session before changing the device sample rate instead of
+    // treating every prepare as a new empty looper.
+    const bool hasSessionState = totalTracks.load() > 0
+                              || baseLoopLengthSamples.load() > 0
+                              || recordWritePosition.load() > 0
+                              || redoCount > 0;
+    SessionSnapshot sessionToPreserve;
+    if (hasSessionState)
+        sessionToPreserve = createSessionSnapshot();
+
     formatManager_ = &fmt;
     sampleRate_ = (sr > 0.0) ? sr : 44100.0;
     maxBlockSize_ = maxBlockSize;
@@ -29,25 +41,33 @@ void LooperEngine::prepare(double sr, int maxBlockSize,
     maxLoopLengthSamples = (int)(sampleRate_ * kMaxLoopSecs);
 
     for (int i = 0; i < kMaxTracks; ++i) {
-        // Allocate track memory on demand. Ten minutes at 48 kHz in stereo is
-        // substantial, and reserving it for all 12 tracks would waste several
-        // gigabytes before the user records anything.
-        tracks[i].buffer.setSize(0, 0);
-        tracks[i].currentGain.store(1.0f);
-        tracks[i].bufferRevision.fetch_add(1, std::memory_order_release);
+        if (!hasSessionState)
+        {
+            // Allocate track memory on demand. Ten minutes at 48 kHz in stereo
+            // is substantial, so an actually empty looper starts unallocated.
+            tracks[i].buffer.setSize(0, 0);
+            tracks[i].currentGain.store(1.0f);
+            tracks[i].bufferRevision.fetch_add(1, std::memory_order_release);
+        }
         thumbnails[i] = std::make_unique<juce::AudioThumbnail>(512, fmt, thumbnailCache);
     }
 
-    recalcLoopLength();
+    if (hasSessionState)
+    {
+        auto prepared = prepareSessionRestore(sessionToPreserve);
+        const bool restored = commitPreparedSessionRestore(std::move(prepared));
+        jassert(restored);
+        juce::ignoreUnused(restored);
+    }
+    else
+        recalcLoopLength();
 }
 
 void LooperEngine::releaseResources()
 {
-    for (int i = 0; i < kMaxTracks; ++i)
-    {
-        tracks[i].buffer.setSize(0, 0);
-        tracks[i].bufferRevision.fetch_add(1, std::memory_order_release);
-    }
+    // A device stop is temporary and is commonly followed by prepareToPlay().
+    // Session audio belongs to the looper, not to the device, so it must remain
+    // allocated until resetAll(), a session restore, or destruction.
 }
 
 LooperEngine::SessionSnapshot LooperEngine::createSessionSnapshot() const
@@ -93,6 +113,9 @@ LooperEngine::SessionSnapshot LooperEngine::createSessionSnapshot() const
             audioLength = juce::jmax(audioLength,
                 juce::jmax(snapshot.baseLoopLengthSamples, snapshot.recordWritePosition));
         audioLength = juce::jlimit(0, maxLoopLengthSamples, audioLength);
+        track.pausedReadPos = audioLength > 0
+                                ? juce::jlimit(0, audioLength - 1, track.pausedReadPos)
+                                : 0;
 
         if (audioLength > 0)
         {
@@ -152,6 +175,10 @@ LooperEngine::SnapshotCaptureResult LooperEngine::beginIncrementalSnapshot(
             length = juce::jmax(length, juce::jmax(snapshot.baseLoopLengthSamples,
                                                    snapshot.editableLoopSourceSamples));
         capture.audioLengths[(size_t) i] = juce::jlimit(0, maxLoopLengthSamples, length);
+        destination.pausedReadPos = capture.audioLengths[(size_t) i] > 0
+            ? juce::jlimit(0, capture.audioLengths[(size_t) i] - 1,
+                           destination.pausedReadPos)
+            : 0;
     }
     return SnapshotCaptureResult::inProgress;
 }
@@ -163,7 +190,7 @@ void LooperEngine::prepareIncrementalSnapshot(IncrementalSnapshot& capture)
         const int length = capture.audioLengths[(size_t) i];
         if (length > 0)
             capture.snapshot.tracks[(size_t) i].audio.setSize(2, length,
-                                                               false, false, true);
+                                                               false, false, false);
     }
     capture.prepared = true;
 }
@@ -625,6 +652,12 @@ void LooperEngine::processBlock(const juce::AudioBuffer<float>& recordableInput,
 // ==============================================================================
 void LooperEngine::recConfirm()
 {
+    // A paused loop must be heard again before a new layer can be recorded.
+    // Keep this guard in the engine so MIDI and any future control surface
+    // cannot bypass the disabled REC button after reopening a paused session.
+    if (globalPaused.load())
+        return;
+
     State s = currentState.load();
 
     if (s == State::Stopped)
@@ -892,8 +925,9 @@ bool LooperEngine::isTrackPaused(int t) const
 void LooperEngine::pauseAll()
 {
     int pos = loopReadPosition.load();
+    const int activeTracks = juce::jlimit(0, kMaxTracks, totalTracks.load());
     for (int t = 0; t < kMaxTracks; ++t)
-        tracks[t].pausedReadPos.store(pos);
+        tracks[t].pausedReadPos.store(t < activeTracks ? pos : 0);
     globalPaused.store(true);
 }
 
