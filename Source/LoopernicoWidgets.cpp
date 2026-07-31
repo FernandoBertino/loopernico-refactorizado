@@ -804,8 +804,7 @@ juce::Rectangle<int> getPedalTextureCrop(const juce::String& name, const juce::I
         return { juce::roundToInt(w * 0.035f), juce::roundToInt(h * 0.118f),
                  juce::roundToInt(w * 0.93f), juce::roundToInt(h * 0.74f) };
     if (name == "OUTPUT EQ")
-        return { juce::roundToInt(w * 0.09f), juce::roundToInt(h * 0.09f),
-                 juce::roundToInt(w * 0.82f), juce::roundToInt(h * 0.82f) };
+        return image.getBounds();
     if (name == "CHORUS")
         return { juce::roundToInt(w * 0.035f), juce::roundToInt(h * 0.008f),
                  juce::roundToInt(w * 0.930f), juce::roundToInt(h * 0.970f) };
@@ -973,7 +972,16 @@ void FXPedalComponent::paint(juce::Graphics& g)
     if (const auto& enamelTexture = getPedalEnamelTexture(pedalName); enamelTexture.isValid())
     {
         juce::Graphics::ScopedSaveState state(g);
-        g.reduceClipRegion(b.toNearestInt());
+        if (pedalName == "OUTPUT EQ")
+        {
+            juce::Path roundedClip;
+            roundedClip.addRoundedRectangle(b, 10.0f);
+            g.reduceClipRegion(roundedClip);
+        }
+        else
+        {
+            g.reduceClipRegion(b.toNearestInt());
+        }
         g.setOpacity(getPedalTextureOpacity(pedalName));
         const auto crop = getPedalTextureCrop(pedalName, enamelTexture);
         const auto target = b.toNearestInt();
@@ -1561,7 +1569,9 @@ void FXPedalComponent::paint(juce::Graphics& g)
 
         if (harmonizerArtwork)
         {
-            const float size = b.getWidth() * 0.535f;
+            // The raster contains transparent padding. A 0.35 target leaves
+            // the printed curved line visible around the physical switch.
+            const float size = b.getWidth() * 0.35f;
             drawAt(0.500f, 0.878f, size,
                    knob6.getValue() >= 0.5 ? picoMomentaryFootswitchDown : on);
         }

@@ -1336,6 +1336,27 @@ void MainComponent::setupFXPedals()
         vstPedal->onDragEnd = [this](FXPedalComponent& pedal, const juce::MouseEvent& e) { endFxPedalDrag(pedal, e); };
         vstPedal->onZoomRequest = [this](FXPedalComponent& pedal) { toggleFxPedalFocus(pedal); };
         fxContainer.addAndMakeVisible(vstPedal.get());
+
+        auto& selector = vstPresetSelectors[(size_t) slot];
+        auto& save = vstPresetSaveButtons[(size_t) slot];
+        auto& remove = vstPresetDeleteButtons[(size_t) slot];
+        selector.setTextWhenNothingSelected("PRESETS");
+        selector.setTooltip("Elegir un preset guardado para este VST3");
+        selector.onChange = [this, slot]()
+        {
+            const auto name = vstPresetSelectors[(size_t) slot].getText();
+            if (name.isNotEmpty() && name != "PRESETS")
+                applyVstPreset(slot, name);
+        };
+        save.setButtonText("+");
+        save.setTooltip("Guardar o sobrescribir el preset seleccionado");
+        save.onClick = [this, slot]() { saveVstPreset(slot); };
+        remove.setButtonText("-");
+        remove.setTooltip("Borrar el preset seleccionado");
+        remove.onClick = [this, slot]() { deleteVstPreset(slot); };
+        fxContainer.addAndMakeVisible(selector);
+        fxContainer.addAndMakeVisible(save);
+        fxContainer.addAndMakeVisible(remove);
     }
 
     for (int i = 0; i < kNumFxPedals; ++i)
@@ -1748,6 +1769,453 @@ void MainComponent::setupFXPedals()
         };
     }
 
+    // La biblioteca de presets vive fuera de la sesion. Los controles se
+    // colocan en una franja propia debajo de cada pedal, nunca sobre el asset.
+    for (int pedalIndex = 0; pedalIndex < kNumFxPedals; ++pedalIndex)
+    {
+        if (fxPedals[pedalIndex] == nullptr)
+            continue;
+
+        auto& selector = pedalPresetSelectors[(size_t) pedalIndex];
+        auto& save = pedalPresetSaveButtons[(size_t) pedalIndex];
+        auto& remove = pedalPresetDeleteButtons[(size_t) pedalIndex];
+        selector.setTextWhenNothingSelected("PRESETS");
+        selector.setTooltip("Elegir un preset guardado para este pedal");
+        selector.onChange = [this, pedalIndex]()
+        {
+            const auto name = pedalPresetSelectors[(size_t) pedalIndex].getText();
+            if (name.isNotEmpty() && name != "PRESETS")
+                applyPedalPreset(pedalIndex, name);
+        };
+        save.setButtonText("+");
+        save.setTooltip("Guardar o sobrescribir el preset seleccionado");
+        save.onClick = [this, pedalIndex]() { savePedalPreset(pedalIndex); };
+        remove.setButtonText("-");
+        remove.setTooltip("Borrar el preset seleccionado");
+        remove.onClick = [this, pedalIndex]() { deletePedalPreset(pedalIndex); };
+        fxContainer.addAndMakeVisible(selector);
+        fxContainer.addAndMakeVisible(save);
+        fxContainer.addAndMakeVisible(remove);
+    }
+    loadPedalPresets();
+    for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
+        refreshVstPresetSelector(slot);
+
+}
+
+juce::File MainComponent::getPedalPresetFile() const
+{
+    auto directory = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                         .getChildFile("Loopernico");
+    return directory.getChildFile("pedal-presets.xml");
+}
+
+void MainComponent::loadPedalPresets()
+{
+    pedalPresets = juce::ValueTree("LOOPERNICO_PEDAL_PRESETS");
+    const auto file = getPedalPresetFile();
+    if (file.existsAsFile())
+        if (auto xml = juce::parseXML(file))
+        {
+            auto loaded = juce::ValueTree::fromXml(*xml);
+            if (loaded.isValid() && loaded.hasType("LOOPERNICO_PEDAL_PRESETS"))
+                pedalPresets = loaded;
+        }
+
+    for (int pedalIndex = 0; pedalIndex < kNumFxPedals; ++pedalIndex)
+        refreshPedalPresetSelector(pedalIndex);
+}
+
+void MainComponent::refreshPedalPresetSelector(int pedalIndex)
+{
+    if (pedalIndex < 0 || pedalIndex >= kNumFxPedals || fxPedals[pedalIndex] == nullptr)
+        return;
+
+    auto& selector = pedalPresetSelectors[(size_t) pedalIndex];
+    const auto previous = selector.getText();
+    selector.clear(juce::dontSendNotification);
+    int itemId = 1;
+    for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+    {
+        const auto pedal = pedalPresets.getChild(i);
+        if ((int) pedal.getProperty("index", -1) != pedalIndex)
+            continue;
+        for (int p = 0; p < pedal.getNumChildren(); ++p)
+        {
+            const auto preset = pedal.getChild(p);
+            if (preset.hasType("PRESET"))
+                selector.addItem(preset.getProperty("name", "Preset").toString(), itemId++);
+        }
+    }
+    selector.setText(previous, juce::dontSendNotification);
+    pedalPresetDeleteButtons[(size_t) pedalIndex].setEnabled(selector.getNumItems() > 0);
+}
+
+void MainComponent::refreshVstPresetSelector(int slot)
+{
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
+        return;
+
+    auto& selector = vstPresetSelectors[(size_t) slot];
+    const auto previous = selector.getText();
+    selector.clear(juce::dontSendNotification);
+    int itemId = 1;
+    for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+    {
+        const auto node = pedalPresets.getChild(i);
+        if (node.getProperty("kind", "PEDAL").toString() != "VST"
+            || (int) node.getProperty("index", -1) != slot)
+            continue;
+        for (int p = 0; p < node.getNumChildren(); ++p)
+            if (node.getChild(p).hasType("PRESET"))
+                selector.addItem(node.getChild(p).getProperty("name", "Preset").toString(), itemId++);
+    }
+    selector.setText(previous, juce::dontSendNotification);
+    vstPresetDeleteButtons[(size_t) slot].setEnabled(selector.getNumItems() > 0);
+}
+
+void MainComponent::saveVstPreset(int slot)
+{
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals)
+        || !effectsChain.hasExternalPlugin(slot))
+        return;
+
+    auto* alert = new juce::AlertWindow("Guardar preset VST3",
+                                        "Nombre para " + effectsChain.getExternalPluginName(slot),
+                                        juce::AlertWindow::NoIcon);
+    const auto selectedName = vstPresetSelectors[(size_t) slot].getText();
+    alert->addTextEditor("name", selectedName.isNotEmpty() && selectedName != "PRESETS"
+                                      ? selectedName : "Mi preset", "Nombre");
+    alert->addButton("GUARDAR", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    alert->addButton("CANCELAR", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    alert->enterModalState(true, juce::ModalCallbackFunction::create(
+        [this, alert, slot](int result)
+        {
+            if (result != 1)
+                return;
+            const auto name = alert->getTextEditorContents("name").trim();
+            if (name.isEmpty())
+                return;
+
+            saveVstPresetWithName(slot, name);
+        }));
+}
+
+void MainComponent::saveVstPresetWithName(int slot, const juce::String& name)
+{
+    juce::ValueTree node;
+    for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+    {
+        const auto candidate = pedalPresets.getChild(i);
+        if (candidate.getProperty("kind", "PEDAL").toString() == "VST"
+            && (int) candidate.getProperty("index", -1) == slot)
+            node = candidate;
+    }
+    bool confirmOverwrite = false;
+    if (node.isValid())
+        for (int i = 0; i < node.getNumChildren(); ++i)
+            confirmOverwrite = confirmOverwrite
+                || node.getChild(i).getProperty("name", "").toString() == name;
+    if (confirmOverwrite)
+    {
+        juce::AlertWindow::showOkCancelBox(
+            juce::AlertWindow::WarningIcon, "Sobrescribir preset",
+            "Ya existe un preset llamado \"" + name + "\". \n¿Sobrescribirlo?", "SOBRESCRIBIR", "CANCELAR",
+            nullptr, juce::ModalCallbackFunction::create(
+                [this, slot, name](int result)
+                {
+                    if (result != 1) return;
+                    for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+                    {
+                        auto candidate = pedalPresets.getChild(i);
+                        if (candidate.getProperty("kind", "PEDAL").toString() == "VST"
+                            && (int) candidate.getProperty("index", -1) == slot)
+                            for (int p = candidate.getNumChildren() - 1; p >= 0; --p)
+                                if (candidate.getChild(p).getProperty("name", "").toString() == name)
+                                    candidate.removeChild(p, nullptr);
+                    }
+                    saveVstPresetWithName(slot, name);
+                }));
+        return;
+    }
+
+    juce::MemoryBlock state;
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        if (auto* plugin = effectsChain.getExternalPluginInstance(slot))
+            plugin->suspendProcessing(true);
+        effectsChain.copyExternalPluginState(state, slot);
+        if (auto* plugin = effectsChain.getExternalPluginInstance(slot))
+            plugin->suspendProcessing(false);
+    }
+    if (state.getSize() == 0)
+        return;
+    if (!node.isValid())
+    {
+        node = juce::ValueTree("PEDAL");
+        node.setProperty("kind", "VST", nullptr);
+        node.setProperty("index", slot, nullptr);
+        pedalPresets.addChild(node, -1, nullptr);
+    }
+    for (int i = node.getNumChildren() - 1; i >= 0; --i)
+        if (node.getChild(i).getProperty("name", "").toString() == name)
+            node.removeChild(i, nullptr);
+    auto preset = juce::ValueTree("PRESET");
+    preset.setProperty("name", name, nullptr);
+    preset.setProperty("pluginPath", effectsChain.getExternalPluginPath(slot), nullptr);
+    preset.setProperty("enabled", effectsChain.isExternalPluginEnabled(slot), nullptr);
+    preset.setProperty("stateBase64", state.toBase64Encoding(), nullptr);
+    node.addChild(preset, -1, nullptr);
+    const auto file = getPedalPresetFile();
+    file.getParentDirectory().createDirectory();
+    if (auto xml = pedalPresets.createXml())
+    {
+        file.getParentDirectory().createDirectory();
+        xml->writeTo(file);
+    }
+    refreshVstPresetSelector(slot);
+    vstPresetSelectors[(size_t) slot].setText(name, juce::dontSendNotification);
+}
+
+void MainComponent::deleteVstPreset(int slot)
+{
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
+        return;
+    const auto name = vstPresetSelectors[(size_t) slot].getText();
+    if (name.isEmpty() || name == "PRESETS")
+        return;
+    juce::AlertWindow::showOkCancelBox(
+        juce::AlertWindow::WarningIcon, "Borrar preset", "¿Borrar \"" + name + "\"?", "BORRAR", "CANCELAR",
+        nullptr, juce::ModalCallbackFunction::create([this, slot, name](int result)
+        {
+            if (result != 1) return;
+            for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+            {
+                auto node = pedalPresets.getChild(i);
+                if (node.getProperty("kind", "PEDAL").toString() == "VST"
+                    && (int) node.getProperty("index", -1) == slot)
+                    for (int p = node.getNumChildren() - 1; p >= 0; --p)
+                        if (node.getChild(p).getProperty("name", "").toString() == name)
+                            node.removeChild(p, nullptr);
+            }
+            if (auto xml = pedalPresets.createXml()) xml->writeTo(getPedalPresetFile());
+            refreshVstPresetSelector(slot);
+            vstPresetSelectors[(size_t) slot].setSelectedItemIndex(0, juce::dontSendNotification);
+            vstPresetDeleteButtons[(size_t) slot].setEnabled(false);
+        }));
+}
+
+void MainComponent::applyVstPreset(int slot, const juce::String& presetName)
+{
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals)
+        || !effectsChain.hasExternalPlugin(slot))
+        return;
+
+    juce::ValueTree preset;
+    for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+    {
+        const auto node = pedalPresets.getChild(i);
+        if (node.getProperty("kind", "PEDAL").toString() != "VST"
+            || (int) node.getProperty("index", -1) != slot)
+            continue;
+        for (int p = 0; p < node.getNumChildren(); ++p)
+            if (node.getChild(p).getProperty("name", "").toString() == presetName)
+                preset = node.getChild(p);
+    }
+    if (!preset.isValid())
+        return;
+
+    const auto storedPath = preset.getProperty("pluginPath", "").toString();
+    if (storedPath != effectsChain.getExternalPluginPath(slot))
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                                               "Preset VST3",
+                                               "Este preset pertenece a otro plugin VST3.");
+        return;
+    }
+
+    juce::MemoryBlock state;
+    if (!state.fromBase64Encoding(preset.getProperty("stateBase64", "").toString()))
+        return;
+    juce::String error;
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        if (auto* plugin = effectsChain.getExternalPluginInstance(slot))
+            plugin->suspendProcessing(true);
+        effectsChain.restoreExternalPluginState(state, error, slot);
+        if (auto* plugin = effectsChain.getExternalPluginInstance(slot))
+            plugin->suspendProcessing(false);
+    }
+    if (error.isNotEmpty())
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                               "No se pudo cargar el preset VST3", error);
+    effectsChain.setExternalPluginEnabled((bool) preset.getProperty("enabled", true), slot);
+    updateExternalVstUi(slot);
+}
+
+void MainComponent::savePedalPreset(int pedalIndex)
+{
+    if (pedalIndex < 0 || pedalIndex >= kNumFxPedals || fxPedals[pedalIndex] == nullptr)
+        return;
+
+    auto* alert = new juce::AlertWindow("Guardar preset",
+                                        "Nombre para la configuracion de "
+                                            + fxPedals[pedalIndex]->getDisplayName(),
+                                        juce::AlertWindow::NoIcon);
+    const auto selectedName = pedalPresetSelectors[(size_t) pedalIndex].getText();
+    alert->addTextEditor("name", selectedName.isNotEmpty() && selectedName != "PRESETS"
+                                      ? selectedName : "Mi preset", "Nombre");
+    alert->addButton("GUARDAR", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    alert->addButton("CANCELAR", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    alert->enterModalState(true, juce::ModalCallbackFunction::create(
+        [this, pedalIndex, alert](int result)
+        {
+            if (result != 1)
+                return;
+
+            const auto name = alert->getTextEditorContents("name").trim();
+            if (name.isEmpty())
+                return;
+
+            savePedalPresetWithName(pedalIndex, name);
+        }));
+}
+
+void MainComponent::savePedalPresetWithName(int pedalIndex, const juce::String& name)
+{
+    juce::ValueTree pedal;
+    for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+    {
+        const auto candidate = pedalPresets.getChild(i);
+        if (candidate.getProperty("kind", "PEDAL").toString() != "VST"
+            && (int) candidate.getProperty("index", -1) == pedalIndex)
+            pedal = candidate;
+    }
+    bool confirmOverwrite = false;
+    if (pedal.isValid())
+        for (int i = 0; i < pedal.getNumChildren(); ++i)
+            confirmOverwrite = confirmOverwrite
+                || pedal.getChild(i).getProperty("name", "").toString() == name;
+    if (confirmOverwrite)
+    {
+        juce::AlertWindow::showOkCancelBox(
+            juce::AlertWindow::WarningIcon, "Sobrescribir preset",
+            "Ya existe un preset llamado \"" + name + "\".\nSobrescribirlo?",
+            "SOBRESCRIBIR", "CANCELAR", nullptr,
+            juce::ModalCallbackFunction::create([this, pedalIndex, name](int result)
+            {
+                if (result != 1) return;
+                for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+                {
+                    auto candidate = pedalPresets.getChild(i);
+                    if (candidate.getProperty("kind", "PEDAL").toString() != "VST"
+                        && (int) candidate.getProperty("index", -1) == pedalIndex)
+                        for (int p = candidate.getNumChildren() - 1; p >= 0; --p)
+                            if (candidate.getChild(p).getProperty("name", "").toString() == name)
+                                candidate.removeChild(p, nullptr);
+                }
+                savePedalPresetWithName(pedalIndex, name);
+            }));
+        return;
+    }
+    if (!pedal.isValid())
+    {
+        pedal = juce::ValueTree("PEDAL");
+        pedal.setProperty("index", pedalIndex, nullptr);
+        pedalPresets.addChild(pedal, -1, nullptr);
+    }
+    auto preset = juce::ValueTree("PRESET");
+    preset.setProperty("name", name, nullptr);
+    auto& ui = *fxPedals[pedalIndex];
+    preset.setProperty("on", ui.onBtn.getToggleState(), nullptr);
+    juce::Slider* knobs[] = { &ui.knob1, &ui.knob2, &ui.knob3, &ui.knob4, &ui.knob5,
+                              &ui.knob6, &ui.knob7, &ui.knob8, &ui.knob9 };
+    for (int knob = 0; knob < 9; ++knob)
+        preset.setProperty("knob" + juce::String(knob + 1), knobs[knob]->getValue(), nullptr);
+    preset.setProperty("eqVolume", ui.eqVolumeSlider.getValue(), nullptr);
+    preset.setProperty("eqGain", ui.eqGainSlider.getValue(), nullptr);
+    for (int band = 0; band < 10; ++band)
+        preset.setProperty("eqBand" + juce::String(band + 1), ui.eqBandSliders[(size_t) band].getValue(), nullptr);
+    preset.setProperty("voxOd2", ui.isTertiaryFootswitchLatched(), nullptr);
+    preset.setProperty("voxBass", ui.getCooltronBassBoost(), nullptr);
+    preset.setProperty("picoMomentary", ui.knob6.getValue() >= 0.5, nullptr);
+    pedal.addChild(preset, -1, nullptr);
+    const auto file = getPedalPresetFile();
+    file.getParentDirectory().createDirectory();
+    if (auto xml = pedalPresets.createXml()) xml->writeTo(file);
+    refreshPedalPresetSelector(pedalIndex);
+    pedalPresetSelectors[(size_t) pedalIndex].setText(name, juce::dontSendNotification);
+}
+
+void MainComponent::deletePedalPreset(int pedalIndex)
+{
+    if (pedalIndex < 0 || pedalIndex >= kNumFxPedals)
+        return;
+    const auto name = pedalPresetSelectors[(size_t) pedalIndex].getText();
+    if (name.isEmpty() || name == "PRESETS")
+        return;
+    juce::AlertWindow::showOkCancelBox(
+        juce::AlertWindow::WarningIcon, "Borrar preset", "Borrar \"" + name + "\"?", "BORRAR", "CANCELAR",
+        nullptr, juce::ModalCallbackFunction::create([this, pedalIndex, name](int result)
+        {
+            if (result != 1) return;
+            for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+            {
+                auto pedal = pedalPresets.getChild(i);
+                if (pedal.getProperty("kind", "PEDAL").toString() == "VST"
+                    || (int) pedal.getProperty("index", -1) != pedalIndex)
+                    continue;
+                for (int p = pedal.getNumChildren() - 1; p >= 0; --p)
+                    if (pedal.getChild(p).getProperty("name", "").toString() == name)
+                        pedal.removeChild(p, nullptr);
+            }
+            if (auto xml = pedalPresets.createXml()) xml->writeTo(getPedalPresetFile());
+            refreshPedalPresetSelector(pedalIndex);
+            pedalPresetSelectors[(size_t) pedalIndex].setSelectedItemIndex(0, juce::dontSendNotification);
+            pedalPresetDeleteButtons[(size_t) pedalIndex].setEnabled(false);
+        }));
+}
+
+void MainComponent::applyPedalPreset(int pedalIndex, const juce::String& presetName)
+{
+    if (pedalIndex < 0 || pedalIndex >= kNumFxPedals || fxPedals[pedalIndex] == nullptr)
+        return;
+
+    juce::ValueTree preset;
+    for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+    {
+        const auto pedal = pedalPresets.getChild(i);
+        if (pedal.getProperty("kind", "PEDAL").toString() == "VST"
+            || (int) pedal.getProperty("index", -1) != pedalIndex)
+            continue;
+        for (int p = 0; p < pedal.getNumChildren(); ++p)
+            if (pedal.getChild(p).getProperty("name", "").toString() == presetName)
+                preset = pedal.getChild(p);
+    }
+    if (!preset.isValid())
+        return;
+
+    auto& ui = *fxPedals[pedalIndex];
+    juce::Slider* knobs[] = { &ui.knob1, &ui.knob2, &ui.knob3, &ui.knob4, &ui.knob5,
+                              &ui.knob6, &ui.knob7, &ui.knob8, &ui.knob9 };
+    for (int knob = 0; knob < 9; ++knob)
+    {
+        knobs[knob]->setValue((double) preset.getProperty("knob" + juce::String(knob + 1),
+                                                           knobs[knob]->getValue()),
+                              juce::dontSendNotification);
+        if (knobs[knob]->onValueChange)
+            knobs[knob]->onValueChange();
+    }
+    ui.eqVolumeSlider.setValue((double) preset.getProperty("eqVolume", ui.eqVolumeSlider.getValue()), juce::dontSendNotification);
+    ui.eqGainSlider.setValue((double) preset.getProperty("eqGain", ui.eqGainSlider.getValue()), juce::dontSendNotification);
+    for (int band = 0; band < 10; ++band)
+        ui.eqBandSliders[(size_t) band].setValue((double) preset.getProperty("eqBand" + juce::String(band + 1), ui.eqBandSliders[(size_t) band].getValue()), juce::dontSendNotification);
+    ui.setTertiaryFootswitchLatched((bool) preset.getProperty("voxOd2", ui.isTertiaryFootswitchLatched()));
+    ui.setCooltronBassBoost((int) preset.getProperty("voxBass", ui.getCooltronBassBoost()));
+    ui.onBtn.setToggleState((bool) preset.getProperty("on", ui.onBtn.getToggleState()), juce::dontSendNotification);
+    if (ui.onBtn.onClick)
+        ui.onBtn.onClick();
+    ui.repaint();
 }
 
 int MainComponent::findFxPedalIndex(const FXPedalComponent& pedal) const
@@ -2294,6 +2762,9 @@ void MainComponent::updateExternalVstUi(int requestedSlot)
         const auto pluginName = effectsChain.getExternalPluginName(slot);
         btnUnloadVst3[(size_t) slot].setEnabled(hasPlugin);
         btnEditVst3[(size_t) slot].setEnabled(hasPlugin);
+        vstPresetSaveButtons[(size_t) slot].setEnabled(hasPlugin);
+        vstPresetDeleteButtons[(size_t) slot].setEnabled(vstPresetSelectors[(size_t) slot].getNumItems() > 0);
+        vstPresetSelectors[(size_t) slot].setEnabled(hasPlugin || vstPresetSelectors[(size_t) slot].getNumItems() > 0);
         // El mapa y el patron pertenecen al slot, no a la instancia cargada.
         // Se pueden preparar antes de elegir o cargar el VST3.
         btnMapVst3[(size_t) slot].setEnabled(true);
@@ -4033,6 +4504,7 @@ void MainComponent::resized()
     int totalPedalWidth = 10;
     for (int slot = 0; slot < kChainItemCount; ++slot)
         totalPedalWidth += fxPedalPitch(fxOrder[(size_t) slot]);
+    constexpr int presetBarHeight = 30;
     fxContainer.setSize(totalPedalWidth, fxViewport.getHeight());
 
     fxPedalFocusOverlay.setBounds(getLocalBounds());
@@ -4048,8 +4520,19 @@ void MainComponent::resized()
         {
             const int orderSlot = (int) std::distance(fxOrder.begin(), found);
             if (focusedFxPedalIndex != chainItem && draggingFxPedal != chainItem)
-                pedal->setBounds(fxSlotStartX(orderSlot) + 14, 4, kVst3PedalBodyWidth, fxContainer.getHeight() - 8);
+                pedal->setBounds(fxSlotStartX(orderSlot) + 14, 4, kVst3PedalBodyWidth,
+                                 fxViewport.getHeight() - presetBarHeight - 8);
             layoutVst3PedalControls(*pedal);
+            const int bodyHeight = fxViewport.getHeight() - presetBarHeight - 8;
+            vstPresetSelectors[(size_t) slot].setBounds(fxSlotStartX(orderSlot) + 14,
+                                                          bodyHeight + 7,
+                                                          kVst3PedalBodyWidth - 60, 20);
+            vstPresetSaveButtons[(size_t) slot].setBounds(
+                fxSlotStartX(orderSlot) + 14 + kVst3PedalBodyWidth - 52,
+                bodyHeight + 7, 24, 20);
+            vstPresetDeleteButtons[(size_t) slot].setBounds(
+                fxSlotStartX(orderSlot) + 14 + kVst3PedalBodyWidth - 28,
+                bodyHeight + 7, 24, 20);
         }
     }
 
@@ -4061,8 +4544,19 @@ void MainComponent::resized()
         if (pedalIndex == draggingFxPedal || pedalIndex == focusedFxPedalIndex)
             continue;
 
+        const int bodyHeight = fxViewport.getHeight() - presetBarHeight - 8;
         fxPedals[pedalIndex]->setBounds(fxSlotStartX(slot) + 14, 4,
-                                        fxPedalBodyWidth(pedalIndex), fxContainer.getHeight() - 8);
+                                        fxPedalBodyWidth(pedalIndex), bodyHeight);
+        pedalPresetSelectors[(size_t) pedalIndex].setBounds(fxSlotStartX(slot) + 14,
+                                                              bodyHeight + 7,
+                                                              juce::jmax(1, fxPedalBodyWidth(pedalIndex) - 60),
+                                                              20);
+        pedalPresetSaveButtons[(size_t) pedalIndex].setBounds(
+            fxSlotStartX(slot) + 14 + fxPedalBodyWidth(pedalIndex) - 52,
+            bodyHeight + 7, 24, 20);
+        pedalPresetDeleteButtons[(size_t) pedalIndex].setBounds(
+            fxSlotStartX(slot) + 14 + fxPedalBodyWidth(pedalIndex) - 28,
+            bodyHeight + 7, 24, 20);
     }
 
     if (focusedFxPedalIndex != -2)

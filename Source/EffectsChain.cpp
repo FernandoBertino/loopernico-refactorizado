@@ -311,12 +311,14 @@ bool EffectsChain::copyExternalPluginState(juce::MemoryBlock& state, int slotInd
     return state.getSize() > 0;
 }
 
-bool EffectsChain::restoreExternalPluginState(const juce::MemoryBlock& state, juce::String& errorMessage)
+bool EffectsChain::restoreExternalPluginState(const juce::MemoryBlock& state,
+                                              juce::String& errorMessage,
+                                              int slotIndex)
 {
-    auto* plugin = getExternalPluginInstance();
+    auto* plugin = getExternalPluginInstance(slotIndex);
     if (plugin == nullptr)
     {
-        errorMessage = "No hay un VST3 cargado para restaurar su estado.";
+        errorMessage = "No hay un VST3 cargado en ese slot para restaurar su estado.";
         return false;
     }
 

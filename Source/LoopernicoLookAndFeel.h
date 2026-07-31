@@ -200,7 +200,8 @@ public:
             return;
         }
 
-        if (slider.getComponentID() != "bossNoiseKnob")
+        const bool ehxPicoKnob = slider.getComponentID() == "ehxPicoKnob";
+        if (slider.getComponentID() != "bossNoiseKnob" && !ehxPicoKnob)
         {
             // Broad drop shadow from the physical height of the knob. The darker,
             // tighter ellipses in each knob style remain as contact occlusion.
@@ -218,11 +219,47 @@ public:
                           shadowRadius * 2.0f, shadowRadius * 2.0f);
         }
 
-        if (slider.getComponentID() == "smallCloneRateKnob"
-            || slider.getComponentID() == "ehxPicoKnob")
+        if (ehxPicoKnob)
         {
             const float angle = startAngle + pos * (endAngle - startAngle);
-            const float r = radius * (slider.getComponentID() == "ehxPicoKnob" ? 1.08f : 0.96f);
+            const float r = radius * 1.03f;
+
+            // The Pico's controls are plain black EHX knobs. Keep the metal
+            // rim restrained and avoid the generic cast-shadow/tick treatment
+            // used by the other pedals.
+            juce::ColourGradient rim(juce::Colour(0xff686866),
+                                      centre.x - r * 0.60f, centre.y - r * 0.75f,
+                                      juce::Colour(0xff242423),
+                                      centre.x + r * 0.60f, centre.y + r * 0.75f, true);
+            g.setGradientFill(rim);
+            g.fillEllipse(centre.x - r, centre.y - r, r * 2.0f, r * 2.0f);
+
+            const float capRadius = r * 0.87f;
+            juce::ColourGradient cap(juce::Colour(0xff3d3d3b),
+                                     centre.x - capRadius * 0.48f,
+                                     centre.y - capRadius * 0.70f,
+                                     juce::Colour(0xff090909),
+                                     centre.x + capRadius * 0.52f,
+                                     centre.y + capRadius * 0.66f, true);
+            g.setGradientFill(cap);
+            g.fillEllipse(centre.x - capRadius, centre.y - capRadius,
+                          capRadius * 2.0f, capRadius * 2.0f);
+            g.setColour(juce::Colours::white.withAlpha(0.12f));
+            g.fillEllipse(centre.x - capRadius * 0.47f,
+                          centre.y - capRadius * 0.60f,
+                          capRadius * 0.74f, capRadius * 0.22f);
+
+            const auto markerStart = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (capRadius * 0.18f);
+            const auto markerEnd = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (capRadius * 0.68f);
+            g.setColour(juce::Colour(0xfff1f0ea));
+            g.drawLine({ markerStart, markerEnd }, 1.8f);
+            return;
+        }
+
+        if (slider.getComponentID() == "smallCloneRateKnob")
+        {
+            const float angle = startAngle + pos * (endAngle - startAngle);
+            const float r = radius * 0.96f;
             g.setColour(juce::Colours::black.withAlpha(0.55f));
             g.fillEllipse(centre.x - r - 1.5f, centre.y - r + 2.2f,
                           r * 2.0f + 3.0f, r * 2.0f + 3.0f);

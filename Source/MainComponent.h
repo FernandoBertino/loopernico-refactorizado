@@ -398,6 +398,19 @@ private:
     void refreshAllThumbnails();
     int findMidiDeviceIndexByIdentifier(const juce::String& identifier) const;
 
+    void loadPedalPresets();
+    void refreshPedalPresetSelector(int pedalIndex);
+    void savePedalPreset(int pedalIndex);
+    void savePedalPresetWithName(int pedalIndex, const juce::String& name);
+    void deletePedalPreset(int pedalIndex);
+    void applyPedalPreset(int pedalIndex, const juce::String& presetName);
+    juce::File getPedalPresetFile() const;
+    void refreshVstPresetSelector(int slot);
+    void saveVstPreset(int slot);
+    void saveVstPresetWithName(int slot, const juce::String& name);
+    void deleteVstPreset(int slot);
+    void applyVstPreset(int slot, const juce::String& presetName);
+
     std::array<juce::TextButton, kMaxVst3Pedals> btnLoadVst3;
     std::array<juce::TextButton, kMaxVst3Pedals> btnUnloadVst3;
     std::array<juce::TextButton, kMaxVst3Pedals> btnEditVst3;
@@ -411,6 +424,13 @@ private:
     std::unique_ptr<juce::FileChooser> exportFileChooser;
     std::array<std::unique_ptr<juce::DocumentWindow>, kMaxVst3Pedals> vst3EditorWindows;
     std::unique_ptr<AudioSettingsPanel> audioSettingsPanel;
+    std::array<juce::ComboBox, kChainItemCount> pedalPresetSelectors;
+    std::array<juce::TextButton, kChainItemCount> pedalPresetSaveButtons;
+    std::array<juce::TextButton, kChainItemCount> pedalPresetDeleteButtons;
+    std::array<juce::ComboBox, kMaxVst3Pedals> vstPresetSelectors;
+    std::array<juce::TextButton, kMaxVst3Pedals> vstPresetSaveButtons;
+    std::array<juce::TextButton, kMaxVst3Pedals> vstPresetDeleteButtons;
+    juce::ValueTree pedalPresets { "LOOPERNICO_PEDAL_PRESETS" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

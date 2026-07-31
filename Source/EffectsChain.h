@@ -144,7 +144,8 @@ public:
     }
     void refreshExternalPluginLatency();
     bool copyExternalPluginState(juce::MemoryBlock& state, int slot = 0) const;
-    bool restoreExternalPluginState(const juce::MemoryBlock& state, juce::String& errorMessage);
+    bool restoreExternalPluginState(const juce::MemoryBlock& state, juce::String& errorMessage,
+                                    int slot = 0);
 
     void setPedalOrder(const std::array<int, kChainItemCount>& order);
 

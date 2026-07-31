@@ -1,3 +1,63 @@
+# Ultimo ajuste comprobado: borrar y sobrescribir presets por pedal
+
+- Corregido el 2026-07-30 en `Source/MainComponent.cpp` y
+  `Source/MainComponent.h`. La franja de presets de cada pedal interno y de
+  cada host VST3 ahora tiene `+` para guardar, `-` para borrar y selector para
+  elegir. `+` preselecciona el nombre actualmente elegido; si ya existe,
+  solicita confirmacion antes de reemplazar su estado. `-` solicita confirmacion
+  y elimina solamente el preset elegido del XML de usuario.
+- La biblioteca sigue siendo `Loopernico/pedal-presets.xml`; no cambia el
+  formato de sesiones. La busqueda de presets internos excluye explicitamente
+  nodos VST3 aunque compartan indice historico.
+
+Verificacion y despliegue 2026-07-30:
+- `Release | x64` compilado correctamente con
+  `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- El ejecutable de `Builds/LocalDeployment/Current` inicio con ventana,
+  permanecio abierto durante la comprobacion y cerro normalmente con codigo
+  0. `Previous` conserva el ejecutable funcional inmediatamente anterior;
+  hay exactamente dos EXE desplegados.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` y la asociacion `.loopernico`
+  siguen apuntando a `Current`, con directorio de trabajo e icono conservados.
+- `git diff --check` correcto; solo informa los avisos preexistentes de
+  normalizacion LF/CRLF.
+
+Proximo paso concreto: probar en uso diario guardar, sobrescribir y borrar un
+preset real de un pedal y de un VST3.
+
+# Ultimo ajuste comprobado: controles del EHX Pico Pitch Fork sin sombras artificiales
+
+- Corregido el 2026-07-29 en `Source/LoopernicoLookAndFeel.h`.
+- El pedal de pitch shifter de la cadena conserva el asset frontal v4, sus
+  proporciones, centros, hitboxes y el footswitch rasterizado. Se ajusto
+  unicamente el render de sus cuatro potenciometros para calcar la referencia:
+  se retiro la sombra generica y el aro radial exagerado, dejando un aro metalico
+  fino, tapa negra, brillo discreto y marcador blanco.
+- No se modificaron DSP, parametros, MIDI, sesiones, orden de pedales ni el
+  calculo o tamano del switch.
+- El footswitch visual se redujo finalmente a `0.35` del ancho del cuerpo para
+  despejar por completo la linea curva impresa; el centro y el hitbox permanecen
+  sin cambios.
+
+Verificacion y despliegue 2026-07-29:
+- `Release | x64` compilado correctamente con
+  `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- Captura revisada: `tmp/pico-pitch-fork/pico-knob-final-hd-2.png`; confirma
+  potes sin sombras raras, etiquetas legibles, switch centrado y proporciones
+  coincidentes con la foto `C:\Users\Fernando\Downloads\ehx-pico-pitch-fork.jpg`.
+- El humo del candidato y de `Builds/LocalDeployment/Current` fue responsivo
+  durante 5 segundos y cerro normalmente con codigo 0.
+- `Builds/LocalDeployment/Current` SHA-256:
+  `41FFCD71125F3CC41C92C7688E42775C3C106D460D9ECCF9254164AE79D6E1A3`.
+  `Previous` conserva la version funcional inmediatamente anterior, SHA-256
+  `34D2A37775422E5FBEFFF353660CDDF7A4398AEE474BE0BA225D51DFEED2C46C`.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` apunta a `Current`, con
+  directorio de trabajo e icono correctos. `.loopernico` conserva
+  `Loopernico.Session`, tipo `Archivo de Loopernico`, comando hacia `Current`
+  con `%1` e icono de sesion.
+
+Proximo paso concreto: ninguno; el ajuste visual queda listo para uso diario.
+
 # Tarea terminada: geometria final del EHX Pico Pitch Fork
 
 - Corregido el 2026-07-29 contra la referencia frontal aportada por Fernando.
@@ -696,6 +756,63 @@ en una captura o sesion interactiva si se desea una comprobacion adicional.
   Loopernico` y el comando con `%1` hacia `Current`.
 
 # Contexto operativo de Loopernico
+
+## Avance 2026-07-29: biblioteca de presets por pedal
+
+- Se agregaron controles de presets en una franja propia debajo de cada pedal
+  interno: desplegable `PRESETS` y boton `+` para guardar la configuracion
+  actual con un nombre. La franja se reserva en el layout y no cubre los
+  assets ni los controles fisicos.
+- Los presets se guardan separadamente de las sesiones en el XML de datos de
+  usuario `Loopernico/pedal-presets.xml`; contienen bypass, knobs, EQ y estados
+  especiales VOX/Pico cuando corresponda. Elegir un preset aplica sus valores
+  al DSP activo sin modificar el archivo `.loopernico`.
+- Los VST3 quedan fuera de esta primera biblioteca: sus estados continuan
+  guardandose dentro de la sesion; un banco independiente de presets VST3
+  requiere un flujo separado por plugin.
+
+Verificacion:
+- Release `x64` compilado correctamente, 0 errores y 0 advertencias.
+- Prueba de humo normal: el ejecutable permanecio responsivo durante 15 s y
+  cerro normalmente.
+- `git diff --check` correcto, con los avisos preexistentes de normalizacion
+  LF/CRLF.
+
+Proximo paso concreto: validar visualmente la franja inferior en distintos
+pedales y, si se desea, implementar bancos independientes para estados VST3.
+
+## Tarea terminada 2026-07-29: presets independientes para VST3
+
+- Cada uno de los cuatro slots VST3 ahora tiene desplegable y boton `+` debajo
+  del host, en la misma franja reservada que los pedales internos.
+- El preset externo guarda nombre, ruta del plugin, bypass y el estado binario
+  completo del VST3 en `Loopernico/pedal-presets.xml`, sin incorporarlo al
+  archivo `.loopernico`.
+- Al aplicar un preset se verifica que la ruta corresponda al plugin cargado;
+  los estados de otro plugin se rechazan con un aviso. La restauracion usa el
+  slot correcto y actualiza la latencia del plugin.
+
+Verificacion y despliegue:
+- Release `x64` correcto, 0 errores; permanecen solamente las dos advertencias
+  C4244 preexistentes de `Source/LatencyCompensation.cpp:188`.
+- Humo del candidato y de `Builds/LocalDeployment/Current`: ambos responsivos
+  durante 15 s y cerrados manualmente sin salida prematura.
+- `Current` actualizado y `Previous` conserva la version funcional anterior.
+- El acceso directo de Escritorio sigue apuntando a `Current`, con el mismo
+  directorio de trabajo e icono.
+
+Proximo paso concreto: probar con un VST3 real (por ejemplo TONEX) guardar dos
+estados, alternarlos y confirmar auditivamente la restauracion.
+
+## Correccion 2026-07-29: visibilidad de la franja de presets
+
+- La primera geometria reservaba el alto adicional fuera del viewport y dejaba
+  los desplegables y botones recortados en el borde inferior.
+- Se corrigio el calculo para que el cuerpo del pedal reduzca su alto dentro
+  del viewport y la franja `PRESETS` quede completamente visible debajo, sin
+  cubrir ningun asset.
+- Release, humo del candidato y humo de `Current` correctos; `Current` fue
+  actualizado nuevamente y `Previous` conserva el respaldo.
 
 ## Ultimo ajuste comprobado: nombre MIDI de Gamechanger Audio Plus II
 
