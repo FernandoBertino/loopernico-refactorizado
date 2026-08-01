@@ -8,6 +8,7 @@
 
 #include <JuceHeader.h>
 #include "MainComponent.h"
+#include "OrbitLoadingIndicator.h"
 
 namespace
 {
@@ -153,13 +154,28 @@ public:
         }
 
         const auto snapshotRequest = parseSnapshotLaunchRequest(commandLine);
-        mainWindow.reset (new MainWindow (getApplicationName(), snapshotRequest));
+        const bool openingSession = snapshotRequest.sessionFile != juce::File();
+        OrbitLoadingIndicator::shared().start(
+            openingSession ? "PREPARANDO Y ABRIENDO LA SESION"
+                           : "PREPARANDO AUDIO Y PEDALES",
+            openingSession ? snapshotRequest.sessionFile.getFileName() : juce::String());
+
+        juce::Timer::callAfterDelay(40, [this, snapshotRequest]
+        {
+            mainWindow.reset(new MainWindow(getApplicationName(), snapshotRequest));
+            if (snapshotRequest.sessionFile == juce::File())
+                OrbitLoadingIndicator::shared().stop();
+            else
+                OrbitLoadingIndicator::shared().updateText(
+                    "CARGANDO SESION", snapshotRequest.sessionFile.getFileName());
+        });
     }
 
     void shutdown() override
     {
         // Add your application's shutdown code here..
 
+        OrbitLoadingIndicator::shared().stop();
         mainWindow = nullptr; // (deletes our window)
     }
 
@@ -233,7 +249,7 @@ public:
                     {
                         if (auto* window = safeWindow.getComponent())
                             if (auto* main = dynamic_cast<MainComponent*> (window->getContentComponent()))
-                                main->openSessionFile(sessionFile);
+                                main->openSessionFileAsync(sessionFile);
                     });
             }
 

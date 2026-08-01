@@ -789,6 +789,35 @@ bool MainComponent::MidiMenuSurface::keyPressed(const juce::KeyPress& key)
     return false;
 }
 
+void MainComponent::LoadingOverlay::showLoading(const juce::String& detailText)
+{
+    detail = detailText;
+    animationPhase = 0.15f;
+    setVisible(true);
+    toFront(false);
+    startTimerHz(30);
+    repaint();
+}
+
+void MainComponent::LoadingOverlay::hideLoading()
+{
+    stopTimer();
+    setVisible(false);
+}
+
+void MainComponent::LoadingOverlay::timerCallback()
+{
+    animationPhase += 0.035f;
+    if (animationPhase >= 1.0f)
+        animationPhase -= 1.0f;
+    repaint();
+}
+
+void MainComponent::LoadingOverlay::paint(juce::Graphics& g)
+{
+    g.fillAll(juce::Colours::black.withAlpha(0.72f));
+}
+
 MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
 {
     setLookAndFeel(&lnf);
@@ -1285,6 +1314,8 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
                 safeThis->handleMidiDeviceListChanged();
         });
     setMidiMenuExpanded(false);
+    loadingOverlay.setInterceptsMouseClicks(true, true);
+    addChildComponent(loadingOverlay);
     startTimerHz(24);
 }
 
@@ -3183,8 +3214,34 @@ void MainComponent::loadSessionFromFile()
         if (selectedFile == juce::File())
             return;
 
-        openSessionFile(selectedFile);
+        openSessionFileAsync(selectedFile);
     });
+}
+
+void MainComponent::openSessionFileAsync(const juce::File& sessionFile)
+{
+    loadingOverlay.showLoading(sessionFile.getFileName());
+    repaint();
+    if (auto* peer = getPeer())
+        peer->performAnyPendingRepaintsNow();
+
+    OrbitLoadingIndicator::shared().start("CARGANDO SESION", sessionFile.getFileName());
+
+    juce::Timer::callAfterDelay(160,
+        [safeThis = juce::Component::SafePointer<MainComponent>(this), sessionFile]
+        {
+            if (auto* component = safeThis.getComponent())
+            {
+                component->openSessionFile(sessionFile);
+                component->finishLoadingSession();
+            }
+        });
+}
+
+void MainComponent::finishLoadingSession()
+{
+    OrbitLoadingIndicator::shared().stop();
+    loadingOverlay.hideLoading();
 }
 
 bool MainComponent::openSessionFile(const juce::File& sessionFile)
@@ -4742,6 +4799,8 @@ void MainComponent::resized()
     const int mH = H - hH - sH - outer * 2;
     const int trackH = mH - fxH - controlH - gap * 2;
     const int fxY = mY + trackH + gap;
+
+    loadingOverlay.setBounds(getLocalBounds());
 
     constexpr int brandWidth = 252;
     constexpr int headerSideGap = 30;

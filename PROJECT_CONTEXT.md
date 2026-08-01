@@ -1,3 +1,53 @@
+# Ultimo ajuste comprobado: luna orbitando durante las cargas
+
+- Implementado el 2026-07-31 en el nuevo
+  `Source/OrbitLoadingIndicator.h`, `Source/Main.cpp`,
+  `Source/MainComponent.h` y `Source/MainComponent.cpp`. La barra generica fue
+  reemplazada por una escena vectorial propia de Loopernico: planeta celeste
+  con volumen, orbita eliptica, luna con crater y profundidad, estrellas
+  discretas, marca y texto de estado.
+- La animacion nativa de Windows tiene su propio hilo y ciclo de mensajes a
+  30 fps. Por eso la luna sigue girando aunque la construccion de la interfaz,
+  ASIO, disco o plugins ocupen el hilo principal y Windows marque temporalmente
+  la ventana grande como no responsiva. Un unico indicador compartido cubre el
+  arranque y luego cambia a `CARGANDO SESION` con el nombre del archivo; al
+  abrir desde `ABRIR`, se inicia directamente con ese estado.
+- La capa JUCE inferior conserva el oscurecimiento modal y bloquea los controles
+  durante la restauracion. La ventana orbital no toma foco, se mantiene al
+  frente y desaparece automaticamente al finalizar o fallar la apertura.
+- No se modificaron DSP, audio, formato o contenido de sesiones, MIDI, pedales,
+  presets ni logica de restauracion.
+
+Verificacion y despliegue 2026-07-31:
+- `Release | x64` compilado correctamente con
+  `Builds/VisualStudio2026/Loopernico Refactorizado.sln`, codigo 0. Pasaron las
+  31 pruebas deterministas y el diagnostico completo de persistencia: audio
+  exacto antes/despues de reiniciar dispositivo y sobrescribir, ORDER, preset y
+  bloqueo de REC restaurados.
+- Durante la apertura real de
+  `C:\Users\Fernando\Desktop\ahshf.loopernico` se capturaron 65 cuadros
+  consecutivos en `tmp/orbit-loading/verified`, todos con SHA-256 distinto. Las
+  capturas `orbit-10.png` y `orbit-40.png` prueban posiciones diferentes y el
+  cambio de `PREPARANDO Y ABRIENDO LA SESION` a `CARGANDO SESION`. La sesion
+  final queda restaurada en `tmp/orbit-loading/verified-after-load.png` con
+  formas de onda, orden y preset visibles.
+- El humo de `Builds/LocalDeployment/Current` genero
+  `tmp/orbit-loading/deployed-smoke.png` y cerro con codigo 0. La apertura
+  directa asociada de `ahshf.loopernico` comprobo el indicador orbital, su
+  desaparicion, ventana final responsiva y cierre normal.
+- `Current` SHA-256:
+  `88744123D214586BD278F98E5961FE302A844472D892EDDF1CA4EA2BB180D37C`.
+  `Previous` conserva la version funcional inmediatamente anterior con barra:
+  `7B7FD20F01D14033BC3EE25CF5A4F30C9AC1F1738328CBB99387CB921412A11B`.
+  Hay exactamente dos ejecutables desplegados.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` apunta a `Current`, con
+  directorio de trabajo e icono correctos. `.loopernico` conserva
+  `Loopernico.Session`, tipo `Archivo de Loopernico`, comando con `%1` hacia
+  `Current` e icono de sesion.
+
+Proximo paso concreto: ninguno; evaluar en uso diario solamente si se desea
+ajustar velocidad, escala o color de planeta/luna.
+
 # Ultimo ajuste comprobado: perillas de PAMPA FUZZ alineadas con el frente
 
 - Corregido el 2026-07-31 en `Source/LoopernicoWidgets.cpp`. El frente del

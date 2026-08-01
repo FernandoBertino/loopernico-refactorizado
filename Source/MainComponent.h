@@ -7,6 +7,7 @@
 #include "MidiController.h"
 #include "EffectsChain.h"
 #include "SessionManager.h"
+#include "OrbitLoadingIndicator.h"
 #include "AudioDeviceController.h"
 #include "AudioSettingsPanel.h"
 
@@ -174,6 +175,7 @@ public:
     void setVst3DisplayTextForSnapshot(const juce::String& text);
     void showAudioSettingsForSnapshot();
     bool openSessionFile(const juce::File& sessionFile);
+    void openSessionFileAsync(const juce::File& sessionFile);
     bool setAudioBufferForSnapshot(int bufferSamples);
     void setSoftwareInputMonitoringForSnapshot(bool enabled);
     bool loadExternalVst3ForSnapshot(const juce::File& pluginFile, bool enabled);
@@ -261,6 +263,21 @@ private:
         bool keyPressed(const juce::KeyPress& key) override;
     };
 
+    class LoadingOverlay final : public juce::Component,
+                                 private juce::Timer
+    {
+    public:
+        void showLoading(const juce::String& detailText);
+        void hideLoading();
+        void paint(juce::Graphics& g) override;
+
+    private:
+        void timerCallback() override;
+
+        juce::String detail;
+        float animationPhase = 0.15f;
+    };
+
     LoopernicoLAF lnf;
     juce::Image rackSurfaceTexture;
     juce::Image brandWordmark;
@@ -306,6 +323,7 @@ private:
     juce::ComboBox   midiDeviceSelector, midiActionSelector, midiMessageTypeSelector;
     juce::Slider     midiNumberSelector;
     MidiMenuSurface  midiMenuSurface;
+    LoadingOverlay   loadingOverlay;
     juce::TextButton btnMidiMenu{"MIDI +"};
     bool             midiMenuExpanded = false;
     juce::TextButton btnMidiLearn{"MAP MIDI"};
@@ -385,6 +403,7 @@ private:
     void saveSessionToFile();
     bool saveCurrentSessionToFile(const juce::File& sessionFile, juce::String& errorMessage);
     void loadSessionFromFile();
+    void finishLoadingSession();
     void exportMixToFile();
     void exportTracksToFolder();
     bool captureLooperSnapshotIncrementally(LooperEngine::SessionSnapshot& snapshot,
