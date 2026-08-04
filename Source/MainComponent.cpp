@@ -963,7 +963,12 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
     };
     btnReset.onClick    = [this]() {
         looper.resetAll();
-        for (int i = 0; i < LooperEngine::kMaxTracks; ++i) looper.refreshThumbnail(i, formatManager);
+        for (int i = 0; i < LooperEngine::kMaxTracks; ++i)
+        {
+            looper.refreshThumbnail(i, formatManager);
+            if (i < (int) visualTracks.size())
+                visualTracks[(size_t) i]->setDisplayName({});
+        }
         repaint();
     };
 
@@ -979,11 +984,15 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
     btnAudioSettings.setTooltip("Abrir configuracion de audio");
     btnAudioSettings.onClick = [this]() { showAudioSettings(); };
     styleHeaderButton(btnAudioSettings, LnfC::Accent);
+    btnStemSeparation.setTooltip("Separar una cancion en stems fuera del hilo de audio");
+    btnStemSeparation.onClick = [this]() { showStemSeparationWindow(); };
+    styleHeaderButton(btnStemSeparation, juce::Colour(0xffb36bff));
     addAndMakeVisible(btnSaveSession);
     addAndMakeVisible(btnLoadSession);
     addAndMakeVisible(btnExportMix);
     addAndMakeVisible(btnExportTracks);
     addAndMakeVisible(btnAudioSettings);
+    addAndMakeVisible(btnStemSeparation);
 
     lblInputSource.setText("ENTRADA:", juce::dontSendNotification);
     lblInputSource.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
@@ -1341,6 +1350,39 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
     setMidiMenuExpanded(false);
     loadingOverlay.setInterceptsMouseClicks(true, true);
     addChildComponent(loadingOverlay);
+
+    stemImportController = std::make_unique<LoopernicoStems::StemImportController>(
+        looper, deviceManager.getAudioCallbackLock());
+    stemSeparationPanel = std::make_unique<LoopernicoStems::StemSeparationPanel>(
+        stemSeparationEngine, *stemImportController);
+    stemSeparationPanel->getFreeTrackCount = [safeThis = juce::Component::SafePointer<MainComponent>(this)]()
+    {
+        if (auto* component = safeThis.getComponent())
+            return LooperEngine::kMaxTracks - component->looper.getTotalTracks();
+        return 0;
+    };
+    stemSeparationPanel->onImportFinished =
+        [safeThis = juce::Component::SafePointer<MainComponent>(this)]
+        (const LoopernicoStems::StemImportController::ImportResult& result)
+    {
+        if (auto* component = safeThis.getComponent())
+        {
+            if (result.success)
+            {
+                for (const auto& imported : result.imported)
+                    if (imported.trackIndex >= 0
+                        && imported.trackIndex < (int) component->visualTracks.size())
+                        component->visualTracks[(size_t) imported.trackIndex]
+                            ->setDisplayName(imported.stem.displayName);
+                component->refreshAllThumbnails();
+                component->refreshTrackUiFromLooper();
+                component->repaint();
+            }
+        }
+    };
+    stemSeparationWindow = std::make_unique<LoopernicoStems::StemSeparationWindow>(
+        *stemSeparationPanel);
+    stemSeparationWindow->setVisible(false);
     startTimerHz(24);
 }
 
@@ -3827,6 +3869,8 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
     for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
         restorePresetName(vstPresetSelectors[(size_t) slot], presetNames[(size_t) slot]);
 
+    for (auto& track : visualTracks)
+        track->setDisplayName({});
     refreshTrackUiFromLooper();
     for (int i = 0; i < looperNode.getNumChildren() && i < (int) visualTracks.size(); ++i)
     {
@@ -4089,12 +4133,274 @@ void MainComponent::markMidiConfigurationDirty()
     lblMidiStatus.setColour(juce::Label::textColourId, LnfC::OvdAmber);
 }
 
+void MainComponent::runStemSeparationDiagnostic(
+    const juce::File& outputDirectory,
+    std::function<void(bool, juce::String)> completion)
+{
+    struct DiagnosticState
+    {
+        juce::Component::SafePointer<MainComponent> main;
+        juce::File directory;
+        juce::File inputFile;
+        juce::StringArray report;
+        std::function<void(bool, juce::String)> completion;
+        bool finished = false;
+    };
+
+    auto state = std::make_shared<DiagnosticState>();
+    state->main = this;
+    state->directory = outputDirectory;
+    state->inputFile = outputDirectory.getChildFile("stem-test-input.wav");
+    state->completion = std::move(completion);
+    auto finish = [state](bool passed, const juce::String& detail)
+    {
+        if (state->finished)
+            return;
+        state->finished = true;
+        state->report.add((passed ? "OK: " : "ERROR: ") + detail);
+        if (state->completion != nullptr)
+            state->completion(passed, state->report.joinIntoString("\n"));
+    };
+
+    if (!outputDirectory.createDirectory())
+    {
+        finish(false, "No se pudo crear el directorio de prueba.");
+        return;
+    }
+
+    constexpr double testRate = 48000.0;
+    constexpr int testSamples = 3 * 48000;
+    juce::AudioBuffer<float> source(2, testSamples);
+    for (int sample = 0; sample < testSamples; ++sample)
+    {
+        const float value = (float) (0.5 * std::sin(juce::MathConstants<double>::twoPi
+                                                   * 440.0 * (double) sample / testRate));
+        source.setSample(0, sample, value);
+        source.setSample(1, sample, value * 0.8f);
+    }
+
+    state->inputFile.deleteFile();
+    auto stream = state->inputFile.createOutputStream();
+    if (stream == nullptr)
+    {
+        finish(false, "No se pudo crear el WAV de entrada.");
+        return;
+    }
+    juce::WavAudioFormat wav;
+    JUCE_BEGIN_IGNORE_DEPRECATION_WARNINGS
+    auto* rawStream = stream.get();
+    std::unique_ptr<juce::AudioFormatWriter> writer(
+        wav.createWriterFor(rawStream, testRate, 2, 24, {}, 0));
+    JUCE_END_IGNORE_DEPRECATION_WARNINGS
+    if (writer == nullptr)
+    {
+        finish(false, "No se pudo inicializar el WAV de entrada.");
+        return;
+    }
+    stream.release();
+    if (!writer->writeFromAudioSampleBuffer(source, 0, source.getNumSamples()))
+    {
+        finish(false, "No se pudo escribir el WAV de entrada.");
+        return;
+    }
+    writer.reset();
+    source.setSize(0, 0);
+    state->report.add("OK: WAV de prueba creado (48 kHz, estereo, 3 s).");
+
+    LoopernicoStems::StemSeparationOptions options;
+    options.inputFile = state->inputFile;
+    options.requestedStems = LoopernicoStems::standardSixStems();
+    options.mode = LoopernicoStems::StemSeparationMode::mock;
+    options.importAutomatically = true;
+
+    stemSeparationEngine.startSeparation(options, {},
+        [state, finish](LoopernicoStems::StemSeparationResult separation) mutable
+        {
+            auto* main = state->main.getComponent();
+            if (main == nullptr)
+                return;
+            if (!separation.success || separation.stems.size() != 6)
+            {
+                finish(false, "El mock no genero seis stems: " + separation.errorMessage);
+                return;
+            }
+
+            juce::AudioFormatManager manager;
+            manager.registerBasicFormats();
+            float previousPeak = 2.0f;
+            for (const auto& stem : separation.stems)
+            {
+                std::unique_ptr<juce::AudioFormatReader> reader(
+                    manager.createReaderFor(stem.outputFile));
+                if (reader == nullptr || reader->numChannels != 2
+                    || reader->lengthInSamples != 3 * 48000)
+                {
+                    finish(false, "Formato o longitud incorrectos en " + stem.outputFile.getFileName());
+                    return;
+                }
+                juce::AudioBuffer<float> block(2, 4096);
+                reader->read(&block, 0, block.getNumSamples(), 0, true, true);
+                const float peak = block.getMagnitude(0, block.getNumSamples());
+                if (peak <= 0.0f || peak >= previousPeak)
+                {
+                    finish(false, "Las ganancias mock no son distinguibles y decrecientes.");
+                    return;
+                }
+                previousPeak = peak;
+            }
+            state->report.add("OK: seis WAV estereo sincronizados y con ganancias distintas.");
+
+            if (main->stemImportController == nullptr)
+            {
+                finish(false, "El controlador de importacion no esta disponible.");
+                return;
+            }
+            main->stemImportController->importAsync(separation.stems, {},
+                [state, finish](LoopernicoStems::StemImportController::ImportResult imported) mutable
+                {
+                    auto* currentMain = state->main.getComponent();
+                    if (currentMain == nullptr)
+                        return;
+                    if (!imported.success || imported.imported.size() != 6
+                        || currentMain->looper.getTotalTracks() != 6)
+                    {
+                        finish(false, "Fallo la importacion de seis pistas: " + imported.errorMessage);
+                        return;
+                    }
+                    state->report.add("OK: seis stems importados en seis pistas libres.");
+
+                    LoopernicoStems::StemSeparationOptions cancelOptions;
+                    cancelOptions.inputFile = state->inputFile;
+                    cancelOptions.requestedStems = LoopernicoStems::standardSixStems();
+                    cancelOptions.mode = LoopernicoStems::StemSeparationMode::mock;
+                    if (!currentMain->stemSeparationEngine.startSeparation(cancelOptions, {},
+                        [state, finish](LoopernicoStems::StemSeparationResult cancelled) mutable
+                        {
+                            if (!cancelled.cancelled)
+                            {
+                                finish(false, "El segundo trabajo no informo cancelacion.");
+                                return;
+                            }
+                            if (cancelled.jobDirectory.exists())
+                            {
+                                finish(false, "La carpeta incompleta no fue limpiada al cancelar.");
+                                return;
+                            }
+                            state->report.add("OK: cancelacion y limpieza de temporales incompletos.");
+                            finish(true, "Diagnostico de separacion mock completado.");
+                        }))
+                    {
+                        finish(false, "No se pudo iniciar el trabajo de cancelacion.");
+                        return;
+                    }
+                    juce::Timer::callAfterDelay(12,
+                        [safeMain = state->main]
+                        {
+                            if (auto* component = safeMain.getComponent())
+                                component->stemSeparationEngine.cancel();
+                        });
+                });
+        });
+}
+
+void MainComponent::runDemucsAdapterDiagnostic(
+    const juce::File& outputDirectory, const juce::File& executable,
+    const juce::File& model, const juce::File& input,
+    std::function<void(bool, juce::String)> completion)
+{
+    if (!outputDirectory.createDirectory())
+    {
+        completion(false, "ERROR: no se pudo crear el directorio del diagnostico Demucs.");
+        return;
+    }
+
+    LoopernicoStems::StemSeparationOptions options;
+    options.inputFile = input;
+    options.requestedStems = LoopernicoStems::standardSixStems();
+    options.mode = LoopernicoStems::StemSeparationMode::demucsCppSixStem;
+    options.demucsCppExecutable = executable;
+    options.demucsCppModel = model;
+    options.importAutomatically = false;
+    const bool usingTestHelper = executable.getFileName().containsIgnoreCase("helper");
+
+    auto safeThis = juce::Component::SafePointer<MainComponent>(this);
+    stemSeparationEngine.startSeparation(
+        options, {},
+        [safeThis, options, usingTestHelper, completion = std::move(completion)](
+            LoopernicoStems::StemSeparationResult result) mutable
+        {
+            const bool passed = result.success && result.stems.size() == 6;
+            if (!passed)
+            {
+                completion(false, "ERROR: diagnostico del adaptador Demucs: "
+                                  + result.errorMessage);
+                return;
+            }
+
+            auto* main = safeThis.getComponent();
+            if (main == nullptr || main->stemImportController == nullptr)
+                return;
+
+            main->stemImportController->importAsync(
+                result.stems, {},
+                [safeThis, options, usingTestHelper,
+                 completion = std::move(completion)](
+                    LoopernicoStems::StemImportController::ImportResult imported) mutable
+                {
+                    auto* current = safeThis.getComponent();
+                    if (current == nullptr)
+                        return;
+                    if (!imported.success || imported.imported.size() != 6
+                        || current->looper.getTotalTracks() != 6)
+                    {
+                        completion(false, "ERROR: los stems Demucs no se importaron en seis pistas: "
+                                          + imported.errorMessage);
+                        return;
+                    }
+
+                    current->stemSeparationEngine.startSeparation(
+                        options, {},
+                        [usingTestHelper, completion = std::move(completion)](
+                            LoopernicoStems::StemSeparationResult cancelled) mutable
+                        {
+                            if (!cancelled.cancelled || cancelled.jobDirectory.exists())
+                            {
+                                completion(false, "ERROR: el proceso Demucs externo no cancelo "
+                                                  "o no limpio temporales.");
+                                return;
+                            }
+                            completion(true,
+                                "OK: adaptador Demucs inicio el proceso externo y valido seis WAV "
+                                "estereo sincronizados a 44.1 kHz.\n"
+                                "OK: seis stems se importaron en seis pistas libres.\n"
+                                "OK: cancelacion termino el proceso y limpio el trabajo incompleto.\n"
+                                + juce::String(usingTestHelper
+                                    ? "OK: contrato comprobado con helper; no evalua calidad."
+                                    : "OK: inferencia neuronal real CPU completada."));
+                        });
+                    juce::Timer::callAfterDelay(80, [safeThis]
+                    {
+                        if (auto* component = safeThis.getComponent())
+                            component->stemSeparationEngine.cancel();
+                    });
+                });
+        });
+}
+
 // ============================================================================
 // DESTRUCTOR
 // ============================================================================
 MainComponent::~MainComponent()
 {
     stopTimer();
+    if (stemSeparationWindow != nullptr)
+        stemSeparationWindow->setVisible(false);
+    stemSeparationWindow.reset();
+    stemSeparationPanel.reset();
+    if (stemImportController != nullptr)
+        stemImportController->cancel();
+    stemImportController.reset();
+    stemSeparationEngine.cancel();
     systemAudioCapture.stop();
     deviceManager.removeChangeListener(this);
     midiDeviceListConnection.reset();
@@ -4308,6 +4614,29 @@ void MainComponent::showAudioSettings()
     audioSettingsPanel->setVisible(true);
     audioSettingsPanel->toFront(true);
     audioSettingsPanel->grabKeyboardFocus();
+}
+
+void MainComponent::showStemSeparationWindow()
+{
+    if (stemSeparationWindow == nullptr)
+        return;
+    stemSeparationWindow->centreWithSize(620, 610);
+    stemSeparationWindow->setVisible(true);
+    stemSeparationWindow->toFront(true);
+}
+
+void MainComponent::showStemSeparationForSnapshot()
+{
+    showStemSeparationWindow();
+    if (stemSeparationPanel != nullptr)
+        stemSeparationPanel->showDemucsModeForSnapshot();
+}
+
+juce::Image MainComponent::createStemSeparationSnapshot() const
+{
+    if (stemSeparationPanel == nullptr)
+        return {};
+    return stemSeparationPanel->createComponentSnapshot(stemSeparationPanel->getLocalBounds());
 }
 
 void MainComponent::showAudioSettingsForSnapshot()
@@ -4921,7 +5250,7 @@ void MainComponent::resized()
     layoutHeaderRow(rightHeaderZone, 13, 144,
                     { &btnSaveSession, &btnLoadSession, &btnAudioSettings });
     layoutHeaderRow(rightHeaderZone, 49, 144,
-                    { &btnExportMix, &btnExportTracks });
+                    { &btnExportMix, &btnExportTracks, &btnStemSeparation });
 
     auto vpRect = juce::Rectangle<int>(fullX + 4, mY + kTrackViewportTopInset, fullW - 8,
                                        trackH - kTrackViewportTopInset - kTrackViewportBottomInset);

@@ -154,6 +154,7 @@ public:
     void setStatus(bool rec, bool play, bool ovd);
     void setLoopSecs(float t, float len);
     void setVULevel(float l) { vuMeter.setLevel(l); }
+    void setDisplayName(const juce::String& name) { displayName = name; repaint(); }
 
     std::function<void(float)> onVolumeChanged;
     std::function<void(bool)> onMuteChanged;
@@ -176,6 +177,7 @@ private:
     bool isRec = false, isPlay = false, isOvd = false;
     float timeSecs = 0.0f, lenSecs = 0.0f;
     bool monoDisplay = false;
+    juce::String displayName;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TrackComponent)
 };

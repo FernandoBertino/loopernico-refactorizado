@@ -381,8 +381,16 @@ void TrackComponent::paint(juce::Graphics& g)
     float tSec = timeSecs - tMin * 60;
     g.setColour(LnfC::TextHi.withAlpha(0.82f));
     g.setFont(juce::Font(juce::FontOptions(10.5f)));
-    g.drawText(juce::String::formatted("%02d:%04.1f", tMin, tSec),
-               42, 34, 88, 14, juce::Justification::centredLeft);
+    if (displayName.isNotEmpty())
+    {
+        g.setColour(tColor.brighter(0.20f));
+        g.setFont(juce::Font(juce::FontOptions(9.5f).withStyle("Bold")));
+        g.drawText(displayName.toUpperCase(), 42, 34, 96, 14,
+                   juce::Justification::centredLeft, true);
+    }
+    else
+        g.drawText(juce::String::formatted("%02d:%04.1f", tMin, tSec),
+                   42, 34, 88, 14, juce::Justification::centredLeft);
 
     if (lenSecs > 0.0f)
     {

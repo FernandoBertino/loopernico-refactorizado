@@ -2,7 +2,7 @@
 
 <JUCERPROJECT id="amtsha" name="Loopernico Refactorizado" projectType="guiapp"
               useAppConfig="0" addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1"
-              defines="JUCE_USE_WINRT_MIDI=1">
+              defines="JUCE_USE_WINRT_MIDI=1 LOOPERNICO_ENABLE_ONNX=0">
   <MAINGROUP id="CSrseB" name="Loopernico Refactorizado">
     <GROUP id="{B4492284-EF41-335B-4E61-153588395F2A}" name="Source">
       <FILE id="yBbiNl" name="LoopernicoWidgets.h" compile="0" resource="0"
@@ -43,6 +43,28 @@
             file="Source/MidiController.cpp"/>
       <FILE id="jAbDJx" name="MidiController.h" compile="0" resource="0"
             file="Source/MidiController.h"/>
+      <GROUP id="{A34768A2-9F16-43E8-89F5-5342FAE67B2F}" name="StemSeparation">
+        <FILE id="StemTypH" name="StemSeparationTypes.h" compile="0" resource="0" file="Source/StemSeparation/StemSeparationTypes.h"/>
+        <FILE id="StemModH" name="StemModelBackend.h" compile="0" resource="0" file="Source/StemSeparation/StemModelBackend.h"/>
+        <FILE id="StemPreH" name="StemAudioPreprocessor.h" compile="0" resource="0" file="Source/StemSeparation/StemAudioPreprocessor.h"/>
+        <FILE id="StemPreC" name="StemAudioPreprocessor.cpp" compile="1" resource="0" file="Source/StemSeparation/StemAudioPreprocessor.cpp"/>
+        <FILE id="StemPosH" name="StemAudioPostprocessor.h" compile="0" resource="0" file="Source/StemSeparation/StemAudioPostprocessor.h"/>
+        <FILE id="StemPosC" name="StemAudioPostprocessor.cpp" compile="1" resource="0" file="Source/StemSeparation/StemAudioPostprocessor.cpp"/>
+        <FILE id="StemMocH" name="MockStemModelBackend.h" compile="0" resource="0" file="Source/StemSeparation/MockStemModelBackend.h"/>
+        <FILE id="StemMocC" name="MockStemModelBackend.cpp" compile="1" resource="0" file="Source/StemSeparation/MockStemModelBackend.cpp"/>
+        <FILE id="StemDmcH" name="DemucsCppStemModelBackend.h" compile="0" resource="0" file="Source/StemSeparation/DemucsCppStemModelBackend.h"/>
+        <FILE id="StemDmcC" name="DemucsCppStemModelBackend.cpp" compile="1" resource="0" file="Source/StemSeparation/DemucsCppStemModelBackend.cpp"/>
+        <FILE id="StemOnxH" name="OnnxStemModelBackend.h" compile="0" resource="0" file="Source/StemSeparation/OnnxStemModelBackend.h"/>
+        <FILE id="StemOnxC" name="OnnxStemModelBackend.cpp" compile="1" resource="0" file="Source/StemSeparation/OnnxStemModelBackend.cpp"/>
+        <FILE id="StemJobH" name="StemSeparationJob.h" compile="0" resource="0" file="Source/StemSeparation/StemSeparationJob.h"/>
+        <FILE id="StemJobC" name="StemSeparationJob.cpp" compile="1" resource="0" file="Source/StemSeparation/StemSeparationJob.cpp"/>
+        <FILE id="StemEngH" name="StemSeparationEngine.h" compile="0" resource="0" file="Source/StemSeparation/StemSeparationEngine.h"/>
+        <FILE id="StemEngC" name="StemSeparationEngine.cpp" compile="1" resource="0" file="Source/StemSeparation/StemSeparationEngine.cpp"/>
+        <FILE id="StemImpH" name="StemImportController.h" compile="0" resource="0" file="Source/StemSeparation/StemImportController.h"/>
+        <FILE id="StemImpC" name="StemImportController.cpp" compile="1" resource="0" file="Source/StemSeparation/StemImportController.cpp"/>
+        <FILE id="StemPanH" name="StemSeparationPanel.h" compile="0" resource="0" file="Source/StemSeparation/StemSeparationPanel.h"/>
+        <FILE id="StemPanC" name="StemSeparationPanel.cpp" compile="1" resource="0" file="Source/StemSeparation/StemSeparationPanel.cpp"/>
+      </GROUP>
     </GROUP>
     <GROUP id="{4670B424-83DC-44F5-8253-7452360C194E}" name="Brand">
       <FILE id="AppIco" name="loopernico-app.png" compile="0" resource="1"

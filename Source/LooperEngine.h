@@ -126,6 +126,29 @@ public:
         std::array<PreparedTrackRestore, kMaxTracks> tracks;
     };
 
+    struct PreparedTrackImport
+    {
+        juce::AudioBuffer<float> audio;
+        juce::String displayName;
+        juce::File sourceFile;
+    };
+
+    struct PreparedTrackBatchImport
+    {
+        int expectedTotalTracks{ 0 };
+        int lengthSamples{ 0 };
+        double targetSampleRate{ 0.0 };
+        std::vector<PreparedTrackImport> tracks;
+    };
+
+    struct TrackBatchImportResult
+    {
+        bool success{ false };
+        int firstTrack{ -1 };
+        int importedTracks{ 0 };
+        juce::String errorMessage;
+    };
+
     LooperEngine();
     ~LooperEngine() = default;
 
@@ -220,6 +243,7 @@ public:
 
     // ---- Import / export (message thread) -----------------------------------
     void importAudioToBase(juce::AudioFormatManager& fmt, const juce::File& file);
+    TrackBatchImportResult commitPreparedTrackBatchImport(PreparedTrackBatchImport&& prepared);
     void exportFullMix(juce::AudioFormatManager& fmt, const juce::File& dest,
                        bool outputMono = false);
     void exportSeparateTracks(juce::AudioFormatManager& fmt, const juce::File& folder,

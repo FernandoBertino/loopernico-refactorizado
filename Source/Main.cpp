@@ -21,6 +21,7 @@ namespace
         juce::String vstDisplayText;
         juce::File sessionFile;
         bool showAudioSettings = false;
+        bool showStemSeparation = false;
         bool forceAudioFallback = false;
         int audioBufferSamples = 0;
         int softwareInputMonitoring = -1;
@@ -29,6 +30,11 @@ namespace
         bool vst3Bypass = false;
         juce::String saveSessionPath;
         juce::String sessionPersistenceTestPath;
+        juce::String stemSeparationTestPath;
+        juce::String demucsAdapterTestPath;
+        juce::String demucsExecutablePath;
+        juce::String demucsModelPath;
+        juce::String demucsInputPath;
     };
 
     SnapshotLaunchRequest parseSnapshotLaunchRequest(const juce::String& commandLine)
@@ -67,6 +73,11 @@ namespace
                 request.enabled = true;
                 request.showAudioSettings = true;
             }
+            else if (argument.equalsIgnoreCase("--snapshot-stems"))
+            {
+                request.enabled = true;
+                request.showStemSeparation = true;
+            }
             else if (argument.equalsIgnoreCase("--snapshot-force-fallback"))
             {
                 request.forceAudioFallback = true;
@@ -103,6 +114,24 @@ namespace
                 request.sessionPersistenceTestPath =
                     argument.fromFirstOccurrenceOf("=", false, false).unquoted();
             }
+            else if (argument.startsWithIgnoreCase("--run-stem-separation-test="))
+            {
+                request.enabled = true;
+                request.stemSeparationTestPath =
+                    argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            }
+            else if (argument.startsWithIgnoreCase("--run-demucs-adapter-test="))
+            {
+                request.enabled = true;
+                request.demucsAdapterTestPath =
+                    argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            }
+            else if (argument.startsWithIgnoreCase("--demucs-executable="))
+                request.demucsExecutablePath = argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            else if (argument.startsWithIgnoreCase("--demucs-model="))
+                request.demucsModelPath = argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            else if (argument.startsWithIgnoreCase("--demucs-input="))
+                request.demucsInputPath = argument.fromFirstOccurrenceOf("=", false, false).unquoted();
             else if (argument.endsWithIgnoreCase(".loopernico"))
             {
                 request.sessionFile = juce::File::isAbsolutePath(argument)
@@ -215,6 +244,7 @@ public:
                                                           .findColour (juce::ResizableWindow::backgroundColourId),
                               DocumentWindow::allButtons)
         {
+            snapshotStemPanel = snapshotRequest.showStemSeparation;
             setUsingNativeTitleBar (true);
             setContentOwned (new MainComponent(snapshotRequest.forceAudioFallback), true);
 
@@ -305,6 +335,56 @@ public:
                     });
             }
 
+            if (snapshotRequest.stemSeparationTestPath.isNotEmpty())
+            {
+                juce::Timer::callAfterDelay(750,
+                    [safeWindow = juce::Component::SafePointer<MainWindow>(this),
+                     outputDirectory = juce::File(snapshotRequest.stemSeparationTestPath)]
+                    {
+                        if (auto* window = safeWindow.getComponent())
+                            if (auto* main = dynamic_cast<MainComponent*>(window->getContentComponent()))
+                                main->runStemSeparationDiagnostic(outputDirectory,
+                                    [outputDirectory](bool passed, juce::String report)
+                                    {
+                                        outputDirectory.createDirectory();
+                                        outputDirectory.getChildFile("stem-separation-test-report.txt")
+                                            .replaceWithText(report + "\n");
+                                        if (auto* app = JUCEApplication::getInstance())
+                                        {
+                                            app->setApplicationReturnValue(passed ? 0 : 1);
+                                            app->quit();
+                                        }
+                                    });
+                    });
+            }
+
+            if (snapshotRequest.demucsAdapterTestPath.isNotEmpty())
+            {
+                juce::Timer::callAfterDelay(750,
+                    [safeWindow = juce::Component::SafePointer<MainWindow>(this),
+                     outputDirectory = juce::File(snapshotRequest.demucsAdapterTestPath),
+                     executable = juce::File(snapshotRequest.demucsExecutablePath),
+                     model = juce::File(snapshotRequest.demucsModelPath),
+                     input = juce::File(snapshotRequest.demucsInputPath)]
+                    {
+                        if (auto* window = safeWindow.getComponent())
+                            if (auto* main = dynamic_cast<MainComponent*>(window->getContentComponent()))
+                                main->runDemucsAdapterDiagnostic(
+                                    outputDirectory, executable, model, input,
+                                    [outputDirectory](bool passed, juce::String report)
+                                    {
+                                        outputDirectory.createDirectory();
+                                        outputDirectory.getChildFile("demucs-adapter-test-report.txt")
+                                            .replaceWithText(report + "\n");
+                                        if (auto* app = JUCEApplication::getInstance())
+                                        {
+                                            app->setApplicationReturnValue(passed ? 0 : 1);
+                                            app->quit();
+                                        }
+                                    });
+                    });
+            }
+
             if (snapshotRequest.enabled && snapshotRequest.focusPedal >= -1)
                 if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
                     main->focusFxPedalForSnapshot(snapshotRequest.focusPedal);
@@ -317,8 +397,14 @@ public:
                 if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
                     main->showAudioSettingsForSnapshot();
 
+            if (snapshotRequest.enabled && snapshotRequest.showStemSeparation)
+                if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
+                    main->showStemSeparationForSnapshot();
+
             if (snapshotRequest.enabled
-                && snapshotRequest.sessionPersistenceTestPath.isEmpty())
+                && snapshotRequest.sessionPersistenceTestPath.isEmpty()
+                && snapshotRequest.stemSeparationTestPath.isEmpty()
+                && snapshotRequest.demucsAdapterTestPath.isEmpty())
                 scheduleUiSnapshot(snapshotRequest.outputPath, true, snapshotRequest.delayMs);
         }
 
@@ -349,6 +435,8 @@ public:
         */
 
     private:
+        bool snapshotStemPanel = false;
+
         static juce::String snapshotFileName()
         {
             const auto now = juce::Time::getCurrentTime();
@@ -393,7 +481,12 @@ public:
             if (!stream.openedOk())
                 return false;
 
-            const auto image = content->createComponentSnapshot(content->getLocalBounds());
+            juce::Image image;
+            if (snapshotStemPanel)
+                if (auto* main = dynamic_cast<MainComponent*>(content))
+                    image = main->createStemSeparationSnapshot();
+            if (!image.isValid())
+                image = content->createComponentSnapshot(content->getLocalBounds());
             juce::PNGImageFormat png;
             const bool written = png.writeImageToStream(image, stream);
             stream.flush();

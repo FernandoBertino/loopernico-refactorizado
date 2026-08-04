@@ -11,6 +11,9 @@
 #include "AudioDeviceController.h"
 #include "AudioSettingsPanel.h"
 #include "SystemAudioCapture.h"
+#include "StemSeparation/StemSeparationEngine.h"
+#include "StemSeparation/StemImportController.h"
+#include "StemSeparation/StemSeparationPanel.h"
 
 class TonexDisplayLabel final : public juce::Label,
                                 private juce::Timer
@@ -175,6 +178,8 @@ public:
     void focusFxPedalForSnapshot(int pedalIndex);
     void setVst3DisplayTextForSnapshot(const juce::String& text);
     void showAudioSettingsForSnapshot();
+    void showStemSeparationForSnapshot();
+    juce::Image createStemSeparationSnapshot() const;
     bool openSessionFile(const juce::File& sessionFile);
     void openSessionFileAsync(const juce::File& sessionFile);
     bool setAudioBufferForSnapshot(int bufferSamples);
@@ -184,6 +189,13 @@ public:
     bool saveSessionFileForSnapshot(const juce::File& sessionFile, juce::String& errorMessage);
     bool runSessionPersistenceDiagnostic(const juce::File& sessionFile,
                                          juce::String& report);
+    void runStemSeparationDiagnostic(const juce::File& outputDirectory,
+                                     std::function<void(bool, juce::String)> completion);
+    void runDemucsAdapterDiagnostic(const juce::File& outputDirectory,
+                                    const juce::File& executable,
+                                    const juce::File& model,
+                                    const juce::File& input,
+                                    std::function<void(bool, juce::String)> completion);
 
 private:
     class LoopRangeMarker final : public juce::Component
@@ -296,6 +308,10 @@ private:
     MidiController           midiController;
     juce::AudioFormatManager formatManager;
     EffectsChain             effectsChain;
+    LoopernicoStems::StemSeparationEngine stemSeparationEngine;
+    std::unique_ptr<LoopernicoStems::StemImportController> stemImportController;
+    std::unique_ptr<LoopernicoStems::StemSeparationPanel> stemSeparationPanel;
+    std::unique_ptr<LoopernicoStems::StemSeparationWindow> stemSeparationWindow;
 
     juce::TextButton      btnRecConfirm, btnStopPlay, btnUndo, btnRedo;
     juce::TextButton      btnCancel, btnMuteAll, btnPauseAll, btnReset;
@@ -304,6 +320,7 @@ private:
     juce::TextButton      btnExportMix{"EXPORTAR MIX"};
     juce::TextButton      btnExportTracks{"EXPORTAR PISTAS"};
     juce::TextButton      btnAudioSettings{"AUDIO"};
+    juce::TextButton      btnStemSeparation{"SEPARAR CANCION"};
     juce::Label           lblInputSource;
     juce::ComboBox        inputSourceSelector;
     juce::Label           lblAudioStatus;
@@ -378,6 +395,7 @@ private:
 
     void changeListenerCallback(juce::ChangeBroadcaster* source) override;
     void showAudioSettings();
+    void showStemSeparationWindow();
     void closeAudioSettings();
     void updateAudioStatusUi();
     void updateRecordingLatencyCompensation();

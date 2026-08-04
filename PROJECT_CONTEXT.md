@@ -1,3 +1,137 @@
+# Funcion comprobada 2026-08-04: separacion offline de stems (arquitectura y mock)
+
+- Se agrego `Source/StemSeparation/` con fachada `StemSeparationEngine`, trabajo
+  cancelable, backend intercambiable, pre/postprocesado por bloques, backend
+  mock, esqueleto ONNX y `StemImportController`. El mock genera seis WAV
+  sincronizados (voz, bateria, bajo, guitarra, piano y otros) copiando la mezcla
+  con ganancias distintas; la UI lo identifica expresamente como simulacion.
+- `SEPARAR CANCION` abre una ventana no modal con WAV/FLAC/MP3, seleccion de
+  stems, modo, progreso, cancelacion, normalizacion y autoimportacion. ONNX queda
+  visible pero deshabilitado con `LOOPERNICO_ENABLE_ONNX=0`.
+- Toda lectura, escritura, remuestreo JUCE y reserva pesada ocurre en workers.
+  `LooperEngine` recibio un commit preparado en lote que mueve buffers bajo el
+  lock del callback; no se modifico `processBlock()`. Solo se usan pistas libres,
+  nunca se sobrescriben grabaciones y una falta de espacio produce importacion
+  parcial informada.
+- Temporales por UUID bajo `%TEMP%/Loopernico/StemSeparation`; errores y
+  cancelaciones limpian el trabajo incompleto. Resultados correctos se conservan
+  deliberadamente. Integracion, licencias y limites en
+  `STEM_SEPARATION_MODELS.md`.
+
+Verificacion y despliegue 2026-08-04:
+- Projucer regenerado y `Release | x64` correcto con
+  `Builds/VisualStudio2026/Loopernico Refactorizado.sln`.
+- Diagnostico integrado correcto: WAV 48 kHz/estereo de 3 s, seis WAV con igual
+  longitud y ganancias distintas, seis importaciones y cancelacion con limpieza.
+  Informe en `tmp/stem-separation-diagnostic-final/stem-separation-test-report.txt`.
+- Las 31 pruebas deterministas existentes pasaron. `git diff --check` correcto.
+- Capturas revisadas en `tmp/stem-separation-panel-final.png` y
+  `tmp/stem-separation-panel-deployed-final.png`. Humo desplegado: codigo 0.
+- `Current` SHA-256:
+  `C333ED0CCA3E9396F27505212FF003AEEFA5CD781BB59BC1BD098A25427E8239`.
+  `Previous` conserva la version anterior:
+  `6508C56D228681252B9D3C4A43C75BD43B8714025DF28CB581B5244A10466F5D`.
+  Hay exactamente dos EXE desplegados; acceso directo y asociacion
+  `.loopernico` conservan destino, tipo, comando e icono correctos.
+
+Limitaciones reales: no hay modelo ni inferencia real; overlap-add especifico,
+metadatos/tensores ONNX, licencias de pesos y persistencia de nombres de stems
+quedan pendientes hasta elegir un modelo. La limpieza automatica de resultados
+correctos por antiguedad tampoco se implementa.
+
+Investigacion de modelo 2026-08-04:
+- `htdemucs_6s` coincide exactamente con los seis stems, 44.1 kHz estereo, pero
+  no tiene una exportacion ONNX oficial verificable. El modelo es experimental
+  y su piano tiene sangrado/artefactos documentados.
+- La GTX 1050 disponible tiene 2 GB de VRAM; queda por debajo del minimo normal
+  documentado para Demucs. CPU o el port de baja memoria `demucs.cpp` son rutas
+  mas realistas que CUDA. DirectML es compatible con la GPU, pero no soluciona
+  la ausencia de un grafo ONNX concreto.
+- Codigo Demucs, port `demucs.cpp` y ficha de pesos convertidos declaran MIT,
+  pero no se encontro una licencia separada e inequívoca del checkpoint oficial;
+  existe una consulta abierta sobre su redistribucion. No se descargaron ni
+  incorporaron dependencias o pesos. Banquet tampoco es adecuado para esta GPU.
+- La comparacion y las tres rutas posibles quedaron documentadas en
+  `STEM_SEPARATION_MODELS.md`. Este avance modifica solo documentacion; no exige
+  recompilar ni rotar el despliegue funcional actual.
+
+Backend portable elegido e implementado 2026-08-04:
+- Se agrego `DemucsCppStemModelBackend` como modo real opcional CPU-first. La UI
+  permite seleccionar ejecutable x64 y pesos GGML externos; Loopernico no los
+  descarga ni redistribuye. ONNX/DirectML/CUDA quedan como aceleradores futuros,
+  no como requisito para usar el looper en otra PC.
+- El worker convierte WAV/FLAC/MP3 a WAV estereo de 44.1 kHz mediante
+  `ResamplingAudioSource`, inicia el proceso externo con argumentos separados,
+  comprueba cancelacion cada 100 ms y valida seis salidas estereo, sincronizadas
+  y de igual longitud antes de importarlas. No se toca el callback de audio.
+- Se detecto en prueba que capturar stdout mediante `readProcessOutput()` podia
+  bloquear la cancelacion si el hijo no escribia. Se retiro la redireccion y la
+  prueba posterior comprobo terminacion del proceso y limpieza del trabajo.
+- Se agrego el diagnostico `--run-demucs-adapter-test` y un helper solo bajo
+  `tmp/`. El helper copia audio para comprobar el contrato; no es un modelo ni
+  demuestra calidad de separacion.
+
+Verificacion y despliegue CPU 2026-08-04:
+- Projucer regenerado y `Release | x64` correcto. `git diff --check` correcto.
+- 31/31 pruebas deterministas, diagnostico mock completo y diagnostico del
+  adaptador (seis WAV a 44.1 kHz, cancelacion y limpieza) pasaron con codigo 0.
+- Configuracion inexistente produce: `No se encontro el ejecutable demucs.cpp
+  seleccionado.` Captura revisada en `tmp/stem-cpu-deployed-panel.png`.
+- `Current` SHA-256:
+  `69C9682A4200096972D7F56516F7A5EBD7BEE1987023D73B6397C047FF6F22E7`.
+  `Previous` conserva el Current anterior:
+  `C333ED0CCA3E9396F27505212FF003AEEFA5CD781BB59BC1BD098A25427E8239`.
+  Hay exactamente dos EXE; humo, acceso directo y asociacion `.loopernico`
+  quedaron comprobados hacia `Current`.
+
+Instalacion e inferencia real 2026-08-04:
+- Fernando confirmo uso exclusivamente personal y autorizo instalar localmente
+  el runtime/peso. Se clono `demucs.cpp` con submodulos fuera del repositorio,
+  se adapto su CMake local para MSVC/OpenMP y se corrigio una conversion
+  `filesystem::path` del CLI. El runtime x64 compilo correctamente.
+- El peso `ggml-model-htdemucs-6s-f16.bin` se instalo bajo `%LOCALAPPDATA%`.
+  Tamano 54.855.129 bytes; SHA-256 comprobado contra el OID LFS publicado:
+  `09704F4CEAE204E56E77D5EEFD6AC71D7275BE81FD507E6913371D59ABCEE856`.
+- Inferencia neuronal CPU real correcta sobre entrada 48 kHz/estereo de 3 s:
+  seis WAV float32 a 44.1 kHz, 264600 muestras intercaladas cada uno, senales no
+  identicas. La senoide quedo principalmente en bajo (RMS 0.090951); el ciclo
+  con segunda ejecucion cancelada demoro ~90 s. Pico de RAM observado del hijo:
+  ~468 MB. No se utilizo GPU.
+- El panel detecta automaticamente runtime/model bajo
+  `%LOCALAPPDATA%/Loopernico/StemSeparation`, selecciona Demucs CPU y muestra
+  `Demucs CPU listo para separacion real.` En otra PC sin archivos vuelve al
+  mock y admite seleccion manual.
+- Release final, humo y contrato del adaptador desplegado correctos. `Current`:
+  `E070D82D143F3FBDA07B2FD5E80E02FA5B429B982C9202BE9F2B458FB37AB11E`.
+  `Previous`:
+  `69C9682A4200096972D7F56516F7A5EBD7BEE1987023D73B6397C047FF6F22E7`.
+  Captura revisada: `tmp/stem-installed-ready-panel.png`.
+
+Prueba musical real 2026-08-04:
+- Se proceso `C:\Users\Fernando\Downloads\gg.wav`, WAV estereo de 10 s, 48 kHz
+  y 24 bits. Inferencia, importacion y segunda ejecucion cancelada: 146 s,
+  codigo 0. El hijo alcanzo aproximadamente 1 GB de RAM; no uso GPU.
+- Los seis stems float32 quedaron en 44.1 kHz con exactamente 441000 frames y
+  se importaron correctamente en seis pistas libres. El diagnostico ahora
+  verifica explicitamente la importacion y distingue helper de inferencia real.
+- RMS: drums 0.040144, bass 0.028049, other 0.063034, vocals 0.028032,
+  guitar 0.053051, piano 0.028050. Las diferencias/correlaciones demuestran que
+  no son copias. Resultados para escucha en `tmp/stem-musical-real/results/` y
+  metricas en `tmp/stem-musical-real/stem-metrics.txt`.
+- Release final: 31 pruebas, mock, inferencia/importacion real, cancelacion,
+  `git diff --check` y humo desplegado correctos. `Current`:
+  `35311219B77A8868C97F1CB796CDE3ED1217A79CDA1127BC9527162FE7EBAAF1`.
+  `Previous`: `E070D82D143F3FBDA07B2FD5E80E02FA5B429B982C9202BE9F2B458FB37AB11E`.
+
+Limitacion real: Codex pudo validar estructura y senales pero no hacer una
+evaluacion auditiva subjetiva. Fernando debe escuchar los seis WAV; el modelo
+experimental puede presentar sangrado, especialmente en piano. La instalacion
+es local/personal y no se prepara redistribucion.
+
+Proximo paso concreto: escuchar `tmp/stem-musical-real/results/` y, si la
+calidad es util, probar desde la UI con una cancion completa elegida por
+Fernando; luego decidir si conviene optimizar CPU o agregar GPU opcional.
+
 # Ultima funcion comprobada: grabar navegador / audio de Windows
 
 - Implementado el 2026-08-03 en `Source/SystemAudioCapture.h`,

@@ -104,6 +104,18 @@ hay un sample apropiado, el Rhythm Box usa su sonido sintetizado interno.
 El formato de sesion es interno y puede evolucionar; conviene conservar una
 copia de las sesiones importantes antes de probar cambios de desarrollo.
 
+## Separar una cancion en stems
+
+El encabezado incluye `SEPARAR CANCION`. La primera etapa ofrece un modo de
+prueba offline que genera voz, bateria, bajo, guitarra, piano y otros, muestra
+progreso, permite cancelar e importa los WAV en pistas libres. Este modo copia
+la mezcla con ganancias distintas y se identifica expresamente como simulacion;
+no realiza separacion por inteligencia artificial.
+
+La arquitectura, temporales, integracion futura de ONNX Runtime, licencias,
+compilacion y diagnostico estan documentados en
+[`STEM_SEPARATION_MODELS.md`](STEM_SEPARATION_MODELS.md).
+
 ## Capturas de interfaz
 
 - `F12` guarda una captura del contenido actual de la aplicacion en
@@ -119,9 +131,12 @@ del sistema no reconoce la ventana JUCE.
 
 ## Verificacion
 
-Actualmente no existe un objetivo de pruebas automatizadas para el codigo propio
-del proyecto. La solucion generada contiene solamente la aplicacion, y no se
-agrego un framework ni codigo de test al ejecutable para evitar afectar Release.
+La solucion generada contiene solamente la aplicacion. Algunas rutas criticas
+poseen diagnosticos deterministas integrados; la separacion mock se comprueba
+con `--run-stem-separation-test=<carpeta>`. El contrato del adaptador CPU puede
+probarse, sin evaluar calidad del modelo, mediante
+`--run-demucs-adapter-test=<carpeta>`, `--demucs-executable=<exe>`,
+`--demucs-model=<bin>` y `--demucs-input=<audio>`.
 
 Antes de publicar un cambio se recomienda:
 

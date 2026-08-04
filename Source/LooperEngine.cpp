@@ -1286,6 +1286,89 @@ void LooperEngine::importAudioToBase(juce::AudioFormatManager& fmt, const juce::
     loopReadPosition.store(0);
 }
 
+LooperEngine::TrackBatchImportResult LooperEngine::commitPreparedTrackBatchImport(
+    PreparedTrackBatchImport&& prepared)
+{
+    TrackBatchImportResult result;
+    const auto state = currentState.load();
+    if (state == State::ArmedBase || state == State::RecordingBase || state == State::RecordingLayer)
+    {
+        result.errorMessage = "No se pueden importar stems mientras hay una grabacion activa.";
+        return result;
+    }
+
+    const int existingTracks = totalTracks.load();
+    if (existingTracks != prepared.expectedTotalTracks)
+    {
+        result.errorMessage = "Las pistas cambiaron mientras se preparaba la importacion. Intenta nuevamente.";
+        return result;
+    }
+    if (prepared.targetSampleRate <= 0.0
+        || std::abs(prepared.targetSampleRate - sampleRate_) > 0.5)
+    {
+        result.errorMessage = "El dispositivo de audio cambio durante la importacion.";
+        return result;
+    }
+    if (prepared.tracks.empty() || existingTracks + (int) prepared.tracks.size() > kMaxTracks)
+    {
+        result.errorMessage = "La cantidad de pistas preparadas no cabe en el looper.";
+        return result;
+    }
+
+    const int requiredLength = existingTracks == 0
+        ? prepared.lengthSamples : baseLoopLengthSamples.load();
+    if (requiredLength <= 0 || requiredLength > maxLoopLengthSamples
+        || prepared.lengthSamples != requiredLength)
+    {
+        result.errorMessage = "La longitud preparada no coincide con el loop actual.";
+        return result;
+    }
+    for (const auto& source : prepared.tracks)
+    {
+        if (source.audio.getNumChannels() != 2
+            || source.audio.getNumSamples() != requiredLength)
+        {
+            result.errorMessage = "Uno de los stems preparados tiene un formato interno invalido.";
+            return result;
+        }
+    }
+
+    result.firstTrack = existingTracks;
+    for (size_t i = 0; i < prepared.tracks.size(); ++i)
+    {
+        const int destination = existingTracks + (int) i;
+        // AudioBuffer::operator=(AudioBuffer&&) intercambia su HeapBlock; no
+        // copia muestras. El buffer anterior queda en el objeto preparado y se
+        // libera despues de abandonar el lock del callback.
+        tracks[destination].buffer = std::move(prepared.tracks[i].audio);
+        tracks[destination].lengthSamples.store(requiredLength);
+        tracks[destination].redoLengthSamples.store(0);
+        tracks[destination].volume.store(1.0f);
+        tracks[destination].isMuted.store(false);
+        tracks[destination].isPaused.store(false);
+        tracks[destination].pausedReadPos.store(0);
+        tracks[destination].currentGain.store(1.0f);
+        tracks[destination].bufferRevision.fetch_add(1, std::memory_order_release);
+    }
+
+    if (existingTracks == 0)
+    {
+        baseLoopLengthSamples.store(requiredLength);
+        editableLoopSourceSamples.store(requiredLength);
+        recordWritePosition.store(0);
+        recordStartPosition.store(0);
+    }
+    totalTracks.store(existingTracks + (int) prepared.tracks.size());
+    redoCount = 0;
+    loopReadPosition.store(0);
+    globalPaused.store(false);
+    currentState.store(State::Playing);
+
+    result.success = true;
+    result.importedTracks = (int) prepared.tracks.size();
+    return result;
+}
+
 void LooperEngine::exportFullMix(juce::AudioFormatManager& fmt, const juce::File& dest,
                                  bool outputMono)
 {
