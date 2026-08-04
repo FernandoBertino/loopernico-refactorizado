@@ -1,3 +1,60 @@
+# Ultima funcion comprobada: grabar navegador / audio de Windows
+
+- Implementado el 2026-08-03 en `Source/SystemAudioCapture.h`,
+  `Source/MainComponent.h`, `Source/MainComponent.cpp`, `Source/Main.cpp`, el
+  proyecto Projucer y `README.md`. La franja del looper ofrece ahora una entrada
+  diferenciada `GUITARRA` / `NAVEGADOR / WINDOWS`.
+- La nueva fuente usa WASAPI loopback sobre la salida multimedia predeterminada
+  de Windows sin cambiar el dispositivo ASIO de Loopernico. Tras la prueba real
+  del usuario se corrigieron cortes y una leve ralentizacion: un temporizador de
+  alta resolucion independiente de la UI drena WASAPI cada 2 ms, y el callback
+  consume un ring buffer estereo preasignado con un colchon de 120 ms,
+  remuestreo lineal y correccion suave de deriva entre los relojes WASAPI/ASIO.
+- Ante un faltante puntual el cursor mantiene el tiempo real en vez de esperar
+  muestras atrasadas (la causa de que el loop quedara estirado). Si YouTube se
+  pausa y el endpoint deja de producir paquetes, la captura rearma el colchon
+  exclusivamente con audio nuevo al reanudarse, sin repetir material anterior.
+- El backing track se graba limpio y estereo: no atraviesa pedales/VST y no se
+  convierte a mono aunque la escucha general este en `MONO`. La cadena sigue
+  avanzando para conservar transporte y bus de ritmo. El audio de Windows no se
+  monitoriza otra vez dentro de Loopernico, evitando duplicacion y feedback.
+- La UI muestra endpoint, sample rate y pico detectado. La eleccion es operativa
+  para la ejecucion actual y no cambia el formato ni el contenido de sesiones.
+
+Verificacion inicial y correccion de continuidad 2026-08-03:
+- `Release | x64` correcto con el proyecto regenerado por Projucer. Pasaron las
+  31 pruebas deterministas.
+- Una prueba WASAPI aislada capturo 191520 cuadros estereo a 48 kHz con pico
+  `0.346893`. El Release final y `Builds/LocalDeployment/Current` capturaron la
+  alarma de Windows iniciada despues de ASIO y mostraron `-9.3 dB`; las capturas
+  `tmp/system-audio-release-signal.png` y
+  `tmp/system-audio-deployed-signal.png` son byte a byte identicas.
+- El humo desplegado cerro normalmente con codigo 0. `Current` SHA-256:
+  `69371385133A2116A1EC783D57937B02FEB453D4D53ACC45A69C9CDA52BEA5BA`.
+  `Previous` conserva la version funcional anterior, SHA-256
+  `88744123D214586BD278F98E5961FE302A844472D892EDDF1CA4EA2BB180D37C`.
+  Hay exactamente dos ejecutables desplegados.
+- `C:\Users\Fernando\Desktop\Loopernico.lnk` apunta a `Current`, con
+  directorio de trabajo e icono correctos. `.loopernico` conserva
+  `Loopernico.Session`, tipo, icono y comando con `%1` hacia `Current`.
+- La correccion de continuidad compilo en `Release | x64` sin advertencias y
+  volvio a pasar las 31 pruebas. Una prueba de 10 s con la captura desacoplada
+  de la UI recibio la salida de Windows a 48 kHz y `-7.3 dB`, y cerro con codigo
+  0 (`tmp/system-audio-continuity-release.png`). La version defectuosa no se
+  roto a `Previous`: se reemplazo `Current` y se conservo el ultimo Release
+  estable anterior como respaldo.
+
+Uso: elegir `NAVEGADOR / WINDOWS`, comenzar a reproducir YouTube y comprobar
+que aparece un nivel en dB antes de pulsar `REC / CONFIRM`. Para volver al
+instrumento, elegir `GUITARRA`.
+
+Limitacion real: se captura la salida multimedia predeterminada completa de
+Windows, no una aplicacion individual. Las notificaciones u otros programas que
+suenen por ese endpoint tambien quedaran grabados.
+
+Proximo paso concreto: repetir la prueba auditiva con la misma cancion de
+YouTube que revelo el problema y luego agregar una segunda pista de guitarra.
+
 # Ultimo ajuste comprobado: luna orbitando durante las cargas
 
 - Implementado el 2026-07-31 en el nuevo

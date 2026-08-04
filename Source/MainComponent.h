@@ -10,6 +10,7 @@
 #include "OrbitLoadingIndicator.h"
 #include "AudioDeviceController.h"
 #include "AudioSettingsPanel.h"
+#include "SystemAudioCapture.h"
 
 class TonexDisplayLabel final : public juce::Label,
                                 private juce::Timer
@@ -178,6 +179,7 @@ public:
     void openSessionFileAsync(const juce::File& sessionFile);
     bool setAudioBufferForSnapshot(int bufferSamples);
     void setSoftwareInputMonitoringForSnapshot(bool enabled);
+    void setSystemAudioInputForSnapshot(bool enabled);
     bool loadExternalVst3ForSnapshot(const juce::File& pluginFile, bool enabled);
     bool saveSessionFileForSnapshot(const juce::File& sessionFile, juce::String& errorMessage);
     bool runSessionPersistenceDiagnostic(const juce::File& sessionFile,
@@ -285,7 +287,9 @@ private:
     juce::AudioDeviceManager deviceManager;
     AudioDeviceController audioDeviceController { deviceManager };
     juce::AudioSourcePlayer audioSourcePlayer;
+    SystemAudioCapture systemAudioCapture;
     juce::AudioBuffer<float> processedInputBuffer;
+    juce::AudioBuffer<float> systemInputDryBuffer;
     juce::AudioBuffer<float> rhythmMonitorBuffer;
 
     LooperEngine             looper;
@@ -300,6 +304,8 @@ private:
     juce::TextButton      btnExportMix{"EXPORTAR MIX"};
     juce::TextButton      btnExportTracks{"EXPORTAR PISTAS"};
     juce::TextButton      btnAudioSettings{"AUDIO"};
+    juce::Label           lblInputSource;
+    juce::ComboBox        inputSourceSelector;
     juce::Label           lblAudioStatus;
     juce::Label           lblLooperTempo;
     juce::Slider          sldLooperTempo;
@@ -359,6 +365,7 @@ private:
     std::atomic<juce::int64> lastMidiMs { 0 };
     std::atomic<float> masterVolume { 0.85f };
     std::atomic<bool> outputMono { true };
+    std::atomic<bool> useSystemAudioInput { false };
 
     std::atomic<float> inputVU   { 0.0f };
     std::atomic<float> outputVUL { 0.0f };

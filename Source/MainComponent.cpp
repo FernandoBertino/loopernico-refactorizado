@@ -985,11 +985,36 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
     addAndMakeVisible(btnExportTracks);
     addAndMakeVisible(btnAudioSettings);
 
+    lblInputSource.setText("ENTRADA:", juce::dontSendNotification);
+    lblInputSource.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
+    lblInputSource.setColour(juce::Label::textColourId, LnfC::TextDim);
+    lblInputSource.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(lblInputSource);
+
+    inputSourceSelector.addItem("GUITARRA", 1);
+    inputSourceSelector.addItem("NAVEGADOR / WINDOWS", 2);
+    inputSourceSelector.setSelectedId(1, juce::dontSendNotification);
+    inputSourceSelector.setTooltip(
+        "GUITARRA usa la entrada fisica. NAVEGADOR / WINDOWS graba el audio "
+        "que reproduce la salida predeterminada de Windows.");
+    inputSourceSelector.onChange = [this]()
+    {
+        const bool systemInput = inputSourceSelector.getSelectedId() == 2;
+        useSystemAudioInput.store(systemInput, std::memory_order_release);
+        if (systemInput)
+            systemAudioCapture.start();
+        else
+            systemAudioCapture.stop();
+        updateAudioStatusUi();
+    };
+    addAndMakeVisible(inputSourceSelector);
+
     lblAudioStatus.setFont(juce::Font(juce::FontOptions(10.5f).withStyle("Bold")));
     lblAudioStatus.setColour(juce::Label::textColourId, LnfC::TextDim);
     lblAudioStatus.setJustificationType(juce::Justification::centredRight);
     // El diagnostico detallado de driver/latencia se consulta desde
     // CONFIGURACION; no ocupa espacio visual permanente en la pantalla.
+    addAndMakeVisible(lblAudioStatus);
 
     setupFXPedals();
     fxPedalFocusOverlay.onDismiss = [this]() { closeFxPedalFocus(); };
@@ -4070,6 +4095,7 @@ void MainComponent::markMidiConfigurationDirty()
 MainComponent::~MainComponent()
 {
     stopTimer();
+    systemAudioCapture.stop();
     deviceManager.removeChangeListener(this);
     midiDeviceListConnection.reset();
     closeExternalVst3Editor();
@@ -4090,8 +4116,10 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate
     looper.prepare(sampleRate, samplesPerBlockExpected, formatManager);
     effectsChain.prepare(sampleRate, samplesPerBlockExpected);
     processedInputBuffer.setSize(2, juce::jmax(16, samplesPerBlockExpected), false, true, false);
+    systemInputDryBuffer.setSize(2, juce::jmax(16, samplesPerBlockExpected), false, true, false);
     rhythmMonitorBuffer.setSize(2, juce::jmax(16, samplesPerBlockExpected), false, true, false);
     processedInputBuffer.clear();
+    systemInputDryBuffer.clear();
     rhythmMonitorBuffer.clear();
     for (int i = 0; i < (int)visualTracks.size(); ++i)
         visualTracks[i]->setThumbnailPointer(looper.getTrackThumbnail(i));
@@ -4104,21 +4132,31 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buf)
     const int outputChannels = juce::jmin(2, buf.buffer->getNumChannels());
     if (buf.numSamples <= 0 || outputChannels <= 0
         || processedInputBuffer.getNumChannels() < 2
+        || systemInputDryBuffer.getNumChannels() < 2
         || rhythmMonitorBuffer.getNumChannels() < 2
         || processedInputBuffer.getNumSamples() < buf.numSamples
+        || systemInputDryBuffer.getNumSamples() < buf.numSamples
         || rhythmMonitorBuffer.getNumSamples() < buf.numSamples)
     {
         buf.clearActiveBufferRegion();
         return;
     }
 
-    for (int ch = 0; ch < 2; ++ch)
+    const bool systemInput = useSystemAudioInput.load(std::memory_order_acquire);
+    if (systemInput)
     {
-        if (ch < buf.buffer->getNumChannels())
-            processedInputBuffer.copyFrom(ch, 0, *buf.buffer, ch, buf.startSample, buf.numSamples);
-        else
-            processedInputBuffer.clear(ch, 0, buf.numSamples);
+        systemAudioCapture.read(processedInputBuffer, 0, buf.numSamples, looper.getSampleRate());
+        for (int ch = 0; ch < 2; ++ch)
+            systemInputDryBuffer.copyFrom(ch, 0, processedInputBuffer, ch, 0, buf.numSamples);
     }
+    else
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            if (ch < buf.buffer->getNumChannels())
+                processedInputBuffer.copyFrom(ch, 0, *buf.buffer, ch, buf.startSample, buf.numSamples);
+            else
+                processedInputBuffer.clear(ch, 0, buf.numSamples);
+        }
 
     // La entrada de instrumento puede estar conectada a cualquiera de los dos
     // canales fisicos. Algunos VST3 procesan ambos, pero sus afinadores solo
@@ -4126,18 +4164,21 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buf)
     // dominante (el caso habitual de una guitarra mono) y, si hay una fuente
     // realmente estereo, hacemos un downmix convencional. Desde aqui la misma
     // senal alimenta ambos canales, antes de los efectos y del looper.
-    const float leftMagnitude = processedInputBuffer.getMagnitude(0, 0, buf.numSamples);
-    const float rightMagnitude = processedInputBuffer.getMagnitude(1, 0, buf.numSamples);
-    const bool useLeftOnly = leftMagnitude > rightMagnitude * 2.0f;
-    const bool useRightOnly = rightMagnitude > leftMagnitude * 2.0f;
-    auto* rawInputLeft = processedInputBuffer.getWritePointer(0);
-    auto* rawInputRight = processedInputBuffer.getWritePointer(1);
-    for (int i = 0; i < buf.numSamples; ++i)
+    if (!systemInput)
     {
-        const float monoInput = useLeftOnly ? rawInputLeft[i]
-                              : useRightOnly ? rawInputRight[i]
-                                             : 0.5f * (rawInputLeft[i] + rawInputRight[i]);
-        rawInputLeft[i] = rawInputRight[i] = monoInput;
+        const float leftMagnitude = processedInputBuffer.getMagnitude(0, 0, buf.numSamples);
+        const float rightMagnitude = processedInputBuffer.getMagnitude(1, 0, buf.numSamples);
+        const bool useLeftOnly = leftMagnitude > rightMagnitude * 2.0f;
+        const bool useRightOnly = rightMagnitude > leftMagnitude * 2.0f;
+        auto* rawInputLeft = processedInputBuffer.getWritePointer(0);
+        auto* rawInputRight = processedInputBuffer.getWritePointer(1);
+        for (int i = 0; i < buf.numSamples; ++i)
+        {
+            const float monoInput = useLeftOnly ? rawInputLeft[i]
+                                  : useRightOnly ? rawInputRight[i]
+                                                 : 0.5f * (rawInputLeft[i] + rawInputRight[i]);
+            rawInputLeft[i] = rawInputRight[i] = monoInput;
+        }
     }
 
     rhythmMonitorBuffer.clear(0, buf.numSamples);
@@ -4163,6 +4204,13 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buf)
                                             looperIsRecording, looperIsPlaying);
     effectsChain.processBlock(processedInputBuffer, rhythmMonitorBuffer, 0, buf.numSamples);
 
+    // El audio del navegador se usa como backing track limpio: la cadena de
+    // pedales/VST sigue procesandose para mantener sus transportes y el bus de
+    // ritmo, pero restauramos la captura original antes de grabarla.
+    if (systemInput)
+        for (int ch = 0; ch < 2; ++ch)
+            processedInputBuffer.copyFrom(ch, 0, systemInputDryBuffer, ch, 0, buf.numSamples);
+
     if (monoOutput)
     {
         auto* inputLeft = processedInputBuffer.getWritePointer(0);
@@ -4171,18 +4219,22 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buf)
         auto* rhythmRight = rhythmMonitorBuffer.getWritePointer(1);
         for (int i = 0; i < buf.numSamples; ++i)
         {
-            const float monoInput = 0.5f * (inputLeft[i] + inputRight[i]);
-            inputLeft[i] = inputRight[i] = monoInput;
+            if (!systemInput)
+            {
+                const float monoInput = 0.5f * (inputLeft[i] + inputRight[i]);
+                inputLeft[i] = inputRight[i] = monoInput;
+            }
             const float monoRhythm = 0.5f * (rhythmLeft[i] + rhythmRight[i]);
             rhythmLeft[i] = rhythmRight[i] = monoRhythm;
         }
     }
 
     buf.clearActiveBufferRegion();
-    const bool monitorInput = audioDeviceController.isSoftwareInputMonitoringEnabled()
+    const bool monitorInput = !systemInput
+                           && audioDeviceController.isSoftwareInputMonitoringEnabled()
                            && !effectsChain.isRhythmSoloMode();
     looper.processBlock(processedInputBuffer, 0, *buf.buffer, buf.startSample,
-                        buf.numSamples, monitorInput, monoOutput);
+                        buf.numSamples, monitorInput, monoOutput && !systemInput);
 
     const float master = masterVolume.load(std::memory_order_relaxed);
     for (int ch = 0; ch < outputChannels; ++ch)
@@ -4292,6 +4344,11 @@ void MainComponent::setSoftwareInputMonitoringForSnapshot(bool enabled)
     updateAudioStatusUi();
 }
 
+void MainComponent::setSystemAudioInputForSnapshot(bool enabled)
+{
+    inputSourceSelector.setSelectedId(enabled ? 2 : 1, juce::sendNotificationSync);
+}
+
 bool MainComponent::loadExternalVst3ForSnapshot(const juce::File& pluginFile, bool enabled)
 {
     EffectsChain::PreparedExternalPlugin candidate;
@@ -4366,9 +4423,31 @@ void MainComponent::updateAudioStatusUi()
          << "  |  MON " << (status.softwareInputMonitoringEnabled ? "SW" : "DIRECT")
          << "  |  XRUN "
          << (status.xRunsAvailable ? juce::String(status.xRuns) : "N/D");
+
+    if (useSystemAudioInput.load(std::memory_order_acquire))
+    {
+        const auto capture = systemAudioCapture.getStatus();
+        if (capture.active)
+        {
+            const float peak = systemAudioCapture.getPeakSinceStart();
+            const auto level = peak > 0.000001f
+                ? juce::String(juce::Decibels::gainToDecibels(peak), 1) + " dB"
+                : juce::String("SIN SENAL");
+            text = "WINDOWS: " + capture.deviceName + "  |  "
+                 + juce::String(capture.sampleRate / 1000.0, 1) + " kHz  |  " + level
+                 + "  |  SIN MONITOREO DOBLE";
+        }
+        else if (capture.starting)
+            text = "CONECTANDO: " + capture.deviceName;
+        else
+            text = "AUDIO DE WINDOWS NO DISPONIBLE: " + capture.error;
+    }
     lblAudioStatus.setText(text, juce::dontSendNotification);
 
+    const auto capture = systemAudioCapture.getStatus();
     const bool warning = status.usingFallback || status.aggressiveBuffer
+                      || (useSystemAudioInput.load(std::memory_order_acquire)
+                          && !capture.starting && !capture.active)
                       || (status.xRunsAvailable && status.xRuns > 0);
     lblAudioStatus.setColour(juce::Label::textColourId, warning ? LnfC::OvdAmber : LnfC::PlayGreen);
     btnAudioSettings.setButtonText(warning ? "CONFIGURACION !" : "CONFIGURACION");
@@ -4929,7 +5008,9 @@ void MainComponent::resized()
     lblLooperTempo.setBounds(fullX + 438, mY + 5, 58, 18);
     sldLooperTempo.setBounds(fullX + 502, mY + 5, 126, 18);
     btnLooperTap.setBounds(fullX + 638, mY + 5, 50, 18);
-    lblAudioStatus.setBounds(fullX + 700, mY + 5, fullW - 720, 18);
+    lblInputSource.setBounds(fullX + 696, mY + 5, 62, 18);
+    inputSourceSelector.setBounds(fullX + 764, mY + 3, 194, 22);
+    lblAudioStatus.setBounds(fullX + 970, mY + 5, fullW - 990, 18);
 
     if (audioSettingsPanel != nullptr)
     {

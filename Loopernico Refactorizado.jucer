@@ -31,6 +31,8 @@
             file="Source/AudioSettingsPanel.h"/>
       <FILE id="AudPanC" name="AudioSettingsPanel.cpp" compile="1" resource="0"
             file="Source/AudioSettingsPanel.cpp"/>
+      <FILE id="SysAudH" name="SystemAudioCapture.h" compile="0" resource="0"
+            file="Source/SystemAudioCapture.h"/>
       <FILE id="qg52we" name="Main.cpp" compile="1" resource="0" file="Source/Main.cpp"/>
       <FILE id="vXpXSs" name="MainComponent.cpp" compile="1" resource="0"
             file="Source/MainComponent.cpp"/>

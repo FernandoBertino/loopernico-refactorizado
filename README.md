@@ -70,6 +70,17 @@ El callback de audio atraviesa la cadena de efectos y el motor del looper. Las
 operaciones costosas (archivos, plugins, decodificacion y UI) deben permanecer
 fuera de ese callback.
 
+## Grabar audio del navegador o de Windows
+
+- En la franja superior del looper, elegir `NAVEGADOR / WINDOWS` en `ENTRADA`.
+- Reproducir YouTube u otra aplicacion mediante la salida predeterminada de
+  Windows y usar `REC / CONFIRM` igual que con la guitarra.
+- Loopernico muestra el nivel detectado en dB. La captura conserva estereo, no
+  atraviesa los pedales de guitarra y no vuelve a monitorizar la fuente,
+  evitando oir una copia retrasada.
+- Para volver al instrumento, seleccionar `GUITARRA`. La eleccion es operativa
+  y no modifica el contenido ni el formato de las sesiones.
+
 ## Samples de Rhythm Box
 
 El banco se organiza por estilo y por instrumento, por ejemplo

@@ -24,6 +24,7 @@ namespace
         bool forceAudioFallback = false;
         int audioBufferSamples = 0;
         int softwareInputMonitoring = -1;
+        bool systemAudioInput = false;
         juce::String vst3Path;
         bool vst3Bypass = false;
         juce::String saveSessionPath;
@@ -78,6 +79,11 @@ namespace
             {
                 const auto value = argument.fromFirstOccurrenceOf("=", false, false);
                 request.softwareInputMonitoring = value.equalsIgnoreCase("off") ? 0 : 1;
+            }
+            else if (argument.equalsIgnoreCase("--snapshot-system-input"))
+            {
+                request.enabled = true;
+                request.systemAudioInput = true;
             }
             else if (argument.startsWithIgnoreCase("--snapshot-vst3="))
             {
@@ -236,6 +242,14 @@ public:
                     main->setAudioBufferForSnapshot(snapshotRequest.audioBufferSamples);
                 if (snapshotRequest.softwareInputMonitoring >= 0)
                     main->setSoftwareInputMonitoringForSnapshot(snapshotRequest.softwareInputMonitoring != 0);
+                if (snapshotRequest.systemAudioInput)
+                    juce::Timer::callAfterDelay(500,
+                        [safeWindow = juce::Component::SafePointer<MainWindow>(this)]
+                        {
+                            if (auto* window = safeWindow.getComponent())
+                                if (auto* content = dynamic_cast<MainComponent*>(window->getContentComponent()))
+                                    content->setSystemAudioInputForSnapshot(true);
+                        });
                 if (snapshotRequest.vst3Path.isNotEmpty())
                     main->loadExternalVst3ForSnapshot(juce::File(snapshotRequest.vst3Path),
                                                       !snapshotRequest.vst3Bypass);
