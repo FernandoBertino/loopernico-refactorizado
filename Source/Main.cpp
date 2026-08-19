@@ -8,6 +8,147 @@
 
 #include <JuceHeader.h>
 #include "MainComponent.h"
+#include "OrbitLoadingIndicator.h"
+
+namespace
+{
+    struct SnapshotLaunchRequest
+    {
+        bool enabled = false;
+        juce::String outputPath;
+        int focusPedal = -2;
+        int delayMs = 1500;
+        juce::String vstDisplayText;
+        juce::File sessionFile;
+        bool showAudioSettings = false;
+        bool showPluginSettings = false;
+        bool showStemSeparation = false;
+        bool forceAudioFallback = false;
+        int audioBufferSamples = 0;
+        int softwareInputMonitoring = -1;
+        bool systemAudioInput = false;
+        juce::String vst3Path;
+        bool vst3Bypass = false;
+        juce::String saveSessionPath;
+        juce::String sessionPersistenceTestPath;
+        juce::String stemSeparationTestPath;
+        juce::String demucsAdapterTestPath;
+        juce::String demucsExecutablePath;
+        juce::String demucsModelPath;
+        juce::String demucsInputPath;
+    };
+
+    SnapshotLaunchRequest parseSnapshotLaunchRequest(const juce::String& commandLine)
+    {
+        SnapshotLaunchRequest request;
+        juce::StringArray arguments;
+        arguments.addTokens(commandLine, true);
+
+        for (const auto& rawArgument : arguments)
+        {
+            const auto argument = rawArgument.unquoted();
+            if (argument.equalsIgnoreCase("--snapshot-ui"))
+            {
+                request.enabled = true;
+            }
+            else if (argument.startsWithIgnoreCase("--snapshot-ui="))
+            {
+                request.enabled = true;
+                request.outputPath = argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            }
+            else if (argument.startsWithIgnoreCase("--snapshot-fx="))
+            {
+                request.focusPedal = argument.fromFirstOccurrenceOf("=", false, false).getIntValue();
+            }
+            else if (argument.startsWithIgnoreCase("--snapshot-delay="))
+            {
+                request.delayMs = juce::jlimit(100, 10000,
+                    argument.fromFirstOccurrenceOf("=", false, false).getIntValue());
+            }
+            else if (argument.startsWithIgnoreCase("--snapshot-vst-text="))
+            {
+                request.vstDisplayText = argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            }
+            else if (argument.equalsIgnoreCase("--snapshot-audio"))
+            {
+                request.enabled = true;
+                request.showAudioSettings = true;
+            }
+            else if (argument.equalsIgnoreCase("--snapshot-plugins"))
+            {
+                request.enabled = true;
+                request.showPluginSettings = true;
+            }
+            else if (argument.equalsIgnoreCase("--snapshot-stems"))
+            {
+                request.enabled = true;
+                request.showStemSeparation = true;
+            }
+            else if (argument.equalsIgnoreCase("--snapshot-force-fallback"))
+            {
+                request.forceAudioFallback = true;
+            }
+            else if (argument.startsWithIgnoreCase("--snapshot-audio-buffer="))
+            {
+                request.audioBufferSamples = argument.fromFirstOccurrenceOf("=", false, false).getIntValue();
+            }
+            else if (argument.startsWithIgnoreCase("--snapshot-monitor-input="))
+            {
+                const auto value = argument.fromFirstOccurrenceOf("=", false, false);
+                request.softwareInputMonitoring = value.equalsIgnoreCase("off") ? 0 : 1;
+            }
+            else if (argument.equalsIgnoreCase("--snapshot-system-input"))
+            {
+                request.enabled = true;
+                request.systemAudioInput = true;
+            }
+            else if (argument.startsWithIgnoreCase("--snapshot-vst3="))
+            {
+                request.vst3Path = argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            }
+            else if (argument.equalsIgnoreCase("--snapshot-vst3-bypass"))
+            {
+                request.vst3Bypass = true;
+            }
+            else if (argument.startsWithIgnoreCase("--snapshot-save-session="))
+            {
+                request.saveSessionPath = argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            }
+            else if (argument.startsWithIgnoreCase("--run-session-persistence-test="))
+            {
+                request.enabled = true;
+                request.sessionPersistenceTestPath =
+                    argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            }
+            else if (argument.startsWithIgnoreCase("--run-stem-separation-test="))
+            {
+                request.enabled = true;
+                request.stemSeparationTestPath =
+                    argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            }
+            else if (argument.startsWithIgnoreCase("--run-demucs-adapter-test="))
+            {
+                request.enabled = true;
+                request.demucsAdapterTestPath =
+                    argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            }
+            else if (argument.startsWithIgnoreCase("--demucs-executable="))
+                request.demucsExecutablePath = argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            else if (argument.startsWithIgnoreCase("--demucs-model="))
+                request.demucsModelPath = argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            else if (argument.startsWithIgnoreCase("--demucs-input="))
+                request.demucsInputPath = argument.fromFirstOccurrenceOf("=", false, false).unquoted();
+            else if (argument.endsWithIgnoreCase(".loopernico"))
+            {
+                request.sessionFile = juce::File::isAbsolutePath(argument)
+                    ? juce::File(argument)
+                    : juce::File::getCurrentWorkingDirectory().getChildFile(argument);
+            }
+        }
+
+        return request;
+    }
+}
 
 //==============================================================================
 class LoopernicoRefactorizadoApplication  : public juce::JUCEApplication
@@ -23,16 +164,59 @@ public:
     //==============================================================================
     void initialise (const juce::String& commandLine) override
     {
-        juce::ignoreUnused(commandLine);
         // This method is where you should put your application's initialisation code..
 
-        mainWindow.reset (new MainWindow (getApplicationName()));
+        if (commandLine.containsIgnoreCase("--run-latency-tests"))
+        {
+            juce::String report;
+            bool passed = LoopernicoLatency::runDeterministicTests(report);
+            juce::String outputPath;
+            juce::StringArray arguments;
+            arguments.addTokens(commandLine, true);
+            for (const auto& rawArgument : arguments)
+                if (rawArgument.unquoted().startsWithIgnoreCase("--run-latency-tests="))
+                    outputPath = rawArgument.unquoted().fromFirstOccurrenceOf("=", false, false).unquoted();
+
+            if (outputPath.isNotEmpty())
+            {
+                const juce::File reportFile(outputPath);
+                reportFile.getParentDirectory().createDirectory();
+                if (!reportFile.replaceWithText(report + "\n"))
+                {
+                    juce::Logger::writeToLog("No se pudo escribir el reporte de pruebas en: "
+                                             + reportFile.getFullPathName());
+                    passed = false;
+                }
+            }
+
+            setApplicationReturnValue(passed ? 0 : 1);
+            quit();
+            return;
+        }
+
+        const auto snapshotRequest = parseSnapshotLaunchRequest(commandLine);
+        const bool openingSession = snapshotRequest.sessionFile != juce::File();
+        OrbitLoadingIndicator::shared().start(
+            openingSession ? "PREPARANDO Y ABRIENDO LA SESION"
+                           : "PREPARANDO AUDIO Y PEDALES",
+            openingSession ? snapshotRequest.sessionFile.getFileName() : juce::String());
+
+        juce::Timer::callAfterDelay(40, [this, snapshotRequest]
+        {
+            mainWindow.reset(new MainWindow(getApplicationName(), snapshotRequest));
+            if (snapshotRequest.sessionFile == juce::File())
+                OrbitLoadingIndicator::shared().stop();
+            else
+                OrbitLoadingIndicator::shared().updateText(
+                    "CARGANDO SESION", snapshotRequest.sessionFile.getFileName());
+        });
     }
 
     void shutdown() override
     {
         // Add your application's shutdown code here..
 
+        OrbitLoadingIndicator::shared().stop();
         mainWindow = nullptr; // (deletes our window)
     }
 
@@ -60,23 +244,178 @@ public:
     class MainWindow    : public juce::DocumentWindow
     {
     public:
-        MainWindow (juce::String name)
+        MainWindow (juce::String name, const SnapshotLaunchRequest& snapshotRequest)
             : DocumentWindow (name,
                               juce::Desktop::getInstance().getDefaultLookAndFeel()
                                                           .findColour (juce::ResizableWindow::backgroundColourId),
                               DocumentWindow::allButtons)
         {
+            snapshotStemPanel = snapshotRequest.showStemSeparation;
             setUsingNativeTitleBar (true);
-            setContentOwned (new MainComponent(), true);
+            setContentOwned (new MainComponent(snapshotRequest.forceAudioFallback), true);
 
            #if JUCE_IOS || JUCE_ANDROID
             setFullScreen (true);
            #else
             setResizable (true, true);
-            centreWithSize (getWidth(), getHeight());
+            if (snapshotRequest.enabled)
+                centreWithSize (getWidth(), getHeight());
+            else
+            {
+                const auto& displays = juce::Desktop::getInstance().getDisplays();
+                if (const auto* display = displays.getDisplayForRect (getBounds()))
+                    setBounds (display->userBounds.toNearestInt());
+
+                setFullScreen (true);
+            }
            #endif
 
             setVisible (true);
+
+            if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
+            {
+                if (snapshotRequest.audioBufferSamples > 0)
+                    main->setAudioBufferForSnapshot(snapshotRequest.audioBufferSamples);
+                if (snapshotRequest.softwareInputMonitoring >= 0)
+                    main->setSoftwareInputMonitoringForSnapshot(snapshotRequest.softwareInputMonitoring != 0);
+                if (snapshotRequest.systemAudioInput)
+                    juce::Timer::callAfterDelay(500,
+                        [safeWindow = juce::Component::SafePointer<MainWindow>(this)]
+                        {
+                            if (auto* window = safeWindow.getComponent())
+                                if (auto* content = dynamic_cast<MainComponent*>(window->getContentComponent()))
+                                    content->setSystemAudioInputForSnapshot(true);
+                        });
+                if (snapshotRequest.vst3Path.isNotEmpty())
+                    main->loadExternalVst3ForSnapshot(juce::File(snapshotRequest.vst3Path),
+                                                      !snapshotRequest.vst3Bypass);
+            }
+
+            if (snapshotRequest.sessionFile != juce::File())
+            {
+                juce::Timer::callAfterDelay(250,
+                    [safeWindow = juce::Component::SafePointer<MainWindow>(this),
+                     sessionFile = snapshotRequest.sessionFile]
+                    {
+                        if (auto* window = safeWindow.getComponent())
+                            if (auto* main = dynamic_cast<MainComponent*> (window->getContentComponent()))
+                                main->openSessionFileAsync(sessionFile);
+                    });
+            }
+
+            if (snapshotRequest.saveSessionPath.isNotEmpty())
+            {
+                juce::Timer::callAfterDelay(1250,
+                    [safeWindow = juce::Component::SafePointer<MainWindow>(this),
+                     outputFile = juce::File(snapshotRequest.saveSessionPath)]
+                    {
+                        if (auto* window = safeWindow.getComponent())
+                            if (auto* main = dynamic_cast<MainComponent*> (window->getContentComponent()))
+                            {
+                                juce::String error;
+                                main->saveSessionFileForSnapshot(outputFile, error);
+                            }
+                    });
+            }
+
+            if (snapshotRequest.sessionPersistenceTestPath.isNotEmpty())
+            {
+                juce::Timer::callAfterDelay(750,
+                    [safeWindow = juce::Component::SafePointer<MainWindow>(this),
+                     outputFile = juce::File(snapshotRequest.sessionPersistenceTestPath)]
+                    {
+                        bool passed = false;
+                        juce::String report;
+                        if (auto* window = safeWindow.getComponent())
+                            if (auto* main = dynamic_cast<MainComponent*> (window->getContentComponent()))
+                                passed = main->runSessionPersistenceDiagnostic(outputFile, report);
+
+                        const auto reportFile = outputFile.withFileExtension(".report.txt");
+                        reportFile.getParentDirectory().createDirectory();
+                        reportFile.replaceWithText(report + "\n");
+                        if (auto* app = JUCEApplication::getInstance())
+                        {
+                            app->setApplicationReturnValue(passed ? 0 : 1);
+                            app->quit();
+                        }
+                    });
+            }
+
+            if (snapshotRequest.stemSeparationTestPath.isNotEmpty())
+            {
+                juce::Timer::callAfterDelay(750,
+                    [safeWindow = juce::Component::SafePointer<MainWindow>(this),
+                     outputDirectory = juce::File(snapshotRequest.stemSeparationTestPath)]
+                    {
+                        if (auto* window = safeWindow.getComponent())
+                            if (auto* main = dynamic_cast<MainComponent*>(window->getContentComponent()))
+                                main->runStemSeparationDiagnostic(outputDirectory,
+                                    [outputDirectory](bool passed, juce::String report)
+                                    {
+                                        outputDirectory.createDirectory();
+                                        outputDirectory.getChildFile("stem-separation-test-report.txt")
+                                            .replaceWithText(report + "\n");
+                                        if (auto* app = JUCEApplication::getInstance())
+                                        {
+                                            app->setApplicationReturnValue(passed ? 0 : 1);
+                                            app->quit();
+                                        }
+                                    });
+                    });
+            }
+
+            if (snapshotRequest.demucsAdapterTestPath.isNotEmpty())
+            {
+                juce::Timer::callAfterDelay(750,
+                    [safeWindow = juce::Component::SafePointer<MainWindow>(this),
+                     outputDirectory = juce::File(snapshotRequest.demucsAdapterTestPath),
+                     executable = juce::File(snapshotRequest.demucsExecutablePath),
+                     model = juce::File(snapshotRequest.demucsModelPath),
+                     input = juce::File(snapshotRequest.demucsInputPath)]
+                    {
+                        if (auto* window = safeWindow.getComponent())
+                            if (auto* main = dynamic_cast<MainComponent*>(window->getContentComponent()))
+                                main->runDemucsAdapterDiagnostic(
+                                    outputDirectory, executable, model, input,
+                                    [outputDirectory](bool passed, juce::String report)
+                                    {
+                                        outputDirectory.createDirectory();
+                                        outputDirectory.getChildFile("demucs-adapter-test-report.txt")
+                                            .replaceWithText(report + "\n");
+                                        if (auto* app = JUCEApplication::getInstance())
+                                        {
+                                            app->setApplicationReturnValue(passed ? 0 : 1);
+                                            app->quit();
+                                        }
+                                    });
+                    });
+            }
+
+            if (snapshotRequest.enabled && snapshotRequest.focusPedal >= -1)
+                if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
+                    main->focusFxPedalForSnapshot(snapshotRequest.focusPedal);
+
+            if (snapshotRequest.enabled && snapshotRequest.vstDisplayText.isNotEmpty())
+                if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
+                    main->setVst3DisplayTextForSnapshot(snapshotRequest.vstDisplayText);
+
+            if (snapshotRequest.enabled && snapshotRequest.showAudioSettings)
+                if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
+                    main->showAudioSettingsForSnapshot();
+
+            if (snapshotRequest.enabled && snapshotRequest.showPluginSettings)
+                if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
+                    main->showPluginSettingsForSnapshot();
+
+            if (snapshotRequest.enabled && snapshotRequest.showStemSeparation)
+                if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
+                    main->showStemSeparationForSnapshot();
+
+            if (snapshotRequest.enabled
+                && snapshotRequest.sessionPersistenceTestPath.isEmpty()
+                && snapshotRequest.stemSeparationTestPath.isEmpty()
+                && snapshotRequest.demucsAdapterTestPath.isEmpty())
+                scheduleUiSnapshot(snapshotRequest.outputPath, true, snapshotRequest.delayMs);
         }
 
         void closeButtonPressed() override
@@ -87,6 +426,17 @@ public:
             JUCEApplication::getInstance()->systemRequestedQuit();
         }
 
+        bool keyPressed(const juce::KeyPress& key) override
+        {
+            if (key.getKeyCode() == juce::KeyPress::F12Key)
+            {
+                scheduleUiSnapshot({}, false, 100);
+                return true;
+            }
+
+            return DocumentWindow::keyPressed(key);
+        }
+
         /* Note: Be careful if you override any DocumentWindow methods - the base
            class uses a lot of them, so by overriding you might break its functionality.
            It's best to do all your work in your content component instead, but if
@@ -95,6 +445,82 @@ public:
         */
 
     private:
+        bool snapshotStemPanel = false;
+
+        static juce::String snapshotFileName()
+        {
+            const auto now = juce::Time::getCurrentTime();
+            return "loopernico-ui-" + now.formatted("%Y%m%d-%H%M%S")
+                 + "-" + juce::String(now.toMilliseconds()) + ".png";
+        }
+
+        static juce::File resolveSnapshotFile(juce::String requestedPath)
+        {
+            requestedPath = requestedPath.trim().unquoted();
+            if (requestedPath.isEmpty())
+            {
+                return juce::File::getSpecialLocation(juce::File::userPicturesDirectory)
+                    .getChildFile("Loopernico")
+                    .getChildFile(snapshotFileName());
+            }
+
+            auto output = juce::File::isAbsolutePath(requestedPath)
+                ? juce::File(requestedPath)
+                : juce::File::getCurrentWorkingDirectory().getChildFile(requestedPath);
+
+            if (output.isDirectory())
+                output = output.getChildFile(snapshotFileName());
+            else if (!output.hasFileExtension("png"))
+                output = output.withFileExtension("png");
+
+            return output;
+        }
+
+        bool writeUiSnapshot(const juce::String& requestedPath)
+        {
+            auto* content = getContentComponent();
+            if (content == nullptr)
+                return false;
+
+            const auto output = resolveSnapshotFile(requestedPath);
+            if (output.getParentDirectory().createDirectory().failed())
+                return false;
+
+            output.deleteFile();
+            juce::FileOutputStream stream(output);
+            if (!stream.openedOk())
+                return false;
+
+            juce::Image image;
+            if (snapshotStemPanel)
+                if (auto* main = dynamic_cast<MainComponent*>(content))
+                    image = main->createStemSeparationSnapshot();
+            if (!image.isValid())
+                image = content->createComponentSnapshot(content->getLocalBounds());
+            juce::PNGImageFormat png;
+            const bool written = png.writeImageToStream(image, stream);
+            stream.flush();
+
+            if (written)
+                juce::Logger::writeToLog("Captura de interfaz guardada en: " + output.getFullPathName());
+
+            return written;
+        }
+
+        void scheduleUiSnapshot(const juce::String& requestedPath, bool quitAfterCapture, int delayMs)
+        {
+            juce::Timer::callAfterDelay(delayMs,
+                [safeWindow = juce::Component::SafePointer<MainWindow>(this), requestedPath, quitAfterCapture]
+                {
+                    if (auto* window = safeWindow.getComponent())
+                        window->writeUiSnapshot(requestedPath);
+
+                    if (quitAfterCapture)
+                        if (auto* app = juce::JUCEApplication::getInstance())
+                            app->systemRequestedQuit();
+                });
+        }
+
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainWindow)
     };
 

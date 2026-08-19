@@ -4,8 +4,13 @@
 #include <array>
 #include <vector>
 #include "EQProcessor.h"
+#include "DrumMidiMap.h"
+#include "DrumMidiPattern.h"
 
-class EffectsChain : private juce::Thread
+class PicoPitchShifter;
+
+class EffectsChain : private juce::Thread,
+                     private juce::AudioProcessorListener
 {
 public:
     struct PreparedExternalPlugin
@@ -26,16 +31,25 @@ public:
 
         std::unique_ptr<juce::AudioPluginInstance> instance;
         juce::AudioBuffer<float> scratchBuffer;
+        juce::AudioBuffer<float> outputBuffer;
         juce::MidiBuffer midiBuffer;
         int inputChannels{ 0 };
         int outputChannels{ 0 };
         juce::String name;
         juce::String path;
         bool enabled{ true };
+        int latencySamples{ 0 };
     };
 
     static constexpr int kFreezeMaxLayers = 5;
+    // El indice historico RhythmPedal se conserva solo para leer sesiones
+    // antiguas; el orden activo excluye ese elemento.
     static constexpr int kPedalCount = 13;
+    static constexpr int kMaxExternalPlugins = 4;
+    // RhythmPedal y el indice historico de Sustain Gran no forman parte de la
+    // cadena activa, aunque ambos indices se conservan para compatibilidad.
+    static constexpr int kChainItemCount = kPedalCount - 2 + kMaxExternalPlugins;
+    static constexpr int kChainItemIdLimit = kPedalCount + kMaxExternalPlugins;
 
     enum PedalId
     {
@@ -43,7 +57,9 @@ public:
         RhythmPedal,
         CompressorPedal,
         HarmonizerPedal,
-        SustainGranPedal,
+        // Indice historico reservado: Sustain Gran fue retirado, pero se
+        // conserva para no desplazar los indices de sesiones antiguas.
+        LegacySustainGranPedal,
         SustainChordsPedal,
         FuzzPedal,
         OverdrivePedal,
@@ -84,7 +100,17 @@ public:
     ~EffectsChain() override;
 
     void prepare(double sampleRate, int samplesPerBlockExpected);
-    void processBlock(juce::AudioBuffer<float>& buffer, int startSample, int numSamples);
+    // Procesa la entrada externa e inyecta el rhythm/metronomo en la posicion
+    // del pedal dentro de la cadena. Tambien publica un bus seco separado para
+    // monitoreo DIRECT sin duplicar la guitarra. Los buffers deben estar preasignados.
+    void processBlock(juce::AudioBuffer<float>& recordableInput,
+                      juce::AudioBuffer<float>& rhythmMonitor,
+                      int startSample, int numSamples);
+    // Publica el transporte del looper para los VST3 sincronizados al host.
+    // Debe llamarse desde el callback de audio inmediatamente antes de processBlock().
+    void setExternalPluginTransport(float bpm, int beatsPerBar,
+                                    bool isPlaying, bool isRecording,
+                                    bool looperIsPlaying) noexcept;
     void reset();
     bool loadExternalVst3(const juce::File& pluginFile, juce::String& errorMessage);
     void unloadExternalPlugin();
@@ -92,18 +118,36 @@ public:
                              PreparedExternalPlugin& candidate,
                              juce::String& errorMessage,
                              const juce::MemoryBlock* stateToRestore = nullptr);
-    PreparedExternalPlugin commitExternalPlugin(PreparedExternalPlugin&& candidate) noexcept;
-    PreparedExternalPlugin detachExternalPlugin() noexcept;
-    bool hasExternalPlugin() const { return externalPluginInstance != nullptr; }
-    void setExternalPluginEnabled(bool shouldBeEnabled) { externalPluginEnabled.store(shouldBeEnabled); }
-    bool isExternalPluginEnabled() const { return externalPluginEnabled.load() && externalPluginInstance != nullptr; }
-    juce::String getExternalPluginName() const { return externalPluginName; }
-    juce::String getExternalPluginPath() const { return externalPluginPath; }
-    juce::AudioPluginInstance* getExternalPluginInstance() const { return externalPluginInstance.get(); }
-    bool copyExternalPluginState(juce::MemoryBlock& state) const;
-    bool restoreExternalPluginState(const juce::MemoryBlock& state, juce::String& errorMessage);
+    PreparedExternalPlugin commitExternalPlugin(PreparedExternalPlugin&& candidate, int slot = 0) noexcept;
+    PreparedExternalPlugin detachExternalPlugin(int slot = 0) noexcept;
+    bool hasExternalPlugin(int slot = 0) const;
+    void setExternalPluginEnabled(bool shouldBeEnabled, int slot = 0);
+    bool isExternalPluginEnabled(int slot = 0) const;
+    bool isExternalPluginPatternPlaying(int slot = 0) const noexcept;
+    bool isAnyExternalPluginPatternPlaying() const noexcept;
+    void setExternalPluginPatternPlaying(bool shouldPlay, int slot = 0) noexcept;
+    juce::String getExternalPluginName(int slot = 0) const;
+    juce::String getExternalPluginPath(int slot = 0) const;
+    juce::AudioPluginInstance* getExternalPluginInstance(int slot = 0) const;
+    const LoopernicoMidi::DrumNoteMap& getExternalPluginDrumMap(int slot = 0) const;
+    LoopernicoMidi::DrumMidiPattern getExternalPluginDrumPattern(int slot = 0) const;
+    bool setExternalPluginDrumNote(int slot, LoopernicoMidi::DrumLane lane, int midiNote);
+    bool setExternalPluginDrumChannel(int slot, LoopernicoMidi::DrumLane lane, int midiChannel);
+    void setExternalPluginDrumPattern(int slot, const LoopernicoMidi::DrumMidiPattern& pattern);
+    void resetExternalPluginDrumMap(int slot = 0);
+    int getExternalPluginReportedLatencySamples(int slot = 0) const;
+    int getActiveExternalPluginLatencySamples() const;
+    int getActiveEffectsLatencySamples() const;
+    bool consumeExternalPluginLatencyRefreshRequest()
+    {
+        return externalPluginLatencyRefreshRequested.exchange(false);
+    }
+    void refreshExternalPluginLatency();
+    bool copyExternalPluginState(juce::MemoryBlock& state, int slot = 0) const;
+    bool restoreExternalPluginState(const juce::MemoryBlock& state, juce::String& errorMessage,
+                                    int slot = 0);
 
-    void setPedalOrder(const std::array<int, kPedalCount>& order);
+    void setPedalOrder(const std::array<int, kChainItemCount>& order);
 
     // --- SETTERS ATÓMICOS CONECTADOS A LA INTERFAZ GRÁFICA ---
     void setNoiseGateEnabled(bool b) { noiseGateEnabled.store(b); }
@@ -120,6 +164,7 @@ public:
     void setCompEq(float e) { compEq.store(e); }
 
     void setRhythmEnabled(bool b) { rhythmEnabled.store(b); }
+    bool isRhythmEnabled() const { return rhythmEnabled.load(); }
     void setRhythmTempo(float bpm) { rhythmTempoBpm.store(bpm); }
     void setRhythmLevel(float l) { rhythmLevel.store(l); }
     void setRhythmSwing(float s) { rhythmSwing.store(s); }
@@ -127,6 +172,7 @@ public:
     void setRhythmStyle(int s) { rhythmStyle.store(s); }
     void setRhythmVariation(int v) { rhythmVariation.store(v); }
     void setRhythmMode(RhythmMode m) { rhythmMode.store((int)m); }
+    bool isRhythmSoloMode() const { return rhythmMode.load() == (int) RhythmMode::Solo; }
     void setRhythmCountInEnabled(bool isEnabled) { rhythmCountInEnabled.store(isEnabled); }
     void setRhythmCountInBars(int bars) { rhythmCountInBars.store(juce::jlimit(0, 8, bars)); }
     void setRhythmCountInSound(RhythmCountInSound sound) { rhythmCountInSound.store((int) sound); }
@@ -160,19 +206,28 @@ public:
     int getDrumActiveVoiceCount() const { return drumActiveVoices.load(); }
 
     void setHarmonicEnabled(bool b) { harmonicEnabled.store(b); }
-    void setHarmonicInterval(int i) { harmonicInterval.store(i); }
-    void setHarmonicMix(float m) { harmonicMix.store(m); }
-    void setHarmonicLevel(float l) { harmonicLevel.store(l); }
+    void setPicoVolume(float value) { picoVolume.store(juce::jlimit(0.0f, 1.0f, value)); }
+    void setPicoBlend(float value) { picoBlend.store(juce::jlimit(0.0f, 1.0f, value)); }
+    void setPicoSweepSeconds(float seconds) { picoSweepSeconds.store(juce::jlimit(0.0f, 4.0f, seconds)); }
+    void setPicoShiftIndex(int index) { picoShiftIndex.store(juce::jlimit(0, 9, index)); }
+    void setPicoMode(int mode) { picoMode.store(juce::jlimit(0, 2, mode)); }
 
     void setFuzzEnabled(bool b) { fuzzEnabled.store(b); }
     void setFuzz(float f) { fuzz.store(f); } // CORRECCIÓN: Nombre correcto
     void setFuzzTone(float t) { fuzzTone.store(t); }
     void setFuzzLevel(float l) { fuzzLevel.store(l); }
 
-    void setDriveEnabled(bool b) { driveEnabled.store(b); }
-    void setDrive(float d) { drive.store(d); } // CORRECCIÓN: Nombre correcto
-    void setDriveTone(float t) { driveTone.store(t); }
-    void setDriveLevel(float l) { driveLevel.store(l); }
+    // VOX Cooltron Duel Overdrive: EFFECT is the global bypass and OD1 / OD2
+    // selects one of the two channels. BASS BOOST is OFF, OD2-only or BOTH.
+    void setCooltronEnabled(bool enabled) { cooltronEnabled.store(enabled); }
+    void setCooltronOd2Selected(bool selected) { cooltronOd2Selected.store(selected); }
+    void setCooltronGain1(float value) { cooltronGain1.store(juce::jlimit(0.0f, 1.0f, value)); }
+    void setCooltronVolume1(float value) { cooltronVolume1.store(juce::jlimit(0.0f, 1.0f, value)); }
+    void setCooltronTone1(float value) { cooltronTone1.store(juce::jlimit(0.0f, 1.0f, value)); }
+    void setCooltronGain2(float value) { cooltronGain2.store(juce::jlimit(0.0f, 1.0f, value)); }
+    void setCooltronVolume2(float value) { cooltronVolume2.store(juce::jlimit(0.0f, 1.0f, value)); }
+    void setCooltronTone2(float value) { cooltronTone2.store(juce::jlimit(0.0f, 1.0f, value)); }
+    void setCooltronBassBoost(int position) { cooltronBassBoost.store(juce::jlimit(0, 2, position)); }
 
     void setChorusEnabled(bool b) { chorusEnabled.store(b); }
     void setChorusMix(float m) { chorusMix.store(m); }
@@ -183,17 +238,36 @@ public:
     void setTremoloMix(float m) { tremoloMix.store(m); }
     void setTremoloRate(float r) { tremoloRate.store(r); }
     void setTremoloDepth(float d) { tremoloDepth.store(d); }
+    void setTremoloMode(int mode) { tremoloMode.store(juce::jlimit(0, 4, mode)); }
+    void setTremoloBeats(int beats) { tremoloBeats.store(juce::jlimit(0, 6, beats)); }
+    void setTremoloSymmetry(float symmetry) { tremoloSymmetry.store(juce::jlimit(0.0f, 1.0f, symmetry)); }
+    void setTremoloControlPressed(bool pressed) { tremoloControlPressed.store(pressed); }
+    void syncTremolo() { tremoloSyncRequested.store(true); }
 
     void setDelayEnabled(bool b) { delayEnabled.store(b); }
     void setDelayMix(float m) { delayMix.store(m); }
     void setDelayTimeMs(float t) { delayTimeMs.store(t); }
     void setDelayFeedback(float f) { delayFeedback.store(f); }
+    void setDelayFilter(float v) { delayFilter.store(juce::jlimit(0.0f, 1.0f, v)); }
+    void setDelayGrit(float v) { delayGrit.store(juce::jlimit(0.0f, 1.0f, v)); }
+    void setDelayModRate(float hz) { delayModRate.store(juce::jlimit(0.02f, 12.0f, hz)); }
+    void setDelayModDepth(float v) { delayModDepth.store(juce::jlimit(0.0f, 1.0f, v)); }
+    void setDelayType(int type) { delayType.store(juce::jlimit(0, 11, type)); }
+    void setDelayValue(float v) { delayValue.store(juce::jlimit(0.0f, 1.0f, v)); }
 
     void setReverbEnabled(bool b) { reverbEnabled.store(b); }
     void setReverbMix(float m) { reverbMix.store(m); }
     void setReverbRoomSize(float s) { reverbRoomSize.store(s); }
     void setReverbSpace(float s) { setReverbRoomSize(s); }
     void setReverbDamping(float d) { reverbDamping.store(d); }
+    void setReverbPreDelayMs(float ms) { reverbPreDelayMs.store(juce::jlimit(0.0f, 1500.0f, ms)); }
+    void setReverbTone(float t) { reverbTone.store(juce::jlimit(0.0f, 1.0f, t)); }
+    void setReverbWidth(float w) { reverbWidth.store(juce::jlimit(0.0f, 1.0f, w)); }
+    void setReverbDiffusion(float d) { reverbDiffusion.store(juce::jlimit(0.0f, 1.0f, d)); }
+    void setReverbMod(float m) { reverbMod.store(juce::jlimit(0.0f, 1.0f, m)); }
+    void setReverbType(int t) { reverbType.store(juce::jlimit(0, 11, t)); }
+    void setReverbValue(float v) { reverbValue.store(juce::jlimit(0.0f, 1.0f, v)); }
+    void setReverbInfinite(bool enabled) { reverbInfinite.store(enabled); }
 
     void setEqEnabled(bool b)
     {
@@ -201,6 +275,8 @@ public:
         outputEq.setEnabled(b);
     }
     void setEqBandGain(int band, float gainDb) { outputEq.setGain(band, gainDb); }
+    void setEqInputGain(float gainDb) { outputEqInputGainDb.store(juce::jlimit(-12.0f, 12.0f, gainDb)); }
+    void setEqOutputVolume(float gainDb) { outputEqVolumeDb.store(juce::jlimit(-12.0f, 12.0f, gainDb)); }
 
     void setFreezeEnabled(bool b) { freezeEnabled.store(b); }
     void setFreezeMix(float m) { freezeMix.store(m); }
@@ -325,11 +401,20 @@ private:
     void applyPendingRhythmSampleBank(int styleIndex, bool metronomeMode) noexcept;
     void run() override;
     static RhythmSampleSlot sampleSlotForInstrument(DrumInstrument instrument);
-    void processExternalPluginBlock(juce::AudioBuffer<float>& buffer, int startSample, int numSamples);
-    void prepareExternalPluginScratchBuffer();
+    void processExternalPluginSample(int slot, int channel, int channels, float& sample);
+    void queueExternalPluginPatternMidi(int slotIndex, int blockSize);
+    void prepareExternalPluginScratchBuffer(int slot);
+    void audioProcessorParameterChanged(juce::AudioProcessor*, int, float) override {}
+    void audioProcessorChanged(juce::AudioProcessor*,
+                               const juce::AudioProcessorListener::ChangeDetails& details) override;
     // --- VARIABLES ATÓMICAS DE CONTROL DE ESTADO ---
-    std::array<std::atomic<int>, kPedalCount> pedalOrder;
-    std::atomic<bool> externalPluginEnabled{ true };
+    // Los 17 ids usan 5 bits. Dos palabras y un contador de secuencia permiten
+    // publicar la permutacion sin bloquear el callback de audio.
+    std::atomic<uint64_t> packedPedalOrderLow{ 0 };
+    std::atomic<uint64_t> packedPedalOrderHigh{ 0 };
+    std::atomic<uint32_t> pedalOrderSequence{ 0 };
+    std::array<int, kChainItemCount> audioPedalOrder{}; // solo lo escribe el hilo de audio
+    std::atomic<bool> externalPluginLatencyRefreshRequested{ false };
 
     std::atomic<bool> noiseGateEnabled{ false };
     std::atomic<float> noiseGateThresholdDb{ -55.0f };
@@ -384,19 +469,33 @@ private:
     std::atomic<int> drumActiveVoices{ 0 };
 
     std::atomic<bool> harmonicEnabled{ false };
-    std::atomic<int>  harmonicInterval{ 7 };
-    std::atomic<float> harmonicMix{ 0.4f };
-    std::atomic<float> harmonicLevel{ 0.6f };
+    std::atomic<float> picoVolume{ 0.5f };
+    std::atomic<float> picoBlend{ 0.4f };
+    std::atomic<float> picoSweepSeconds{ 0.0f };
+    std::atomic<int> picoShiftIndex{ 7 };
+    std::atomic<int> picoMode{ 2 };
+    std::atomic<int> picoLatencySamples{ 0 };
 
     std::atomic<bool> fuzzEnabled{ false };
     std::atomic<float> fuzz{ 0.4f }; // CORRECCIÓN: Ahora es el atómico oficial
     std::atomic<float> fuzzTone{ 0.4f };
     std::atomic<float> fuzzLevel{ 0.7f };
 
-    std::atomic<bool> driveEnabled{ false };
-    std::atomic<float> drive{ 0.5f }; // CORRECCIÓN: Ahora es el atómico oficial
-    std::atomic<float> driveTone{ 0.6f };
-    std::atomic<float> driveLevel{ 0.8f };
+    std::atomic<bool> cooltronEnabled{ false };
+    std::atomic<bool> cooltronOd2Selected{ false };
+    std::atomic<float> cooltronGain1{ 0.42f };
+    std::atomic<float> cooltronTone1{ 0.55f };
+    std::atomic<float> cooltronVolume1{ 0.52f };
+    std::atomic<float> cooltronGain2{ 0.36f };
+    std::atomic<float> cooltronTone2{ 0.55f };
+    std::atomic<float> cooltronVolume2{ 0.52f };
+    std::atomic<int> cooltronBassBoost{ 0 }; // OFF, OD2, BOTH
+
+    // Four-times oversampled nonlinear and filter state. Both channels keep
+    // their state warm so OD1 / OD2 switching does not allocate or lock.
+    float cooltronState1[6][2]{};
+    float cooltronState2[6][2]{};
+    float cooltronPreviousInput[2]{};
 
     std::atomic<bool> chorusEnabled{ false };
     std::atomic<float> chorusMix{ 0.5f };
@@ -406,17 +505,36 @@ private:
     std::atomic<bool> tremoloEnabled{ false };
     std::atomic<float> tremoloMix{ 0.75f };
     std::atomic<float> tremoloRate{ 3.2f };
-    std::atomic<float> tremoloDepth{ 0.55f };
+    std::atomic<float> tremoloDepth{ 0.72f };
+    std::atomic<int> tremoloMode{ 3 };
+    std::atomic<int> tremoloBeats{ 2 };
+    std::atomic<float> tremoloSymmetry{ 0.5f };
+    std::atomic<bool> tremoloControlPressed{ false };
+    std::atomic<bool> tremoloSyncRequested{ false };
 
     std::atomic<bool> delayEnabled{ false };
     std::atomic<float> delayMix{ 0.3f };
     std::atomic<float> delayTimeMs{ 400.0f };
     std::atomic<float> delayFeedback{ 0.4f };
+    std::atomic<float> delayFilter{ 0.62f };
+    std::atomic<float> delayGrit{ 0.12f };
+    std::atomic<float> delayModRate{ 0.35f };
+    std::atomic<float> delayModDepth{ 0.10f };
+    std::atomic<int> delayType{ 6 };
+    std::atomic<float> delayValue{ 0.50f };
 
     std::atomic<bool> reverbEnabled{ false };
     std::atomic<float> reverbMix{ 0.22f };
     std::atomic<float> reverbRoomSize{ 0.45f };
     std::atomic<float> reverbDamping{ 0.3f };
+    std::atomic<float> reverbPreDelayMs{ 80.0f };
+    std::atomic<float> reverbTone{ 0.58f };
+    std::atomic<float> reverbWidth{ 0.85f };
+    std::atomic<float> reverbDiffusion{ 0.65f };
+    std::atomic<float> reverbMod{ 0.18f };
+    std::atomic<int> reverbType{ 1 };
+    std::atomic<float> reverbValue{ 0.5f };
+    std::atomic<bool> reverbInfinite{ false };
     std::atomic<bool> eqEnabled{ false };
 
     std::atomic<bool> freezeEnabled{ false };
@@ -446,26 +564,70 @@ private:
     static constexpr int kFreezeBufLen = 192000;
 
     juce::AudioPluginFormatManager pluginFormatManager;
-    std::unique_ptr<juce::AudioPluginInstance> externalPluginInstance;
-    juce::AudioBuffer<float> externalPluginScratchBuffer;
-    juce::MidiBuffer externalPluginMidiBuffer;
-    int externalPluginInputChannels{ 0 };
-    int externalPluginOutputChannels{ 0 };
-    juce::String externalPluginName;
-    juce::String externalPluginPath;
+    class ExternalPluginPlayHead final : public juce::AudioPlayHead
+    {
+    public:
+        juce::Optional<PositionInfo> getPosition() const override;
+
+        std::atomic<double> sampleRate{ 44100.0 };
+        std::atomic<double> bpm{ 120.0 };
+        std::atomic<int> beatsPerBar{ 4 };
+        std::atomic<juce::int64> timeInSamples{ 0 };
+        std::atomic<bool> isPlaying{ false };
+        std::atomic<bool> isRecording{ false };
+        std::atomic<bool> looperIsPlaying{ false };
+    };
+    ExternalPluginPlayHead externalPluginPlayHead;
+    std::array<LoopernicoMidi::DrumNoteMap, kMaxExternalPlugins> externalPluginDrumMaps;
+    // La interfaz puede editar el patron mientras el callback de audio lo
+    // consume. Dos buffers permiten publicar una copia completa sin que el
+    // hilo de audio lea una estructura a medio actualizar.
+    std::array<std::array<LoopernicoMidi::DrumMidiPattern, 2>, kMaxExternalPlugins> externalPluginDrumPatterns;
+    std::array<std::atomic<int>, kMaxExternalPlugins> externalPluginDrumPatternReadIndex{};
+    struct ExternalPluginSlot
+    {
+        std::unique_ptr<juce::AudioPluginInstance> instance;
+        juce::AudioBuffer<float> scratchBuffer;
+        juce::AudioBuffer<float> outputBuffer;
+        juce::MidiBuffer midiBuffer;
+        int inputChannels{ 0 };
+        int outputChannels{ 0 };
+        int streamPosition{ 0 };
+        bool outputReady{ false };
+        bool streamWasEnabled{ false };
+        bool patternTransportWasPlaying{ false };
+        bool looperTransportWasPlaying{ false };
+        int patternNoteOffBlocksRemaining{ 0 };
+        juce::int64 patternOriginSample{ 0 };
+        juce::String name;
+        juce::String path;
+        std::atomic<bool> enabled{ true };
+        std::atomic<bool> patternPlaybackEnabled{ false };
+        std::atomic<bool> patternStopRequested{ false };
+        std::atomic<int> latencySamples{ 0 };
+    };
+    std::array<ExternalPluginSlot, kMaxExternalPlugins> externalPlugins;
     juce::AudioBuffer<float> delayBuffer;
     juce::AudioBuffer<float> chorusBuffer;
     juce::AudioBuffer<float> pitchBuffer;
     juce::AudioBuffer<float> freezeBuffer;
+    juce::AudioBuffer<float> chordFreezeInputBuffer;
     juce::AudioBuffer<float> chordBodyBuffer;
-    juce::Reverb            roomReverb;
+    juce::AudioBuffer<float> reverbPreDelayBuffer;
+    juce::AudioBuffer<float> reverbScratchBuffer;
+    std::array<juce::Reverb, 2> roomReverbs;
     EQProcessor             outputEq;
+    std::atomic<float>      outputEqInputGainDb { 0.0f };
+    std::atomic<float>      outputEqVolumeDb { 0.0f };
 
     int delayWritePos{ 0 };
     int chorusWritePos{ 0 };
     int pitchWritePos{ 0 };
     int freezeWritePos{ 0 };
     int chordBodyWritePos{ 0 };
+    int reverbPreDelayWritePos{ 0 };
+    float reverbToneState[2]{};
+    double reverbModPhase{ 0.0 };
     bool freezeHoldActive{ false };
     int freezeLayerWriteIndex{ 0 };
     std::array<SustainLayer, kFreezeMaxLayers> sustainLayers;
@@ -475,8 +637,8 @@ private:
     std::array<ChordFreezeGrain, kChordFreezeGrainCount> chordFreezeGrains;
 
     float lowPassFilters[10][2]{};
-    float noiseGateEnv{ 0.0f };
-    float noiseGateGain{ 1.0f };
+    float noiseGateEnv[2]{ 0.0f, 0.0f };
+    float noiseGateGain[2]{ 1.0f, 1.0f };
     float chordBodyDamp[2]{ 0.0f, 0.0f };
     float compEnv[2]{ 0.0f, 0.0f };
     float compLowBand[2]{ 0.0f, 0.0f };
@@ -546,8 +708,11 @@ private:
     juce::int64 drumLastTriggerSample{ -1 };
     std::array<int, 4> drumRecentIntervals{};
 
-    double pitchPhaseHarm{ 0.0 };
+    std::array<std::unique_ptr<PicoPitchShifter>, 2> picoPitchShifters;
     double chorusPhase{ 0.0 };
+    double delayModPhase{ 0.0 };
     double tremoloPhase{ 0.0 };
+    float tremoloFootSpeedAmount{ 0.0f };
+    float tremoloFadeGain{ 1.0f };
 
 };

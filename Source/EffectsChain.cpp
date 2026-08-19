@@ -1,4 +1,5 @@
 #include "EffectsChain.h"
+#include "PicoPitchShifter.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -83,8 +84,19 @@ namespace
 EffectsChain::EffectsChain()
     : juce::Thread("Rhythm sample loader")
 {
+    for (auto& shifter : picoPitchShifters)
+        shifter = std::make_unique<PicoPitchShifter>();
+
+    std::array<int, kChainItemCount> initialOrder{};
+    initialOrder[0] = kPedalCount;
+    int nextOrderSlot = 1;
     for (int i = 0; i < kPedalCount; ++i)
-        pedalOrder[(size_t) i].store(i);
+        if (i != RhythmPedal && i != LegacySustainGranPedal)
+            initialOrder[(size_t) nextOrderSlot++] = i;
+    for (int slot = 1; slot < kMaxExternalPlugins; ++slot)
+        initialOrder[(size_t) nextOrderSlot++] = kPedalCount + slot;
+    audioPedalOrder = initialOrder;
+    setPedalOrder(initialOrder);
 
     juce::addDefaultFormatsToManager(pluginFormatManager);
     rhythmSampleFormatManager.registerBasicFormats();
@@ -97,6 +109,9 @@ EffectsChain::~EffectsChain()
     signalThreadShouldExit();
     notify();
     stopThread(5000);
+    for (auto& slot : externalPlugins)
+        if (slot.instance != nullptr)
+            slot.instance->removeListener(this);
 }
 
 EffectsChain::PreparedExternalPlugin::~PreparedExternalPlugin()
@@ -116,14 +131,17 @@ EffectsChain::PreparedExternalPlugin& EffectsChain::PreparedExternalPlugin::oper
         release();
         instance = std::move(other.instance);
         scratchBuffer = std::move(other.scratchBuffer);
+        outputBuffer = std::move(other.outputBuffer);
         midiBuffer = std::move(other.midiBuffer);
         inputChannels = other.inputChannels;
         outputChannels = other.outputChannels;
         name = std::move(other.name);
         path = std::move(other.path);
         enabled = other.enabled;
+        latencySamples = other.latencySamples;
         other.inputChannels = 0;
         other.outputChannels = 0;
+        other.latencySamples = 0;
     }
     return *this;
 }
@@ -198,6 +216,7 @@ bool EffectsChain::prepareExternalVst3(const juce::File& pluginFile,
         return false;
 
     prepared.instance->enableAllBuses();
+    prepared.instance->setPlayHead(&externalPluginPlayHead);
     prepared.instance->setRateAndBufferSizeDetails(sampleRate_, maxBlockSize_);
     prepared.instance->prepareToPlay(sampleRate_, maxBlockSize_);
     prepared.instance->reset();
@@ -211,44 +230,68 @@ bool EffectsChain::prepareExternalVst3(const juce::File& pluginFile,
                                                           prepared.outputChannels));
     prepared.scratchBuffer.setSize(requiredChannels, maxBlockSize_, false, true, false);
     prepared.scratchBuffer.clear();
+    prepared.outputBuffer.setSize(requiredChannels, maxBlockSize_, false, true, false);
+    prepared.outputBuffer.clear();
     prepared.midiBuffer.ensureSize(64 * 1024);
     prepared.midiBuffer.clear();
     prepared.name = prepared.instance->getName();
     prepared.path = pluginFile.getFullPathName();
     prepared.enabled = true;
+    prepared.latencySamples = juce::jmax(0, prepared.instance->getLatencySamples());
 
     candidate = std::move(prepared);
     errorMessage.clear();
     return true;
 }
 
-EffectsChain::PreparedExternalPlugin EffectsChain::commitExternalPlugin(PreparedExternalPlugin&& candidate) noexcept
+EffectsChain::PreparedExternalPlugin EffectsChain::commitExternalPlugin(PreparedExternalPlugin&& candidate, int slotIndex) noexcept
 {
     PreparedExternalPlugin retired;
-    std::swap(retired.instance, externalPluginInstance);
-    std::swap(retired.scratchBuffer, externalPluginScratchBuffer);
-    std::swap(retired.midiBuffer, externalPluginMidiBuffer);
-    std::swap(retired.inputChannels, externalPluginInputChannels);
-    std::swap(retired.outputChannels, externalPluginOutputChannels);
-    std::swap(retired.name, externalPluginName);
-    std::swap(retired.path, externalPluginPath);
-    retired.enabled = externalPluginEnabled.exchange(candidate.enabled);
+    if (!juce::isPositiveAndBelow(slotIndex, kMaxExternalPlugins))
+        return std::move(candidate);
 
-    std::swap(candidate.instance, externalPluginInstance);
-    std::swap(candidate.scratchBuffer, externalPluginScratchBuffer);
-    std::swap(candidate.midiBuffer, externalPluginMidiBuffer);
-    std::swap(candidate.inputChannels, externalPluginInputChannels);
-    std::swap(candidate.outputChannels, externalPluginOutputChannels);
-    std::swap(candidate.name, externalPluginName);
-    std::swap(candidate.path, externalPluginPath);
+    auto& slot = externalPlugins[(size_t) slotIndex];
+    if (slot.instance != nullptr)
+        slot.instance->removeListener(this);
+    std::swap(retired.instance, slot.instance);
+    std::swap(retired.scratchBuffer, slot.scratchBuffer);
+    std::swap(retired.outputBuffer, slot.outputBuffer);
+    std::swap(retired.midiBuffer, slot.midiBuffer);
+    std::swap(retired.inputChannels, slot.inputChannels);
+    std::swap(retired.outputChannels, slot.outputChannels);
+    std::swap(retired.name, slot.name);
+    std::swap(retired.path, slot.path);
+    retired.latencySamples = slot.latencySamples.exchange(candidate.latencySamples);
+    retired.enabled = slot.enabled.exchange(candidate.enabled);
+
+    std::swap(candidate.instance, slot.instance);
+    std::swap(candidate.scratchBuffer, slot.scratchBuffer);
+    std::swap(candidate.outputBuffer, slot.outputBuffer);
+    std::swap(candidate.midiBuffer, slot.midiBuffer);
+    std::swap(candidate.inputChannels, slot.inputChannels);
+    std::swap(candidate.outputChannels, slot.outputChannels);
+    std::swap(candidate.name, slot.name);
+    std::swap(candidate.path, slot.path);
+    slot.streamPosition = 0;
+    slot.outputReady = false;
+    slot.streamWasEnabled = false;
+    slot.patternTransportWasPlaying = false;
+    slot.looperTransportWasPlaying = false;
+    slot.patternNoteOffBlocksRemaining = 0;
+    slot.patternOriginSample = 0;
+    slot.patternPlaybackEnabled.store(false, std::memory_order_relaxed);
+    slot.patternStopRequested.store(false, std::memory_order_relaxed);
+    if (slot.instance != nullptr)
+        slot.instance->addListener(this);
+    externalPluginLatencyRefreshRequested.store(false);
     return retired;
 }
 
-EffectsChain::PreparedExternalPlugin EffectsChain::detachExternalPlugin() noexcept
+EffectsChain::PreparedExternalPlugin EffectsChain::detachExternalPlugin(int slot) noexcept
 {
     PreparedExternalPlugin empty;
     empty.enabled = false;
-    return commitExternalPlugin(std::move(empty));
+    return commitExternalPlugin(std::move(empty), slot);
 }
 
 void EffectsChain::unloadExternalPlugin()
@@ -256,11 +299,11 @@ void EffectsChain::unloadExternalPlugin()
     auto retired = detachExternalPlugin();
 }
 
-bool EffectsChain::copyExternalPluginState(juce::MemoryBlock& state) const
+bool EffectsChain::copyExternalPluginState(juce::MemoryBlock& state, int slotIndex) const
 {
     state.reset();
 
-    auto* plugin = externalPluginInstance.get();
+    auto* plugin = getExternalPluginInstance(slotIndex);
     if (plugin == nullptr)
         return false;
 
@@ -268,12 +311,14 @@ bool EffectsChain::copyExternalPluginState(juce::MemoryBlock& state) const
     return state.getSize() > 0;
 }
 
-bool EffectsChain::restoreExternalPluginState(const juce::MemoryBlock& state, juce::String& errorMessage)
+bool EffectsChain::restoreExternalPluginState(const juce::MemoryBlock& state,
+                                              juce::String& errorMessage,
+                                              int slotIndex)
 {
-    auto* plugin = externalPluginInstance.get();
+    auto* plugin = getExternalPluginInstance(slotIndex);
     if (plugin == nullptr)
     {
-        errorMessage = "No hay un VST3 cargado para restaurar su estado.";
+        errorMessage = "No hay un VST3 cargado en ese slot para restaurar su estado.";
         return false;
     }
 
@@ -284,14 +329,178 @@ bool EffectsChain::restoreExternalPluginState(const juce::MemoryBlock& state, ju
     }
 
     plugin->setStateInformation(state.getData(), (int) state.getSize());
+    refreshExternalPluginLatency();
     errorMessage.clear();
     return true;
 }
 
-void EffectsChain::setPedalOrder(const std::array<int, kPedalCount>& order)
+void EffectsChain::audioProcessorChanged(
+    juce::AudioProcessor*,
+    const juce::AudioProcessorListener::ChangeDetails& details)
 {
-    for (int i = 0; i < kPedalCount; ++i)
-        pedalOrder[(size_t) i].store(juce::jlimit(0, kPedalCount - 1, order[(size_t) i]));
+    if (details.latencyChanged)
+        externalPluginLatencyRefreshRequested.store(true, std::memory_order_release);
+}
+
+void EffectsChain::refreshExternalPluginLatency()
+{
+    for (auto& slot : externalPlugins)
+        slot.latencySamples.store(slot.instance != nullptr
+            ? juce::jmax(0, slot.instance->getLatencySamples()) : 0,
+            std::memory_order_release);
+    externalPluginLatencyRefreshRequested.store(false, std::memory_order_release);
+}
+
+bool EffectsChain::hasExternalPlugin(int slot) const
+{
+    return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)
+        && externalPlugins[(size_t) slot].instance != nullptr;
+}
+
+void EffectsChain::setExternalPluginEnabled(bool enabled, int slot)
+{
+    if (juce::isPositiveAndBelow(slot, kMaxExternalPlugins))
+        externalPlugins[(size_t) slot].enabled.store(enabled);
+}
+
+bool EffectsChain::isExternalPluginEnabled(int slot) const
+{
+    return hasExternalPlugin(slot) && externalPlugins[(size_t) slot].enabled.load();
+}
+
+bool EffectsChain::isExternalPluginPatternPlaying(int slot) const noexcept
+{
+    return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)
+        && externalPlugins[(size_t) slot].patternPlaybackEnabled.load(std::memory_order_relaxed);
+}
+
+bool EffectsChain::isAnyExternalPluginPatternPlaying() const noexcept
+{
+    for (const auto& slot : externalPlugins)
+        if (slot.instance != nullptr && slot.enabled.load(std::memory_order_relaxed)
+            && slot.patternPlaybackEnabled.load(std::memory_order_relaxed))
+            return true;
+    return false;
+}
+
+void EffectsChain::setExternalPluginPatternPlaying(bool shouldPlay, int slot) noexcept
+{
+    if (juce::isPositiveAndBelow(slot, kMaxExternalPlugins))
+    {
+        auto& externalPlugin = externalPlugins[(size_t) slot];
+        externalPlugin.patternPlaybackEnabled.store(shouldPlay, std::memory_order_relaxed);
+        externalPlugin.patternStopRequested.store(!shouldPlay, std::memory_order_relaxed);
+    }
+}
+
+juce::String EffectsChain::getExternalPluginName(int slot) const
+{
+    return hasExternalPlugin(slot) ? externalPlugins[(size_t) slot].name : juce::String();
+}
+
+juce::String EffectsChain::getExternalPluginPath(int slot) const
+{
+    return hasExternalPlugin(slot) ? externalPlugins[(size_t) slot].path : juce::String();
+}
+
+juce::AudioPluginInstance* EffectsChain::getExternalPluginInstance(int slot) const
+{
+    return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)
+        ? externalPlugins[(size_t) slot].instance.get() : nullptr;
+}
+
+const LoopernicoMidi::DrumNoteMap& EffectsChain::getExternalPluginDrumMap(int slot) const
+{
+    static const LoopernicoMidi::DrumNoteMap defaultMap;
+    return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)
+        ? externalPluginDrumMaps[(size_t) slot] : defaultMap;
+}
+
+LoopernicoMidi::DrumMidiPattern EffectsChain::getExternalPluginDrumPattern(int slot) const
+{
+    static const LoopernicoMidi::DrumMidiPattern defaultPattern;
+    if (!juce::isPositiveAndBelow(slot, kMaxExternalPlugins))
+        return defaultPattern;
+
+    const auto& buffers = externalPluginDrumPatterns[(size_t) slot];
+    const int readIndex = externalPluginDrumPatternReadIndex[(size_t) slot].load(std::memory_order_acquire);
+    return buffers[(size_t) juce::jlimit(0, 1, readIndex)];
+}
+
+bool EffectsChain::setExternalPluginDrumNote(int slot, LoopernicoMidi::DrumLane lane, int midiNote)
+{
+    return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)
+        && externalPluginDrumMaps[(size_t) slot].setNote(lane, midiNote);
+}
+
+bool EffectsChain::setExternalPluginDrumChannel(int slot, LoopernicoMidi::DrumLane lane, int midiChannel)
+{
+    return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)
+        && externalPluginDrumMaps[(size_t) slot].setChannel(lane, midiChannel);
+}
+
+void EffectsChain::setExternalPluginDrumPattern(int slot, const LoopernicoMidi::DrumMidiPattern& pattern)
+{
+    if (juce::isPositiveAndBelow(slot, kMaxExternalPlugins))
+    {
+        auto& buffers = externalPluginDrumPatterns[(size_t) slot];
+        auto& readIndex = externalPluginDrumPatternReadIndex[(size_t) slot];
+        const int writeIndex = 1 - juce::jlimit(0, 1, readIndex.load(std::memory_order_acquire));
+        buffers[(size_t) writeIndex] = pattern;
+        readIndex.store(writeIndex, std::memory_order_release);
+    }
+}
+
+void EffectsChain::resetExternalPluginDrumMap(int slot)
+{
+    if (juce::isPositiveAndBelow(slot, kMaxExternalPlugins))
+        externalPluginDrumMaps[(size_t) slot].resetGeneralMidi();
+}
+
+int EffectsChain::getExternalPluginReportedLatencySamples(int slot) const
+{
+    return juce::isPositiveAndBelow(slot, kMaxExternalPlugins)
+        ? externalPlugins[(size_t) slot].latencySamples.load() : 0;
+}
+
+int EffectsChain::getActiveExternalPluginLatencySamples() const
+{
+    int total = 0;
+    for (int slot = 0; slot < kMaxExternalPlugins; ++slot)
+        if (isExternalPluginEnabled(slot))
+            total += externalPlugins[(size_t) slot].latencySamples.load() + maxBlockSize_;
+    return total;
+}
+
+int EffectsChain::getActiveEffectsLatencySamples() const
+{
+    return getActiveExternalPluginLatencySamples()
+         + (harmonicEnabled.load(std::memory_order_relaxed)
+                ? picoLatencySamples.load(std::memory_order_relaxed)
+                : 0);
+}
+
+void EffectsChain::setPedalOrder(const std::array<int, kChainItemCount>& order)
+{
+    uint64_t low = 0, high = 0;
+    std::array<bool, kChainItemIdLimit> seen{};
+    for (int i = 0; i < kChainItemCount; ++i)
+    {
+        const int pedal = order[(size_t) i];
+        if (pedal < 0 || pedal >= kChainItemIdLimit || pedal == RhythmPedal
+            || pedal == LegacySustainGranPedal || seen[(size_t) pedal])
+            return;
+        seen[(size_t) pedal] = true;
+        const int bit = i * 5;
+        if (bit < 60)
+            low |= (uint64_t) pedal << bit;
+        else
+            high |= (uint64_t) pedal << (bit - 60);
+    }
+    pedalOrderSequence.fetch_add(1, std::memory_order_acq_rel);
+    packedPedalOrderLow.store(low, std::memory_order_relaxed);
+    packedPedalOrderHigh.store(high, std::memory_order_relaxed);
+    pedalOrderSequence.fetch_add(1, std::memory_order_release);
 }
 
 EffectsChain::RhythmSampleSlot EffectsChain::sampleSlotForInstrument(DrumInstrument instrument)
@@ -975,103 +1184,303 @@ float EffectsChain::estimateRecentPitchHz(int channel, int writePosition) const
     return (float) sampleRate_ / ((float) selectedLag + adjustment);
 }
 
-void EffectsChain::prepareExternalPluginScratchBuffer()
+void EffectsChain::prepareExternalPluginScratchBuffer(int slotIndex)
 {
-    auto* plugin = externalPluginInstance.get();
-    externalPluginInputChannels = plugin != nullptr ? plugin->getTotalNumInputChannels() : 0;
-    externalPluginOutputChannels = plugin != nullptr ? plugin->getTotalNumOutputChannels() : 0;
+    if (!juce::isPositiveAndBelow(slotIndex, kMaxExternalPlugins))
+        return;
+    auto& slot = externalPlugins[(size_t) slotIndex];
+    auto* plugin = slot.instance.get();
+    slot.inputChannels = plugin != nullptr ? plugin->getTotalNumInputChannels() : 0;
+    slot.outputChannels = plugin != nullptr ? plugin->getTotalNumOutputChannels() : 0;
 
-    const int requiredChannels = juce::jmax(1, juce::jmax(externalPluginInputChannels,
-                                                          externalPluginOutputChannels));
-    externalPluginScratchBuffer.setSize(requiredChannels, maxBlockSize_, false, true, false);
-    externalPluginScratchBuffer.clear();
+    const int requiredChannels = juce::jmax(1, juce::jmax(slot.inputChannels, slot.outputChannels));
+    slot.scratchBuffer.setSize(requiredChannels, maxBlockSize_, false, true, false);
+    slot.outputBuffer.setSize(requiredChannels, maxBlockSize_, false, true, false);
+    slot.scratchBuffer.clear();
+    slot.outputBuffer.clear();
+    slot.streamPosition = 0;
+    slot.outputReady = false;
 
-    // clear() conserva esta reserva, evitando crecimiento del MidiBuffer en el callback.
-    externalPluginMidiBuffer.ensureSize(64 * 1024);
-    externalPluginMidiBuffer.clear();
+    slot.midiBuffer.ensureSize(64 * 1024);
+    slot.midiBuffer.clear();
 }
 
-void EffectsChain::processExternalPluginBlock(juce::AudioBuffer<float>& buffer, int startSample, int numSamples)
+void EffectsChain::processExternalPluginSample(int slotIndex, int channel, int channels, float& sample)
 {
-    if (!isExternalPluginEnabled() || numSamples <= 0)
+    if (!juce::isPositiveAndBelow(slotIndex, kMaxExternalPlugins))
         return;
 
-    auto* plugin = externalPluginInstance.get();
+    auto& slot = externalPlugins[(size_t) slotIndex];
+    if (!isExternalPluginEnabled(slotIndex))
+    {
+        if (slot.streamWasEnabled)
+        {
+            slot.streamPosition = 0;
+            slot.outputReady = false;
+            slot.scratchBuffer.clear();
+            slot.outputBuffer.clear();
+            slot.streamWasEnabled = false;
+            slot.patternTransportWasPlaying = false;
+            slot.looperTransportWasPlaying = false;
+            slot.patternNoteOffBlocksRemaining = 0;
+        }
+        return;
+    }
+    if (!slot.streamWasEnabled)
+    {
+        slot.streamPosition = 0;
+        slot.outputReady = false;
+        slot.scratchBuffer.clear();
+        slot.outputBuffer.clear();
+        slot.streamWasEnabled = true;
+        slot.patternTransportWasPlaying = false;
+        slot.looperTransportWasPlaying = false;
+        slot.patternNoteOffBlocksRemaining = 0;
+    }
+    auto* plugin = slot.instance.get();
     if (plugin == nullptr || plugin->isSuspended())
         return;
 
-    const int availableSamples = buffer.getNumSamples() - startSample;
-    const int samplesToProcess = juce::jmin(numSamples, juce::jmax(0, availableSamples));
-    const int scratchBlockSize = externalPluginScratchBuffer.getNumSamples();
-    const int scratchChannels = externalPluginScratchBuffer.getNumChannels();
-    if (samplesToProcess <= 0 || scratchBlockSize <= 0 || scratchChannels <= 0)
+    const int blockSize = slot.scratchBuffer.getNumSamples();
+    const int scratchChannels = slot.scratchBuffer.getNumChannels();
+    if (blockSize <= 0 || scratchChannels <= 0 || !juce::isPositiveAndBelow(channel, channels))
         return;
 
-    const int sourceChannels = buffer.getNumChannels();
-    const int copiedInputChannels = juce::jmin(sourceChannels,
-                                               juce::jmin(externalPluginInputChannels, scratchChannels));
-    const int copiedOutputChannels = juce::jmin(sourceChannels,
-                                                juce::jmin(externalPluginOutputChannels, scratchChannels));
+    const int pos = slot.streamPosition;
+    const float processed = slot.outputReady && channel < slot.outputChannels
+        ? slot.outputBuffer.getSample(channel, pos) : 0.0f;
+    if (channel < slot.inputChannels)
+        slot.scratchBuffer.setSample(channel, pos, sample);
+    sample = processed;
 
-    for (int offset = 0; offset < samplesToProcess; offset += scratchBlockSize)
+    if (channel == channels - 1)
     {
-        const int chunkSize = juce::jmin(scratchBlockSize, samplesToProcess - offset);
-        externalPluginScratchBuffer.clear(0, chunkSize);
-
-        for (int channel = 0; channel < copiedInputChannels; ++channel)
-            externalPluginScratchBuffer.copyFrom(channel, 0, buffer, channel,
-                                                 startSample + offset, chunkSize);
-
-        // La capacidad permanece fija; el plugin solo ve el tramo valido del scratch.
-        juce::AudioBuffer<float> chunk(externalPluginScratchBuffer.getArrayOfWritePointers(),
-                                       scratchChannels, 0, chunkSize);
-        externalPluginMidiBuffer.clear();
-        plugin->processBlock(chunk, externalPluginMidiBuffer);
-
-        for (int channel = 0; channel < copiedOutputChannels; ++channel)
-            buffer.copyFrom(channel, startSample + offset, chunk, channel, 0, chunkSize);
+        ++slot.streamPosition;
+        if (slot.streamPosition >= blockSize)
+        {
+            slot.midiBuffer.clear();
+            queueExternalPluginPatternMidi(slotIndex, blockSize);
+            plugin->processBlock(slot.scratchBuffer, slot.midiBuffer);
+            std::swap(slot.scratchBuffer, slot.outputBuffer);
+            slot.scratchBuffer.clear();
+            slot.streamPosition = 0;
+            slot.outputReady = true;
+        }
     }
+}
+
+void EffectsChain::queueExternalPluginPatternMidi(int slotIndex, int blockSize)
+{
+    if (!juce::isPositiveAndBelow(slotIndex, kMaxExternalPlugins) || blockSize <= 0)
+        return;
+
+    auto& slot = externalPlugins[(size_t) slotIndex];
+    const bool looperIsPlaying = externalPluginPlayHead.looperIsPlaying.load(std::memory_order_relaxed);
+    const bool previousLooperIsPlaying = slot.looperTransportWasPlaying;
+    slot.looperTransportWasPlaying = looperIsPlaying;
+    if (looperIsPlaying && !previousLooperIsPlaying)
+        slot.patternStopRequested.store(false, std::memory_order_relaxed);
+
+    const bool isPlaying = !slot.patternStopRequested.load(std::memory_order_relaxed)
+                        && (looperIsPlaying
+                            || slot.patternPlaybackEnabled.load(std::memory_order_relaxed));
+    const auto& patternBuffers = externalPluginDrumPatterns[(size_t) slotIndex];
+    const int patternReadIndex = externalPluginDrumPatternReadIndex[(size_t) slotIndex]
+        .load(std::memory_order_acquire);
+    const auto& pattern = patternBuffers[(size_t) juce::jlimit(0, 1, patternReadIndex)];
+    const auto& noteMap = externalPluginDrumMaps[(size_t) slotIndex];
+
+    const auto sendPatternNoteOff = [&]()
+    {
+        for (int laneIndex = 0; laneIndex < (int) LoopernicoMidi::DrumLane::Count; ++laneIndex)
+        {
+            const auto lane = (LoopernicoMidi::DrumLane) laneIndex;
+            const int channel = noteMap.getChannel(lane);
+            slot.midiBuffer.addEvent(juce::MidiMessage::noteOff(channel, noteMap.getNote(lane)), 0);
+            slot.midiBuffer.addEvent(juce::MidiMessage::allNotesOff(channel), 0);
+            slot.midiBuffer.addEvent(juce::MidiMessage::allSoundOff(channel), 0);
+        }
+    };
+
+    if (!isPlaying)
+    {
+        if (slot.patternTransportWasPlaying)
+            slot.patternNoteOffBlocksRemaining = juce::jlimit(2, 32,
+                slot.latencySamples.load(std::memory_order_relaxed) / juce::jmax(1, blockSize) + 3);
+        if (slot.patternNoteOffBlocksRemaining > 0)
+        {
+            sendPatternNoteOff();
+            --slot.patternNoteOffBlocksRemaining;
+        }
+        slot.patternTransportWasPlaying = false;
+        return;
+    }
+
+    slot.patternNoteOffBlocksRemaining = 0;
+
+    const juce::int64 blockStartSample = externalPluginPlayHead.timeInSamples.load(std::memory_order_relaxed);
+    if (!slot.patternTransportWasPlaying)
+    {
+        slot.patternOriginSample = blockStartSample;
+        slot.patternTransportWasPlaying = true;
+    }
+
+    const double bpm = juce::jlimit(20.0, 300.0,
+                                    externalPluginPlayHead.bpm.load(std::memory_order_relaxed));
+    const double samplesPerStep = sampleRate_ * 60.0 / (bpm * 4.0);
+    const int totalSteps = pattern.getBars() * LoopernicoMidi::DrumMidiPattern::stepsPerBar;
+    if (samplesPerStep <= 0.0 || totalSteps <= 0)
+        return;
+
+    const double relativeStart = (double) juce::jmax<juce::int64>(0, blockStartSample - slot.patternOriginSample);
+    const double relativeEnd = relativeStart + (double) blockSize;
+    const auto firstCandidate = (int) std::floor(relativeStart / samplesPerStep) - 1;
+    const auto lastCandidate = (int) std::ceil(relativeEnd / samplesPerStep) + 1;
+
+    static constexpr std::array<LoopernicoMidi::DrumLane, LoopernicoMidi::DrumNoteMap::laneCount> lanes = {
+        LoopernicoMidi::DrumLane::Kick,
+        LoopernicoMidi::DrumLane::Snare,
+        LoopernicoMidi::DrumLane::ClosedHiHat,
+        LoopernicoMidi::DrumLane::OpenHiHat,
+        LoopernicoMidi::DrumLane::Crash,
+        LoopernicoMidi::DrumLane::Ride
+    };
+
+    for (int candidate = firstCandidate; candidate <= lastCandidate; ++candidate)
+    {
+        const int onStep = ((candidate % totalSteps) + totalSteps) % totalSteps;
+        const double onTime = (double) candidate * samplesPerStep;
+        const double offTime = onTime + samplesPerStep * 0.5;
+
+        const auto addEventsAt = [&](double eventTime, bool noteOn)
+        {
+            if (eventTime < relativeStart || eventTime >= relativeEnd)
+                return;
+            const int offset = juce::jlimit(0, blockSize - 1,
+                                            (int) std::llround(eventTime - relativeStart));
+            for (const auto lane : lanes)
+            {
+                const int velocity = pattern.getVelocity(lane, onStep);
+                if (velocity <= 0)
+                    continue;
+                const int channel = noteMap.getChannel(lane);
+                const int note = noteMap.getNote(lane);
+                slot.midiBuffer.addEvent(noteOn
+                    ? juce::MidiMessage::noteOn(channel, note, (juce::uint8) velocity)
+                    : juce::MidiMessage::noteOff(channel, note), offset);
+            }
+        };
+
+        addEventsAt(onTime, true);
+        addEventsAt(offTime, false);
+    }
+}
+
+juce::Optional<juce::AudioPlayHead::PositionInfo> EffectsChain::ExternalPluginPlayHead::getPosition() const
+{
+    const double currentSampleRate = juce::jmax(1.0, sampleRate.load(std::memory_order_relaxed));
+    const double currentBpm = juce::jlimit(20.0, 300.0, bpm.load(std::memory_order_relaxed));
+    const int currentBeatsPerBar = juce::jmax(1, beatsPerBar.load(std::memory_order_relaxed));
+    const juce::int64 currentSamples = juce::jmax<juce::int64>(0, timeInSamples.load(std::memory_order_relaxed));
+    const double ppqPosition = (double) currentSamples * currentBpm / (currentSampleRate * 60.0);
+
+    PositionInfo position;
+    position.setTimeInSamples(currentSamples);
+    position.setTimeInSeconds((double) currentSamples / currentSampleRate);
+    position.setBpm(currentBpm);
+    position.setTimeSignature(TimeSignature{ currentBeatsPerBar, 4 });
+    position.setPpqPosition(ppqPosition);
+    position.setPpqPositionOfLastBarStart(std::floor(ppqPosition / (double) currentBeatsPerBar)
+                                          * (double) currentBeatsPerBar);
+    position.setBarCount((juce::int64) std::floor(ppqPosition / (double) currentBeatsPerBar));
+    position.setIsPlaying(isPlaying.load(std::memory_order_relaxed));
+    position.setIsRecording(isRecording.load(std::memory_order_relaxed));
+    return position;
+}
+
+void EffectsChain::setExternalPluginTransport(float tempoBpm, int numerator,
+                                              bool transportPlaying, bool transportRecording,
+                                              bool looperTransportPlaying) noexcept
+{
+    externalPluginPlayHead.bpm.store(juce::jlimit(20.0, 300.0, (double) tempoBpm), std::memory_order_relaxed);
+    externalPluginPlayHead.beatsPerBar.store(juce::jmax(1, numerator), std::memory_order_relaxed);
+    externalPluginPlayHead.isPlaying.store(transportPlaying, std::memory_order_relaxed);
+    externalPluginPlayHead.isRecording.store(transportRecording, std::memory_order_relaxed);
+    externalPluginPlayHead.looperIsPlaying.store(looperTransportPlaying, std::memory_order_relaxed);
 }
 
 void EffectsChain::prepare(double sampleRate, int maxBlockSize)
 {
     sampleRate_ = sampleRate;
     maxBlockSize_ = juce::jmax(16, maxBlockSize);
+    externalPluginPlayHead.sampleRate.store(sampleRate_, std::memory_order_relaxed);
+    externalPluginPlayHead.timeInSamples.store(0, std::memory_order_relaxed);
 
     delayBuffer.setSize(2, (int)(sampleRate_ * 3.0));
     chorusBuffer.setSize(2, juce::jmax(1024, (int)(sampleRate_ * 0.08)));
     pitchBuffer.setSize(2, kPitchBufLen);
+    for (auto& shifter : picoPitchShifters)
+        shifter->prepare(sampleRate_);
+    picoLatencySamples.store(picoPitchShifters[0]->latencySamples(), std::memory_order_relaxed);
     freezeBuffer.setSize(2, kFreezeBufLen);
+    chordFreezeInputBuffer.setSize(2, kFreezeBufLen);
     chordBodyBuffer.setSize(2, juce::jmax(4096, (int) (sampleRate_ * 0.070)));
+    reverbPreDelayBuffer.setSize(2, juce::jmax(2, (int) (sampleRate_ * 1.5) + 2));
+    reverbScratchBuffer.setSize(2, maxBlockSize_);
     for (auto& layer : sustainLayers)
         layer.buffer.setSize(2, kFreezeBufLen);
     chordSustainLayer.buffer.setSize(2, kFreezeBufLen);
-    roomReverb.setSampleRate(sampleRate_);
+    for (auto& reverb : roomReverbs)
+        reverb.setSampleRate(sampleRate_);
     outputEq.prepare(sampleRate_);
-    if (externalPluginInstance != nullptr)
+    for (auto& slot : externalPlugins)
     {
-        externalPluginInstance->releaseResources();
-        externalPluginInstance->setRateAndBufferSizeDetails(sampleRate_, maxBlockSize_);
-        externalPluginInstance->prepareToPlay(sampleRate_, maxBlockSize_);
-        externalPluginInstance->reset();
+        if (slot.instance != nullptr)
+        {
+            slot.instance->releaseResources();
+            slot.instance->setRateAndBufferSizeDetails(sampleRate_, maxBlockSize_);
+            slot.instance->prepareToPlay(sampleRate_, maxBlockSize_);
+            slot.instance->reset();
+        }
     }
 
-    prepareExternalPluginScratchBuffer();
+    refreshExternalPluginLatency();
+
+    for (int slot = 0; slot < kMaxExternalPlugins; ++slot)
+        prepareExternalPluginScratchBuffer(slot);
 
     reset();
 }
 
 void EffectsChain::reset()
 {
-    if (externalPluginInstance != nullptr)
-        externalPluginInstance->reset();
+    for (auto& slot : externalPlugins)
+    {
+        if (slot.instance != nullptr)
+            slot.instance->reset();
+        slot.streamPosition = 0;
+        slot.outputReady = false;
+        slot.streamWasEnabled = false;
+        slot.patternTransportWasPlaying = false;
+        slot.looperTransportWasPlaying = false;
+        slot.patternNoteOffBlocksRemaining = 0;
+        slot.patternStopRequested.store(false, std::memory_order_relaxed);
+        slot.scratchBuffer.clear();
+        slot.outputBuffer.clear();
+    }
 
     delayBuffer.clear();
     chorusBuffer.clear();
     pitchBuffer.clear();
+    for (auto& shifter : picoPitchShifters)
+        shifter->reset();
     freezeBuffer.clear();
+    chordFreezeInputBuffer.clear();
     chordBodyBuffer.clear();
-    externalPluginMidiBuffer.clear();
+    reverbPreDelayBuffer.clear();
+    reverbScratchBuffer.clear();
+    for (auto& slot : externalPlugins)
+        slot.midiBuffer.clear();
     for (auto& layer : sustainLayers)
     {
         layer.buffer.clear();
@@ -1109,13 +1518,20 @@ void EffectsChain::reset()
     pitchWritePos   = 0;
     freezeWritePos  = 0;
     chordBodyWritePos = 0;
+    reverbPreDelayWritePos = 0;
+    reverbToneState[0] = reverbToneState[1] = 0.0f;
+    reverbModPhase = 0.0;
+    delayModPhase = 0.0;
     freezeHoldActive = false;
     freezeLayerWriteIndex = 0;
     chordFreezeHoldActive = false;
 
     std::memset(lowPassFilters, 0, sizeof(lowPassFilters));
-    noiseGateEnv = 0.0f;
-    noiseGateGain = 1.0f;
+    std::memset(cooltronState1, 0, sizeof(cooltronState1));
+    std::memset(cooltronState2, 0, sizeof(cooltronState2));
+    std::memset(cooltronPreviousInput, 0, sizeof(cooltronPreviousInput));
+    noiseGateEnv[0] = noiseGateEnv[1] = 0.0f;
+    noiseGateGain[0] = noiseGateGain[1] = 1.0f;
     std::memset(chordBodyDamp,   0, sizeof(chordBodyDamp));
     std::memset(compEnv,        0, sizeof(compEnv));
     std::memset(compLowBand,    0, sizeof(compLowBand));
@@ -1135,10 +1551,12 @@ void EffectsChain::reset()
     drumOutputDisplay = 0.0f;
     rhythmToneState[0] = 0.0f;
     rhythmToneState[1] = 0.0f;
-    pitchPhaseHarm = 0.0;
     chorusPhase    = 0.0;
     tremoloPhase   = 0.0;
-    roomReverb.reset();
+    tremoloFootSpeedAmount = 0.0f;
+    tremoloFadeGain = 1.0f;
+    for (auto& reverb : roomReverbs)
+        reverb.reset();
     outputEq.reset();
 
     kickVoice = {};
@@ -1197,9 +1615,14 @@ void EffectsChain::reset()
     drumActiveVoices.store(0);
 }
 
-void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSample, int numSamples)
+void EffectsChain::processBlock(juce::AudioBuffer<float>& recordableInput,
+                                juce::AudioBuffer<float>& rhythmMonitor,
+                                int startSample, int numSamples)
 {
-    processExternalPluginBlock(buffer, startSample, numSamples);
+    const int availableRhythmSamples = rhythmMonitor.getNumSamples() - startSample;
+    const int rhythmSamplesToClear = juce::jmin(numSamples, juce::jmax(0, availableRhythmSamples));
+    for (int ch = 0; ch < rhythmMonitor.getNumChannels(); ++ch)
+        rhythmMonitor.clear(ch, startSample, rhythmSamplesToClear);
 
     // =========================================================================
     // 1. CARGA DE ATOMICS — una sola vez por bloque, fuera de cualquier loop.
@@ -1210,7 +1633,8 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
     const bool drumOn = drumTriggerEnabled.load();
     const bool harmOn = harmonicEnabled.load();
     const bool fzOn   = fuzzEnabled.load();
-    const bool drOn   = driveEnabled.load();
+    const bool cooltronOn = cooltronEnabled.load();
+    const bool cooltronUseOd2 = cooltronOd2Selected.load();
     const bool choOn  = chorusEnabled.load();
     const bool trOn   = tremoloEnabled.load();
     const bool delOn  = delayEnabled.load();
@@ -1218,9 +1642,33 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
     const bool eqOn   = eqEnabled.load();
     const bool freezeOn = freezeEnabled.load();
     const bool chordFreezeOn = chordFreezeEnabled.load();
-    int orderedPedals[kPedalCount]{};
-    for (int i = 0; i < kPedalCount; ++i)
-        orderedPedals[i] = pedalOrder[(size_t) i].load();
+    int orderedPedals[kChainItemCount]{};
+    std::copy(audioPedalOrder.begin(), audioPedalOrder.end(), orderedPedals);
+    uint64_t packedLow = 0, packedHigh = 0;
+    bool decodedConsistently = false;
+    for (int attempt = 0; attempt < 3; ++attempt)
+    {
+        const auto before = pedalOrderSequence.load(std::memory_order_acquire);
+        if ((before & 1u) != 0)
+            continue;
+        packedLow = packedPedalOrderLow.load(std::memory_order_relaxed);
+        packedHigh = packedPedalOrderHigh.load(std::memory_order_relaxed);
+        const auto after = pedalOrderSequence.load(std::memory_order_acquire);
+        if (before == after)
+        {
+            decodedConsistently = true;
+            break;
+        }
+    }
+    if (decodedConsistently)
+    {
+        for (int i = 0; i < kChainItemCount; ++i)
+        {
+            const int bit = i * 5;
+            orderedPedals[i] = (int) (((bit < 60 ? packedLow >> bit : packedHigh >> (bit - 60))) & 0x1f);
+            audioPedalOrder[(size_t) i] = orderedPedals[i];
+        }
+    }
 
     const float cMix    = compMix.load();
     const float gateThresholdDb = noiseGateThresholdDb.load();
@@ -1252,19 +1700,40 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
     const float drumSnarePitch = drumSnarePitchHz.load();
     const float drumHatPitch = drumHatPitchHz.load();
     const int   drumPlacement = drumTriggerPlacement.load();
-    const int   harmInterval = harmonicInterval.load();
-    const float harmM   = harmonicMix.load();
-    const float harmL   = harmonicLevel.load();
+    const float picoVolumeValue = picoVolume.load();
+    const float picoBlendValue = picoBlend.load();
+    const float picoSweepValue = picoSweepSeconds.load();
+    const int picoShiftValue = picoShiftIndex.load();
+    const int picoModeValue = picoMode.load();
     const float fzL     = fuzzLevel.load();
     const float fzT     = fuzzTone.load();
-    const float drL     = driveLevel.load();
-    const float drT     = driveTone.load();
+    const float cooltronGain1Value = cooltronGain1.load();
+    const float cooltronTone1Value = cooltronTone1.load();
+    const float cooltronVolume1Value = cooltronVolume1.load();
+    const float cooltronGain2Value = cooltronGain2.load();
+    const float cooltronTone2Value = cooltronTone2.load();
+    const float cooltronVolume2Value = cooltronVolume2.load();
+    const int cooltronBassBoostPosition = cooltronBassBoost.load();
     const float delM    = delayMix.load();
     const float delTime = delayTimeMs.load();
     const float delFB   = delayFeedback.load();
+    const float delFilter = delayFilter.load();
+    const float delGrit = delayGrit.load();
+    const float delModRate = delayModRate.load();
+    const float delModDepth = delayModDepth.load();
+    const int delType = delayType.load();
+    const float delValue = delayValue.load();
     const float revM    = reverbMix.load();
     const float revRoom = reverbRoomSize.load();
     const float revDamp = reverbDamping.load();
+    const float revPreDelay = reverbPreDelayMs.load();
+    const float revTone = reverbTone.load();
+    const float revWidth = reverbWidth.load();
+    const float revDiffusion = reverbDiffusion.load();
+    const float revMod = reverbMod.load();
+    const int revType = reverbType.load();
+    const float revValue = reverbValue.load();
+    const bool revInfinite = reverbInfinite.load();
     const float frzMix  = freezeMix.load();
     const float frzWindowMs = freezeWindowMs.load();
     const float frzRiseMs = freezeRiseMs.load();
@@ -1277,17 +1746,49 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
     const float chordFrzTailMs = chordFreezeTailMs.load();
     const float chordFrzTone = chordFreezeTone.load();
     const float chordFrzCrossfade = chordFreezeCrossfade.load();
-    const float choM    = chorusMix.load();
-    const float choRate = chorusRate.load();
-    const float choDepth= chorusDepth.load();
-    const float trM     = tremoloMix.load();
+    const float choM    = juce::jlimit(0.0f, 1.0f, chorusMix.load());
+    const float choRate = juce::jlimit(0.05f, 10.0f, chorusRate.load());
+    const float choDepth= juce::jlimit(0.0f, 1.0f, chorusDepth.load());
     const float trRate  = tremoloRate.load();
     const float trDepth = tremoloDepth.load();
+    const int trMode = tremoloMode.load();
+    const int trBeatsIndex = tremoloBeats.load();
+    const float trSymmetry = tremoloSymmetry.load();
+    const bool trControlPressed = tremoloControlPressed.load();
+    if (tremoloSyncRequested.exchange(false))
+        tremoloPhase = 0.0;
     const bool metronomeMode = rhythmModeIndex == (int) RhythmMode::Metronome;
-    const bool rhythmSoloMode = rhythmModeIndex == (int) RhythmMode::Solo;
 
     outputEq.setEnabled(eqOn);
     outputEq.updateCoefficientsIfNeeded();
+    const float outputEqInputGain = juce::Decibels::decibelsToGain(outputEqInputGainDb.load());
+    const float outputEqOutputGain = juce::Decibels::decibelsToGain(outputEqVolumeDb.load());
+
+    static constexpr float reverbTypeRoomBias[12] = { -0.24f, 0.12f, -0.05f, 0.04f, 0.18f, 0.25f,
+                                                       0.34f, 0.22f, 0.10f, 0.05f, 0.16f, -0.12f };
+    static constexpr float reverbTypeDampBias[12] = { 0.12f, -0.08f, 0.18f, 0.02f, -0.12f, -0.18f,
+                                                      -0.26f, -0.14f, 0.08f, 0.15f, -0.10f, 0.20f };
+    const float reverbFineValue = (revValue - 0.5f) * 0.18f;
+    juce::Reverb::Parameters reverbParams;
+    reverbParams.roomSize = juce::jlimit(0.0f, 1.0f, revRoom + reverbTypeRoomBias[revType] + reverbFineValue
+                                                      + (revDiffusion - 0.5f) * 0.12f);
+    reverbParams.damping = juce::jlimit(0.0f, 1.0f, revDamp + reverbTypeDampBias[revType]
+                                                     + (0.5f - revDiffusion) * 0.14f);
+    reverbParams.wetLevel = 1.0f;
+    reverbParams.dryLevel = 0.0f;
+    reverbParams.width = revWidth;
+    reverbParams.freezeMode = revInfinite ? 1.0f : 0.0f;
+    for (auto& reverb : roomReverbs)
+        reverb.setParameters(reverbParams);
+    const int reverbPreDelaySize = reverbPreDelayBuffer.getNumSamples();
+    const int reverbPreDelaySamples = juce::jlimit(0, reverbPreDelaySize - 1,
+        juce::roundToInt(revPreDelay * 0.001f * (float) sampleRate_));
+    const float reverbToneCoeff = 1.0f - std::exp(-juce::MathConstants<float>::twoPi
+                                                  * juce::jmap(revTone, 900.0f, 17000.0f)
+                                                  / (float) sampleRate_);
+    const float reverbMixAmount = juce::jlimit(0.0f, 1.0f, revM);
+    const float reverbModDepth = revMod * 0.10f;
+    const double reverbModStep = juce::MathConstants<double>::twoPi * (0.18 + revMod * 1.15) / sampleRate_;
 
     if (rhythmOn)
     {
@@ -1420,18 +1921,87 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
     const float drumRearmTransientThresh = drumTransientThresh * 0.34f;
     const float rhythmToneCoeff = juce::jmap(juce::jlimit(0.0f, 1.0f, rhythmToneValue), 0.045f, 0.22f);
 
-    // Pitch shifter: std::pow FUERA del loop (antes eran 2 pows x44100 veces/seg)
-    const float pitchDeltaHarm = 1.0f - std::pow(2.0f, (float)harmInterval / 12.0f);
-    // Fuzz y drive: factores constantes por bloque
+    // Pico Pitch Fork interval table. The first position is a 17-cent detune;
+    // DUAL follows the ten pairings published in the physical pedal manual.
+    static constexpr float singleIntervals[] = {
+        0.17f, 1.0f, 2.0f, 4.0f, 5.0f, 7.0f, 9.0f, 12.0f, 24.0f, 36.0f
+    };
+    static constexpr float dualIntervals[][2] = {
+        { -0.08f, 0.08f }, { -0.17f, 0.17f }, { 2.0f, 9.0f },
+        { 4.0f, 7.0f }, { 5.0f, -7.0f }, { 7.0f, -12.0f },
+        { 9.0f, -7.0f }, { 12.0f, -12.0f }, { 24.0f, -12.0f },
+        { 36.0f, -12.0f }
+    };
+    const int safePicoShift = juce::jlimit(0, 9, picoShiftValue);
+    const int safePicoMode = juce::jlimit(0, 2, picoModeValue);
+    const bool picoDual = safePicoMode == 2;
+    const float picoIntervalA = picoDual
+        ? dualIntervals[safePicoShift][0]
+        : singleIntervals[safePicoShift] * (safePicoMode == 1 ? -1.0f : 1.0f);
+    const float picoIntervalB = picoDual ? dualIntervals[safePicoShift][1] : 0.0f;
+    const float picoBlendAmount = juce::jlimit(0.0f, 1.0f, picoBlendValue);
+    const float picoOutputGain = juce::jlimit(0.0f, 2.0f, picoVolumeValue * 2.0f);
+    for (auto& shifter : picoPitchShifters)
+        shifter->setParameters(picoIntervalA, picoIntervalB, picoDual, harmOn, picoSweepValue);
+    // Fuzz: factor constante por bloque.
     const float fuzzDriveFactor = fuzz.load() * 40.0f + 1.0f;
-    const float driveDriveFactor= drive.load() * 12.0f + 1.0f;
 
-    // Delay: tiempo en muestras constante por bloque
-    const float currentDelaySamples = (delTime / 1000.0f) * (float)sampleRate_;
+    // Cooltron-style dual overdrive. The nonlinear core runs at 4x using
+    // interpolated sub-samples. All coefficients are scalars calculated once
+    // per block; the audio callback performs no allocation or locking.
+    constexpr int cooltronOversampling = 4;
+    const float cooltronRate = (float) sampleRate_ * (float) cooltronOversampling;
+    auto cooltronPole = [cooltronRate](float hz)
+    {
+        return 1.0f - std::exp(-juce::MathConstants<float>::twoPi * hz / cooltronRate);
+    };
+    const float cooltronInputHighPass = cooltronPole(68.0f);
+    const float cooltronBassShelf = cooltronPole(230.0f);
+    const float cooltronPresence = cooltronPole(4200.0f);
+    const float cooltronTone1Pole = cooltronPole(juce::jmap(cooltronTone1Value, 1200.0f, 14500.0f));
+    const float cooltronTone2Pole = cooltronPole(juce::jmap(cooltronTone2Value, 1050.0f, 13200.0f));
+    const float cooltronDrive1 = std::pow(10.0f, juce::jmap(cooltronGain1Value, 6.0f, 37.0f) / 20.0f);
+    const float cooltronDrive2 = std::pow(10.0f, juce::jmap(cooltronGain2Value, 7.0f, 43.0f) / 20.0f);
+    auto cooltronOutputLevel = [](float level)
+    {
+        level = juce::jlimit(0.0f, 1.0f, level);
+        if (level <= 0.5f)
+            return juce::jmap(level, 0.0f, 0.5f, 0.0f, 1.0f);
+        return std::pow(10.0f, juce::jmap(level, 0.5f, 1.0f, 0.0f, 8.0f) / 20.0f);
+    };
+    const float cooltronLevel1 = cooltronOutputLevel(cooltronVolume1Value);
+    const float cooltronLevel2 = cooltronOutputLevel(cooltronVolume2Value);
+    const bool cooltronBoostOd1 = cooltronBassBoostPosition == 2;
+    const bool cooltronBoostOd2 = cooltronBassBoostPosition >= 1;
 
-    // Chorus: componente fija de delay
-    const float choBaseDelay = (float)sampleRate_ * 0.015f;
-    const float choVarDelay  = (float)sampleRate_ * 0.007f * choDepth;
+    // TimeLine MX delay: every parameter is reduced to scalar state before the sample loop.
+    static constexpr float delayTypeRatios[] = {
+        0.75f, 1.00f, 1.18f, 1.00f, 0.50f, 0.50f,
+        1.00f, 1.25f, 1.00f, 0.875f, 1.00f, 1.50f
+    };
+    const int safeDelayType = juce::jlimit(0, 11, delType);
+    const float currentDelaySamples = juce::jlimit(2.0f, (float) delayBuffer.getNumSamples() - 2.0f,
+        (delTime / 1000.0f) * (float) sampleRate_ * delayTypeRatios[safeDelayType]);
+    const float delaySecondTapRatio = juce::jmap(juce::jlimit(0.0f, 1.0f, delValue), 0.28f, 0.92f);
+    const float delaySecondTapMix = safeDelayType == 0 ? 0.58f
+                                   : (safeDelayType == 1 || safeDelayType == 3 ? 0.34f : 0.16f * delValue);
+    const float delayFilterCoeff = juce::jlimit(0.015f, 0.72f,
+        juce::jmap(juce::jlimit(0.0f, 1.0f, delFilter), 0.025f, 0.58f)
+        * ((safeDelayType == 8 || safeDelayType == 10) ? 0.55f : 1.0f));
+    const float delayGritAmount = juce::jlimit(0.0f, 1.0f, delGrit
+        + ((safeDelayType == 2 || safeDelayType == 8 || safeDelayType == 10) ? 0.22f : 0.0f));
+    const float delayModSamples = (float) sampleRate_ * juce::jmap(juce::jlimit(0.0f, 1.0f, delModDepth),
+                                                                   0.0f, 0.0065f);
+    const double deltaDelayModPhase = (2.0 * juce::MathConstants<double>::pi
+                                       * (double) delModRate) / sampleRate_;
+
+    // Small Clone: DEPTH is a two-position switch, not an amount that can disable
+    // modulation.  LOW and HIGH therefore select two non-zero BBD excursions.
+    // Keeping the centre delay above the largest excursion prevents the read head
+    // from crossing the write head at the top of the LFO cycle.
+    const float choBaseDelay = (float) sampleRate_ * 0.0085f;
+    const float choDepthMs = juce::jmap(choDepth, 1.6f, 5.0f);
+    const float choVarDelay = (float) sampleRate_ * choDepthMs * 0.001f;
     const int freezeTargetLen = juce::jlimit(96, kFreezeBufLen - 1,
                                              (int)((frzWindowMs / 1000.0f) * (float)sampleRate_));
     const int chordFreezeTargetLen = juce::jlimit(256, kFreezeBufLen - 1,
@@ -1439,16 +2009,11 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
 
     // Chorus: incremento de fase constante por bloque
     const double deltaChorusPhase = (2.0 * juce::MathConstants<double>::pi * (double)choRate) / sampleRate_;
-    const double deltaTremoloPhase = (2.0 * juce::MathConstants<double>::pi * (double)trRate) / sampleRate_;
 
     // Pitch: valores de ventana como floats, calculados una vez
-    const int   winSize  = juce::jmax(256, (int)(0.04 * sampleRate_));
-    const float winSizeF = (float)winSize;
-    const float halfWinF = winSizeF * 0.5f;
-    const float kPBLenF  = (float)kPitchBufLen;
-
     // Stutter setup (igual que antes — logica de estado)
-    int channels = juce::jmin(buffer.getNumChannels(), 2);
+    int channels = juce::jmin(recordableInput.getNumChannels(), 2);
+    channels = juce::jmin(channels, rhythmMonitor.getNumChannels());
     channels = juce::jmin(channels, pitchBuffer.getNumChannels());
     channels = juce::jmin(channels, delayBuffer.getNumChannels());
     channels = juce::jmin(channels, chorusBuffer.getNumChannels());
@@ -1504,8 +2069,10 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
     float* delayPtr[2]   = {};
     float* chorusPtr[2]  = {};
     float* freezePtr[2]  = {};
+    float* chordFreezePtr[2] = {};
     float* chordBodyPtr[2] = {};
     float* outPtr[2]     = {};
+    float* rhythmOutPtr[2] = {};
 
     for (int ch = 0; ch < channels; ++ch)
     {
@@ -1513,8 +2080,10 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
         delayPtr[ch]   = delayBuffer.getWritePointer(ch);
         chorusPtr[ch]  = chorusBuffer.getWritePointer(ch);
         freezePtr[ch]  = freezeBuffer.getWritePointer(ch);
+        chordFreezePtr[ch] = chordFreezeInputBuffer.getWritePointer(ch);
         chordBodyPtr[ch] = chordBodyBuffer.getWritePointer(ch);
-        outPtr[ch]     = buffer.getWritePointer(ch) + startSample;
+        outPtr[ch]     = recordableInput.getWritePointer(ch) + startSample;
+        rhythmOutPtr[ch] = rhythmMonitor.getWritePointer(ch) + startSample;
     }
 
     auto readFreezeSample = [&](const SustainLayer& layer, int ch, double position)
@@ -1797,11 +2366,11 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
                 {
                     const int a = wrappedIndex(start + i);
                     const int b = wrappedIndex(end - edgeLen + 1 + i);
-                    seam += std::abs(freezePtr[ch][a] - freezePtr[ch][b]);
+                    seam += std::abs(chordFreezePtr[ch][a] - chordFreezePtr[ch][b]);
                 }
 
                 for (int i = 0; i < chordFreezeTargetLen; i += juce::jmax(8, chordFreezeTargetLen / 32))
-                    bodyEnergy += std::abs(freezePtr[ch][wrappedIndex(start + i)]);
+                    bodyEnergy += std::abs(chordFreezePtr[ch][wrappedIndex(start + i)]);
             }
 
             seam /= (float) juce::jmax(1, channels * edgeLen);
@@ -1845,7 +2414,7 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
         {
             float* dst = chordSustainLayer.buffer.getWritePointer(ch);
             for (int i = 0; i < chordFreezeTargetLen; ++i)
-                dst[i] = freezePtr[ch][(captureStart + i) % freezeBufLen];
+                dst[i] = chordFreezePtr[ch][(captureStart + i) % freezeBufLen];
 
             const int crossfadeLen = juce::jmin(chordFreezeCrossfadeSamples,
                                                 juce::jmax(8, chordFreezeTargetLen / 3));
@@ -1912,26 +2481,6 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
     {
         if (rhythmOn)
             advanceRhythmSequencer(rhythmTempo, rhythmSwingValue, metronomeMode, rhythmStyleIndex);
-
-        if (gateOn)
-        {
-            float gateInput = 0.0f;
-            for (int ch = 0; ch < channels; ++ch)
-                gateInput = juce::jmax(gateInput, std::abs(outPtr[ch][s]));
-
-            const float envCoeff = gateInput > noiseGateEnv ? gateEnvAttackCoeff : gateEnvReleaseCoeff;
-            noiseGateEnv = gateInput + envCoeff * (noiseGateEnv - gateInput);
-
-            const float targetGain = noiseGateEnv >= gateThreshold ? 1.0f
-                                   : (noiseGateEnv <= gateCloseThreshold ? 0.0f : noiseGateGain);
-            const float gainCoeff = targetGain > noiseGateGain ? gateOpenCoeff : gateCloseCoeff;
-            noiseGateGain = targetGain + gainCoeff * (noiseGateGain - targetGain);
-        }
-        else
-        {
-            noiseGateEnv = 0.0f;
-            noiseGateGain = 1.0f;
-        }
 
         float detectorInputSample = 0.0f;
         float detectorProcessedSample = 0.0f;
@@ -2029,24 +2578,46 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
 
         for (int ch = 0; ch < channels; ++ch)
         {
-            float sample = outPtr[ch][s] * noiseGateGain;
-            const float pitchInputSample = sample;
+            float sample = outPtr[ch][s];
 
-            if (rhythmOn)
+            auto processNoiseGate = [&]()
             {
-                if (rhythmSoloMode)
+                if (!gateOn)
+                {
+                    noiseGateEnv[ch] = 0.0f;
+                    noiseGateGain[ch] = 1.0f;
+                    return;
+                }
+                const float gateInput = std::abs(sample);
+                const float envCoeff = gateInput > noiseGateEnv[ch] ? gateEnvAttackCoeff : gateEnvReleaseCoeff;
+                noiseGateEnv[ch] = gateInput + envCoeff * (noiseGateEnv[ch] - gateInput);
+                const float targetGain = noiseGateEnv[ch] >= gateThreshold ? 1.0f
+                                       : (noiseGateEnv[ch] <= gateCloseThreshold ? 0.0f : noiseGateGain[ch]);
+                const float gainCoeff = targetGain > noiseGateGain[ch] ? gateOpenCoeff : gateCloseCoeff;
+                noiseGateGain[ch] = targetGain + gainCoeff * (noiseGateGain[ch] - targetGain);
+                sample *= noiseGateGain[ch];
+            };
+
+            auto processRhythm = [&]()
+            {
+                if (!rhythmOn)
+                    return;
+
+                // El BeatBuddy se comporta como un pedal real dentro de la
+                // cadena: su audio entra en este punto y atraviesa todos los
+                // efectos ubicados despues. El bus separado queda como retorno
+                // de monitoreo para DIRECT, donde no podemos devolver la entrada
+                // procesada sin duplicar la guitarra fisica.
+                if (rhythmModeIndex == (int) RhythmMode::Solo)
                     sample = drumBusSample[ch];
                 else
                     sample += drumBusSample[ch];
-            }
+            };
 
             // Señal seca para los efectos de pitch existentes.
-            pitchPtr[ch][pitchWritePos] = pitchInputSample;
             // La voz octavada de una 12 cuerdas sólo debe reforzar el registro
             // de E/A/D/G. Dos polos a ~300 Hz atenúan las parejas de B y e,
             // que en una guitarra de 12 cuerdas son unísonas.
-            freezePtr[ch][freezeWritePos] = sample;
-
             #if 0
             if (tunerOn && ch == channels - 1)
             {
@@ -2141,8 +2712,10 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
 
             #endif
             // --- COMPRESOR ---
-            if (cOn)
+            auto processCompressor = [&]()
             {
+                if (!cOn)
+                    return;
                 const float dry = sample;
                 const float absSample = std::abs(sample);
                 const float detectorCoeff = absSample > compEnv[ch] ? cAttackCoeff : cReleaseCoeff;
@@ -2173,7 +2746,7 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
 
                 wet += eqAccent * 0.45f;
                 sample = dry * (1.0f - cMix) + wet * cMix;
-            }
+            };
 
             if (drumOn)
                 detectorProcessedSample = juce::jmax(detectorProcessedSample, std::abs(sample));
@@ -2291,33 +2864,18 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
                 sample = drumBusSample[ch];
 
             // --- ARMONIZADOR ---
-            if (harmOn)
+            auto processHarmonizer = [&]()
             {
                 const float dry = sample;
-                float rPos1 = (float)pitchWritePos - kPitchLookbackSamples - (float)pitchPhaseHarm;
-                if (rPos1 < 0.0f) rPos1 += kPBLenF;
-                if (rPos1 >= kPBLenF) rPos1 -= kPBLenF;
-                const int   a1 = (int)rPos1;
-                const int   b1 = (a1 + 1) % kPitchBufLen;
-                const float f1 = rPos1 - (float)a1;
-                const float s1 = pitchPtr[ch][a1] + f1 * (pitchPtr[ch][b1] - pitchPtr[ch][a1]);
-
-                float p2 = (float)pitchPhaseHarm + halfWinF;
-                if (p2 >= winSizeF) p2 -= winSizeF;
-                float rPos2 = (float)pitchWritePos - kPitchLookbackSamples - p2;
-                if (rPos2 < 0.0f) rPos2 += kPBLenF;
-                if (rPos2 >= kPBLenF) rPos2 -= kPBLenF;
-                const int   a2 = (int)rPos2;
-                const int   b2 = (a2 + 1) % kPitchBufLen;
-                const float f2 = rPos2 - (float)a2;
-                const float s2 = pitchPtr[ch][a2] + f2 * (pitchPtr[ch][b2] - pitchPtr[ch][a2]);
-
-                const float w1 = ((float)pitchPhaseHarm < halfWinF)
-                    ? ((float)pitchPhaseHarm / halfWinF)
-                    : ((winSizeF - (float)pitchPhaseHarm) / halfWinF);
-                const float wet = s1 * w1 + s2 * (1.0f - w1);
-                sample = dry * (1.0f - harmM) + wet * (harmM * harmL * 0.707f);
-            }
+                pitchPtr[ch][pitchWritePos] = dry;
+                const auto shifted = picoPitchShifters[(size_t) ch]->processSample(dry);
+                const float wet = picoDual
+                    ? 0.5f * (shifted.voiceA + shifted.voiceB)
+                    : shifted.voiceA;
+                const float activeBlend = picoBlendAmount * shifted.engagement;
+                const float activeGain = 1.0f + shifted.engagement * (picoOutputGain - 1.0f);
+                sample = (dry * (1.0f - activeBlend) + wet * activeBlend) * activeGain;
+            };
 
             #if 0
             auto processTwelveString = [&]()
@@ -2413,13 +2971,63 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
 
             auto processOverdrive = [&]()
             {
-                if (drOn)
+                if (!cooltronOn)
                 {
-                    const float dry = sample;
-                    float wet = std::atan(sample * driveDriveFactor) / juce::MathConstants<float>::halfPi;
-                    lowPassFilters[2][ch] += drT * (wet - lowPassFilters[2][ch]);
-                    sample = dry * (1.0f - drL * 0.4f) + lowPassFilters[2][ch] * (drL * 0.75f);
+                    cooltronPreviousInput[ch] = sample;
+                    return;
                 }
+
+                auto shapeAsymmetric = [](float x, float positiveGain, float negativeGain)
+                {
+                    return x >= 0.0f ? std::tanh(x * positiveGain) / std::tanh(positiveGain)
+                                     : std::tanh(x * negativeGain) / std::tanh(negativeGain);
+                };
+
+                auto processOd1 = [&](float input)
+                {
+                    auto* st = cooltronState1;
+                    st[0][ch] += cooltronInputHighPass * (input - st[0][ch]);
+                    st[1][ch] += cooltronBassShelf * (input - st[1][ch]);
+                    const float bassLift = cooltronBoostOd1 ? st[1][ch] * 0.48f : 0.0f;
+                    const float driven = (input - st[0][ch] * 0.72f + bassLift) * cooltronDrive1;
+                    const float clipped = shapeAsymmetric(driven, 1.38f, 1.06f);
+                    const float cleanBlend = juce::jmap(cooltronGain1Value, 0.30f, 0.035f);
+                    float wet = clipped * (1.0f - cleanBlend) + input * cleanBlend;
+                    st[2][ch] += cooltronTone1Pole * (wet - st[2][ch]);
+                    wet = st[2][ch];
+                    st[3][ch] += cooltronPresence * (wet - st[3][ch]);
+                    wet = st[3][ch] + (wet - st[3][ch]) * 0.12f;
+                    return wet * cooltronLevel1;
+                };
+
+                auto processOd2 = [&](float input)
+                {
+                    auto* st = cooltronState2;
+                    st[0][ch] += cooltronInputHighPass * (input - st[0][ch]);
+                    st[1][ch] += cooltronBassShelf * (input - st[1][ch]);
+                    const float bassLift = cooltronBoostOd2 ? st[1][ch] * 0.56f : 0.0f;
+                    const float first = shapeAsymmetric(
+                        (input - st[0][ch] * 0.62f + bassLift) * cooltronDrive2 * 0.68f,
+                        1.32f, 1.02f);
+                    float wet = std::atan(first * (1.65f + cooltronGain2Value * 4.75f))
+                              / juce::MathConstants<float>::halfPi * 1.16f;
+                    st[2][ch] += cooltronTone2Pole * (wet - st[2][ch]);
+                    wet = st[2][ch];
+                    st[3][ch] += cooltronPresence * (wet - st[3][ch]);
+                    wet = st[3][ch] + (wet - st[3][ch]) * 0.09f;
+                    return wet * cooltronLevel2;
+                };
+
+                const float previous = cooltronPreviousInput[ch];
+                float result = sample;
+                for (int os = 0; os < cooltronOversampling; ++os)
+                {
+                    const float sub = previous + (sample - previous)
+                                               * ((float) (os + 1) / (float) cooltronOversampling);
+                    result = cooltronUseOd2 ? processOd2(sub) : processOd1(sub);
+                }
+                cooltronPreviousInput[ch] = sample;
+                sample = juce::jlimit(-2.5f, 2.5f, result);
             };
 
             auto processSustainGran = [&]()
@@ -2458,7 +3066,7 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
 
             auto processSustainChords = [&]()
             {
-                freezePtr[ch][freezeWritePos] = sample;
+                chordFreezePtr[ch][freezeWritePos] = sample;
 
                 if (chordSustainLayer.active && chordSustainLayer.capturedLen > 0 && chordSustainLayer.wetLevel > 0.0001f)
                 {
@@ -2513,14 +3121,21 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
                 chorusPtr[ch][chorusWritePos] = sample;
                 if (choOn)
                 {
-                    const float lfo = std::sin((float)chorusPhase
-                                      + (float)ch * juce::MathConstants<float>::halfPi) * 0.5f + 0.5f;
+                    // A small phase offset on the right channel preserves mono
+                    // compatibility while giving duplicated mono inputs some width.
+                    const float stereoOffset = ch == 0 ? 0.0f
+                                                       : juce::MathConstants<float>::pi * 0.35f;
+                    const float lfo = std::sin((float) chorusPhase + stereoOffset);
                     float rPos = (float)chorusWritePos - (choBaseDelay + lfo * choVarDelay);
                     while (rPos < 0.0f) rPos += (float)chorusBufLen;
                     const int ia = (int)rPos;
                     const int ib = (ia + 1) % chorusBufLen;
-                    const float wet = chorusPtr[ch][ia] * 0.5f + chorusPtr[ch][ib] * 0.5f;
-                    sample = sample * (1.0f - choM * 0.5f) + wet * (choM * 0.5f);
+                    const float frac = rPos - (float) ia;
+                    const float wet = chorusPtr[ch][ia] + (chorusPtr[ch][ib] - chorusPtr[ch][ia]) * frac;
+                    // At MIX = 0.5 both paths have equal gain.  The previous
+                    // double *0.5 scaling left only 25% wet signal and masked the
+                    // already missing LOW-depth modulation.
+                    sample = sample * (1.0f - choM) + wet * choM;
                 }
             };
 
@@ -2528,30 +3143,87 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
             {
                 if (trOn)
                 {
-                    const float dry = sample;
-                    const float lfo = 0.5f * (std::sin((float)tremoloPhase) + 1.0f);
-                    const float gain = (1.0f - trDepth) + (trDepth * lfo);
-                    const float wet = dry * gain;
-                    sample = dry * (1.0f - trM) + wet * trM;
+                    if (trMode == 4)
+                    {
+                        // FADE: RATE controls fade-in and SYM controls fade-out.
+                        sample *= tremoloFadeGain;
+                        return;
+                    }
+
+                    const float phase = (float)(tremoloPhase / juce::MathConstants<double>::twoPi);
+                    const float symmetry = juce::jmap(juce::jlimit(0.0f, 1.0f, trSymmetry),
+                                                      0.10f, 0.90f);
+                    const float warpedPhase = phase < symmetry
+                        ? 0.5f * phase / symmetry
+                        : 0.5f + 0.5f * (phase - symmetry) / (1.0f - symmetry);
+                    float lfo = 1.0f;
+                    switch (trMode)
+                    {
+                        case 0: // PULSE with the seven bar subdivisions printed on the pedal.
+                        {
+                            static constexpr float beatDivisions[] = { 6.0f, 3.0f, 4.0f, 12.0f, 6.0f, 8.0f, 12.0f };
+                            const float pulsePhase = std::fmod(phase * beatDivisions[juce::jlimit(0, 6, trBeatsIndex)], 1.0f);
+                            lfo = pulsePhase < juce::jmap(trSymmetry, 0.12f, 0.72f) ? 1.0f : 0.0f;
+                            break;
+                        }
+                        case 1: lfo = 1.0f - std::abs(2.0f * warpedPhase - 1.0f); break; // TRIANGLE
+                        case 2: lfo = phase < symmetry ? 1.0f : 0.0f; break;              // SQUARE
+                        case 3: lfo = 0.5f * (std::sin(warpedPhase * juce::MathConstants<float>::twoPi
+                                                       - juce::MathConstants<float>::halfPi) + 1.0f); break; // SINE
+                        default: break;
+                    }
+
+                    // At the fully counter-clockwise K position the real TRES switches
+                    // to its FET kill circuit (>50 dB) instead of reducing the effect.
+                    const bool killMode = trDepth <= 0.025f;
+                    const float gain = killMode ? (lfo >= 0.5f ? 1.0f : 0.001f)
+                                                : (1.0f - trDepth) + trDepth * lfo;
+                    sample *= gain;
                 }
             };
 
             auto processDelay = [&]()
             {
-                float rPos = (float)delayWritePos - currentDelaySamples;
-                if (rPos < 0.0f) rPos += (float)delayBufLen;
-                const int   di1  = (int)rPos;
-                const int   di2  = (di1 + 1) % delayBufLen;
-                const float dfrc = rPos - (float)di1;
-                float delWet = delayPtr[ch][di1] + dfrc * (delayPtr[ch][di2] - delayPtr[ch][di1]);
-                lowPassFilters[3][ch] += 0.25f * (delWet - lowPassFilters[3][ch]);
+                const float stereoPhase = (float) delayModPhase
+                    + (ch == 0 ? 0.0f : juce::MathConstants<float>::halfPi);
+                const float modulation = std::sin(stereoPhase) * delayModSamples;
+                auto readDelay = [delayBufLen](float* history, float delaySamples, int writePos)
+                {
+                    float readPos = (float) writePos - delaySamples;
+                    while (readPos < 0.0f)
+                        readPos += (float) delayBufLen;
+                    while (readPos >= (float) delayBufLen)
+                        readPos -= (float) delayBufLen;
+                    const int a = (int) readPos;
+                    const int bIndex = (a + 1) % delayBufLen;
+                    const float frac = readPos - (float) a;
+                    return history[a] + frac * (history[bIndex] - history[a]);
+                };
+
+                float delWet = readDelay(delayPtr[ch], currentDelaySamples + modulation, delayWritePos);
+                const float secondTap = readDelay(delayPtr[ch],
+                                                  currentDelaySamples * delaySecondTapRatio - modulation * 0.45f,
+                                                  delayWritePos);
+                delWet += secondTap * delaySecondTapMix;
+                if (channels > 1 && (safeDelayType == 0 || safeDelayType == 1 || safeDelayType == 3))
+                {
+                    const float cross = readDelay(delayPtr[1 - ch],
+                                                  currentDelaySamples * (0.62f + delValue * 0.28f),
+                                                  delayWritePos);
+                    delWet += cross * (0.12f + 0.22f * delValue);
+                }
+
+                lowPassFilters[3][ch] += delayFilterCoeff * (delWet - lowPassFilters[3][ch]);
                 delWet = lowPassFilters[3][ch];
+                const float driven = delWet * (1.0f + delayGritAmount * 3.5f);
+                const float saturated = driven / (1.0f + std::abs(driven));
+                delWet = juce::jmap(delayGritAmount, delWet, saturated * 1.45f);
 
                 if (delOn)
                 {
                     const float dry = sample;
-                    sample = dry * (1.0f - delM * 0.5f) + delWet * (delM * 0.7f);
-                    delayPtr[ch][delayWritePos] = sample + delWet * delFB;
+                    sample = dry * (1.0f - delM * 0.55f) + delWet * (delM * 0.82f);
+                    delayPtr[ch][delayWritePos] = dry + delWet * delFB;
                 }
                 else
                 {
@@ -2559,18 +3231,54 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
                 }
             };
 
-            for (int orderIndex = 0; orderIndex < kPedalCount; ++orderIndex)
+            auto processReverb = [&]()
             {
-                switch (orderedPedals[orderIndex])
+                if (!revOn || reverbPreDelaySize <= 1)
+                    return;
+
+                float* history = reverbPreDelayBuffer.getWritePointer(ch);
+                int read = reverbPreDelayWritePos - reverbPreDelaySamples;
+                if (read < 0)
+                    read += reverbPreDelaySize;
+                const float dry = sample;
+                history[reverbPreDelayWritePos] = dry;
+                float wet = history[read];
+                roomReverbs[(size_t) ch].processMono(&wet, 1);
+                reverbToneState[ch] += reverbToneCoeff * (wet - reverbToneState[ch]);
+                const float lfo = (float) std::sin(reverbModPhase);
+                wet = reverbToneState[ch]
+                    * (1.0f + reverbModDepth * (ch == 0 ? lfo : -lfo));
+                sample = dry * (1.0f - reverbMixAmount) + wet * reverbMixAmount;
+            };
+
+            auto processOutputEq = [&]()
+            {
+                if (!eqOn)
+                    return;
+                sample = outputEq.processSample(ch, sample * outputEqInputGain) * outputEqOutputGain;
+            };
+
+            for (int orderIndex = 0; orderIndex < kChainItemCount; ++orderIndex)
+            {
+                const int chainItem = orderedPedals[orderIndex];
+                switch (chainItem)
                 {
-                    case SustainGranPedal:   processSustainGran(); break;
+                    case NoiseGatePedal:     processNoiseGate(); break;
+                    case RhythmPedal:        processRhythm(); break;
+                    case CompressorPedal:    processCompressor(); break;
+                    case HarmonizerPedal:    processHarmonizer(); break;
                     case SustainChordsPedal: processSustainChords(); break;
                     case FuzzPedal:          processFuzz(); break;
                     case OverdrivePedal:     processOverdrive(); break;
                     case ChorusPedal:        processChorus(); break;
                     case TremoloPedal:       processTremolo(); break;
                     case DelayPedal:         processDelay(); break;
-                    default: break;
+                    case ReverbPedal:        processReverb(); break;
+                    case EqPedal:            processOutputEq(); break;
+                    default:
+                        if (chainItem >= kPedalCount && chainItem < kChainItemIdLimit)
+                            processExternalPluginSample(chainItem - kPedalCount, ch, channels, sample);
+                        break;
                 }
             }
 
@@ -2578,18 +3286,26 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
             // CORRECCION: antes era std::tanh(sample) SIEMPRE, incluso con todos
             // los efectos apagados. Ahora solo se aplica si hay efectos de ganancia
             // activos que puedan llevar la señal fuera de rango.
-            if (fzOn || drOn || chordFreezeOn)
+            if (fzOn || cooltronOn || chordFreezeOn)
                 sample = std::tanh(sample);
 
             outPtr[ch][s] = sample;
+            rhythmOutPtr[ch][s] = rhythmOn ? drumBusSample[ch] : 0.0f;
         }
 
         // --- AVANCE DE POSICIONES (una vez por muestra, fuera del loop de canales) ---
         delayWritePos   = (delayWritePos   + 1) % delayBufLen;
+        delayModPhase += deltaDelayModPhase;
+        if (delayModPhase >= juce::MathConstants<double>::twoPi)
+            delayModPhase -= juce::MathConstants<double>::twoPi;
         chorusWritePos  = (chorusWritePos  + 1) % chorusBufLen;
         pitchWritePos   = (pitchWritePos   + 1) % kPitchBufLen;
         freezeWritePos  = (freezeWritePos  + 1) % freezeBufLen;
         chordBodyWritePos = (chordBodyWritePos + 1) % chordBodyBufLen;
+        reverbPreDelayWritePos = (reverbPreDelayWritePos + 1) % reverbPreDelaySize;
+        reverbModPhase += reverbModStep;
+        if (reverbModPhase >= juce::MathConstants<double>::twoPi)
+            reverbModPhase -= juce::MathConstants<double>::twoPi;
 
         auto& sustainLayer = sustainLayers[0];
         if (sustainLayer.active && sustainLayer.capturedLen > 0)
@@ -2675,48 +3391,41 @@ void EffectsChain::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
 
         ++drumSampleCounter;
 
-        // Avance de fase del harmonizer.
-        pitchPhaseHarm += pitchDeltaHarm;
-        while (pitchPhaseHarm >= winSizeF) pitchPhaseHarm -= winSizeF;
-        while (pitchPhaseHarm <  0.0)     pitchPhaseHarm += winSizeF;
-
         // Avance de fase del chorus
         // CORRECCION: deltaChorusPhase pre-calculado fuera del loop
         chorusPhase += deltaChorusPhase;
         if (chorusPhase >= 2.0 * juce::MathConstants<double>::pi)
             chorusPhase -= 2.0 * juce::MathConstants<double>::pi;
 
-        tremoloPhase += deltaTremoloPhase;
+        const float footSpeedTarget = (trControlPressed && trMode != 4) ? 1.0f : 0.0f;
+        const float footSpeedCoeff = 1.0f - std::exp(-1.0f / (0.30f * (float)sampleRate_));
+        tremoloFootSpeedAmount += (footSpeedTarget - tremoloFootSpeedAmount) * footSpeedCoeff;
+        const float effectiveTremoloRate = trRate + (14.0f - trRate) * tremoloFootSpeedAmount;
+        tremoloPhase += (juce::MathConstants<double>::twoPi * (double)effectiveTremoloRate) / sampleRate_;
         if (tremoloPhase >= 2.0 * juce::MathConstants<double>::pi)
             tremoloPhase -= 2.0 * juce::MathConstants<double>::pi;
-    }
 
-    if (revOn && channels > 0)
-    {
-        juce::Reverb::Parameters params;
-        params.roomSize   = juce::jlimit(0.0f, 1.0f, revRoom);
-        params.damping    = juce::jlimit(0.0f, 1.0f, revDamp);
-        params.wetLevel   = juce::jlimit(0.0f, 0.45f, revM * 0.32f);
-        params.dryLevel   = juce::jlimit(0.0f, 1.0f, 1.0f - revM * 0.18f);
-        params.width      = 0.85f;
-        params.freezeMode = 0.0f;
-        roomReverb.setParameters(params);
-
-        if (channels >= 2)
-            roomReverb.processStereo(buffer.getWritePointer(0, startSample),
-                                     buffer.getWritePointer(1, startSample),
-                                     numSamples);
-        else
-            roomReverb.processMono(buffer.getWritePointer(0, startSample), numSamples);
-    }
-
-    if (eqOn && channels > 0)
-    {
-        for (int ch = 0; ch < channels; ++ch)
+        if (trMode == 4)
         {
-            float* channelData = buffer.getWritePointer(ch, startSample);
-            for (int s = 0; s < numSamples; ++s)
-                channelData[s] = outputEq.processSample(ch, channelData[s]);
+            const bool killMode = trDepth <= 0.025f;
+            const float fadeTarget = trControlPressed ? 0.0f : 1.0f;
+            if (killMode)
+                tremoloFadeGain = fadeTarget;
+            else
+            {
+                const float rateNorm = juce::jlimit(0.0f, 1.0f, (trRate - 0.4f) / 13.6f);
+                const float seconds = fadeTarget > tremoloFadeGain
+                    ? juce::jmap(rateNorm, 2.5f, 0.025f)
+                    : juce::jmap(juce::jlimit(0.0f, 1.0f, trSymmetry), 2.5f, 0.025f);
+                const float coeff = 1.0f - std::exp(-1.0f / (seconds * (float)sampleRate_));
+                tremoloFadeGain += (fadeTarget - tremoloFadeGain) * coeff;
+            }
+        }
+        else
+        {
+            tremoloFadeGain = 1.0f;
         }
     }
+
+    externalPluginPlayHead.timeInSamples.fetch_add(numSamples, std::memory_order_relaxed);
 }

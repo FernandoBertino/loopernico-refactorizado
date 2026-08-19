@@ -4,7 +4,150 @@ using namespace LoopernicoUi;
 
 namespace
 {
-    constexpr float kLoopTrimStepSeconds = 0.02f;
+    constexpr int kUiOuterInset = 10;
+    constexpr int kUiSectionGap = 4;
+    constexpr int kUiHeaderHeight = 86;
+    constexpr int kUiFooterHeight = 40;
+    constexpr int kUiFxSectionHeight = 310;
+    constexpr int kUiControlSectionHeight = 0;
+
+    constexpr int kFxViewportTopInset = 8;
+    constexpr int kFxViewportBottomInset = 8;
+    constexpr int kTrackViewportTopInset = 30;
+    constexpr int kTrackViewportBottomInset = 4;
+
+    constexpr int kFooterInset = 18;
+    constexpr int kFooterOutputZoneWidth = 430;
+    constexpr int kMidiDeviceWidth = 190;
+    constexpr int kMidiActionWidth = 172;
+    constexpr int kMidiLearnWidth = 96;
+    constexpr int kMidiTypeWidth = 84;
+    constexpr int kMidiNumberWidth = 72;
+    constexpr int kMidiClearWidth = 64;
+    constexpr int kMidiSaveWidth = 108;
+    constexpr int kMidiControlGap = 8;
+    constexpr int kMidiMenuWidth = 910;
+    constexpr int kMidiMenuHeight = 94;
+    constexpr int kMultiVstStateMagic = 0x56535434; // VST4
+
+    juce::String serializeDrumPattern(const LoopernicoMidi::DrumMidiPattern& pattern)
+    {
+        juce::String serialized;
+        for (int laneIndex = 0; laneIndex < (int) LoopernicoMidi::DrumLane::Count; ++laneIndex)
+        {
+            const auto lane = (LoopernicoMidi::DrumLane) laneIndex;
+            for (int step = 0; step < LoopernicoMidi::DrumMidiPattern::maxSteps; ++step)
+            {
+                if (serialized.isNotEmpty())
+                    serialized << ',';
+                serialized << pattern.getVelocity(lane, step);
+            }
+        }
+        return serialized;
+    }
+
+    bool deserializeDrumPattern(const juce::String& serialized,
+                                int storedBars,
+                                LoopernicoMidi::DrumMidiPattern& pattern)
+    {
+        juce::StringArray tokens;
+        tokens.addTokens(serialized, ",", "");
+        const int expected = (int) LoopernicoMidi::DrumLane::Count
+                           * LoopernicoMidi::DrumMidiPattern::maxSteps;
+        if (tokens.size() != expected || storedBars < 1
+            || storedBars > LoopernicoMidi::DrumMidiPattern::maxBars)
+            return false;
+
+        LoopernicoMidi::DrumMidiPattern decoded;
+        decoded.setBars(storedBars);
+        for (int laneIndex = 0; laneIndex < (int) LoopernicoMidi::DrumLane::Count; ++laneIndex)
+        {
+            const auto lane = (LoopernicoMidi::DrumLane) laneIndex;
+            for (int step = 0; step < LoopernicoMidi::DrumMidiPattern::maxSteps; ++step)
+            {
+                const int velocity = tokens[laneIndex * LoopernicoMidi::DrumMidiPattern::maxSteps + step].getIntValue();
+                if (velocity < 0 || velocity > 127)
+                    return false;
+                if (step < storedBars * LoopernicoMidi::DrumMidiPattern::stepsPerBar
+                    && !decoded.setVelocity(lane, step, velocity))
+                    return false;
+                if (step >= storedBars * LoopernicoMidi::DrumMidiPattern::stepsPerBar
+                    && velocity != 0)
+                    return false;
+            }
+        }
+        pattern = decoded;
+        return true;
+    }
+
+    juce::MemoryBlock packVstStates(const std::array<juce::MemoryBlock, EffectsChain::kMaxExternalPlugins>& states)
+    {
+        juce::MemoryOutputStream out;
+        out.writeInt(kMultiVstStateMagic);
+        out.writeInt(EffectsChain::kMaxExternalPlugins);
+        for (const auto& state : states)
+        {
+            out.writeInt((int) state.getSize());
+            if (state.getSize() > 0)
+                out.write(state.getData(), state.getSize());
+        }
+        return out.getMemoryBlock();
+    }
+
+    std::array<juce::MemoryBlock, EffectsChain::kMaxExternalPlugins>
+    unpackVstStates(const juce::MemoryBlock& packed)
+    {
+        std::array<juce::MemoryBlock, EffectsChain::kMaxExternalPlugins> states;
+        if (packed.getSize() == 0)
+            return states;
+        juce::MemoryInputStream in(packed, false);
+        if (in.readInt() != kMultiVstStateMagic)
+        {
+            states[0] = packed; // Sesiones v1: el bloque completo pertenecia al unico VST.
+            return states;
+        }
+        const int count = juce::jlimit(0, EffectsChain::kMaxExternalPlugins, in.readInt());
+        for (int slot = 0; slot < count; ++slot)
+        {
+            const int size = in.readInt();
+            if (size < 0 || (juce::int64) size > in.getNumBytesRemaining())
+                break;
+            states[(size_t) slot].setSize((size_t) size);
+            if (size > 0)
+                in.read(states[(size_t) slot].getData(), size);
+        }
+        return states;
+    }
+
+    juce::Typeface::Ptr loadTonexDisplayTypeface()
+    {
+        static const auto typeface = []() -> juce::Typeface::Ptr
+        {
+            const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
+            const juce::File candidates[] = {
+                sourceDirectory.getSiblingFile("Assets/Fonts/Sixteen/Sixteen-Mono-Bold.ttf"),
+                juce::File::getCurrentWorkingDirectory()
+                    .getChildFile("Assets/Fonts/Sixteen/Sixteen-Mono-Bold.ttf"),
+                juce::File::getCurrentWorkingDirectory()
+                    .getChildFile("Loopernico Refactorizado/Assets/Fonts/Sixteen/Sixteen-Mono-Bold.ttf")
+            };
+
+            for (const auto& file : candidates)
+                if (file.existsAsFile())
+                {
+                    juce::MemoryBlock fontData;
+                    if (file.loadFileAsData(fontData))
+                        if (auto loaded = juce::Typeface::createSystemTypefaceFor(fontData.getData(),
+                                                                                  fontData.getSize());
+                            loaded != nullptr)
+                            return loaded;
+                }
+
+            return {};
+        }();
+
+        return typeface;
+    }
 
     class ExternalPluginEditorWindow final : public juce::DocumentWindow
     {
@@ -77,84 +220,647 @@ namespace
         return "CC " + juce::String(mapping.number);
     }
 
-    constexpr const char* kRhythmStyleNames[] = {
-        "Rock",
-        "Funk",
-        "Disco",
-        "Latin",
-        "Hip Hop",
-        "House",
-        "Bossa Nova",
-        "Techno",
-        "Blues"
+    class DrumPatternEditorComponent final : public juce::Component
+    {
+    public:
+        explicit DrumPatternEditorComponent(const LoopernicoMidi::DrumMidiPattern& initialPattern)
+            : pattern(initialPattern)
+        {
+            // La grilla completa necesita margen para sus 16 columnas y las
+            // etiquetas laterales. El componente tambien recalcula el ancho
+            // de las celdas cuando la ventana cambia de tamano.
+            setSize(820, 285);
+
+            barsLabel.setText("COMPASES", juce::dontSendNotification);
+            barsLabel.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.90f));
+            addAndMakeVisible(barsLabel);
+
+            for (int bars = 1; bars <= LoopernicoMidi::DrumMidiPattern::maxBars; ++bars)
+                barsSelector.addItem(juce::String(bars), bars);
+            barsSelector.setSelectedId(pattern.getBars(), juce::dontSendNotification);
+            barsSelector.onChange = [this]()
+            {
+                    pattern.setBars(juce::jmax(1, barsSelector.getSelectedId()));
+                    refreshPageSelector();
+                    refreshGrid();
+                    notifyPatternChanged();
+            };
+            addAndMakeVisible(barsSelector);
+
+            pageLabel.setText("PAGINA", juce::dontSendNotification);
+            pageLabel.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.90f));
+            addAndMakeVisible(pageLabel);
+
+            pageSelector.onChange = [this]()
+            {
+                currentPage = juce::jmax(0, pageSelector.getSelectedId() - 1);
+                refreshGrid();
+            };
+            addAndMakeVisible(pageSelector);
+
+            for (std::size_t row = 0; row < laneNames.size(); ++row)
+            {
+                laneLabels[row].setText(laneNames[row], juce::dontSendNotification);
+                laneLabels[row].setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.90f));
+                laneLabels[row].setJustificationType(juce::Justification::centredRight);
+                addAndMakeVisible(laneLabels[row]);
+            }
+
+            for (int col = 0; col < LoopernicoMidi::DrumMidiPattern::stepsPerBar; ++col)
+            {
+                stepLabels[(size_t) col].setText(juce::String(col + 1), juce::dontSendNotification);
+                stepLabels[(size_t) col].setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.82f));
+                stepLabels[(size_t) col].setJustificationType(juce::Justification::centred);
+                addAndMakeVisible(stepLabels[(size_t) col]);
+            }
+
+            for (std::size_t row = 0; row < gridButtons.size(); ++row)
+            {
+                for (std::size_t col = 0; col < gridButtons[row].size(); ++col)
+                {
+                    auto& button = gridButtons[row][col];
+                    button.setClickingTogglesState(true);
+                    button.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff232731));
+                    button.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff4fcf9d));
+                    button.onClick = [this, row, col]()
+                    {
+                        const int absoluteStep = currentPage * LoopernicoMidi::DrumMidiPattern::stepsPerBar + (int) col;
+                        const int velocity = gridButtons[row][col].getToggleState() ? 100 : 0;
+                        pattern.setVelocity(lanes[row], absoluteStep, velocity);
+                        notifyPatternChanged();
+                    };
+                    addAndMakeVisible(button);
+                }
+            }
+
+            refreshPageSelector();
+            refreshGrid();
+        }
+
+        const LoopernicoMidi::DrumMidiPattern& getPattern() const noexcept
+        {
+            return pattern;
+        }
+
+        void clearPattern() noexcept
+        {
+            pattern.clear();
+            refreshGrid();
+            notifyPatternChanged();
+        }
+
+        std::function<void(const LoopernicoMidi::DrumMidiPattern&)> onPatternChanged;
+
+        void paint(juce::Graphics& g) override
+        {
+            g.fillAll(juce::Colour(0xff161a20));
+            g.setColour(juce::Colours::white.withAlpha(0.08f));
+            g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1.5f), 8.0f, 1.0f);
+        }
+
+        void resized() override
+        {
+            const int top = 14;
+            barsLabel.setBounds(16, top, 80, 22);
+            barsSelector.setBounds(102, top, 72, 24);
+            pageLabel.setBounds(194, top, 66, 22);
+            pageSelector.setBounds(266, top, 92, 24);
+
+            const int gridTop = 56;
+            const int laneW = 118;
+            const int cellH = 26;
+            const int gap = 6;
+            const int gridX = laneW + 18;
+            const int availableGridWidth = juce::jmax(16, getWidth() - gridX - 12);
+            const int cellW = juce::jmax(1,
+                                         (availableGridWidth - (LoopernicoMidi::DrumMidiPattern::stepsPerBar - 1) * gap)
+                                             / LoopernicoMidi::DrumMidiPattern::stepsPerBar);
+            const int labelY = gridTop - 20;
+            for (int col = 0; col < LoopernicoMidi::DrumMidiPattern::stepsPerBar; ++col)
+                stepLabels[(size_t) col].setBounds(gridX + col * (cellW + gap), labelY, cellW, 16);
+
+            for (std::size_t row = 0; row < gridButtons.size(); ++row)
+            {
+                const int y = gridTop + (int) row * (cellH + gap);
+                laneLabels[row].setBounds(8, y + 2, laneW - 10, 22);
+                for (std::size_t col = 0; col < gridButtons[row].size(); ++col)
+                    gridButtons[row][col].setBounds(gridX + (int) col * (cellW + gap), y, cellW, cellH);
+            }
+        }
+
+    private:
+        void notifyPatternChanged()
+        {
+            if (onPatternChanged != nullptr)
+                onPatternChanged(pattern);
+        }
+
+        void refreshPageSelector()
+        {
+            pageSelector.clear(juce::dontSendNotification);
+            for (int page = 0; page < pattern.getBars(); ++page)
+                pageSelector.addItem("COMPAS " + juce::String(page + 1), page + 1);
+            currentPage = juce::jlimit(0, pattern.getBars() - 1, currentPage);
+            pageSelector.setSelectedId(currentPage + 1, juce::dontSendNotification);
+        }
+
+        void refreshGrid()
+        {
+            const int baseStep = currentPage * LoopernicoMidi::DrumMidiPattern::stepsPerBar;
+            for (std::size_t row = 0; row < gridButtons.size(); ++row)
+                for (std::size_t col = 0; col < gridButtons[row].size(); ++col)
+                    gridButtons[row][col].setToggleState(pattern.isActive(lanes[row], baseStep + (int) col),
+                                                         juce::dontSendNotification);
+        }
+
+        static constexpr std::array<LoopernicoMidi::DrumLane, LoopernicoMidi::DrumNoteMap::laneCount> lanes = {
+            LoopernicoMidi::DrumLane::Kick,
+            LoopernicoMidi::DrumLane::Snare,
+            LoopernicoMidi::DrumLane::ClosedHiHat,
+            LoopernicoMidi::DrumLane::OpenHiHat,
+            LoopernicoMidi::DrumLane::Crash,
+            LoopernicoMidi::DrumLane::Ride
+        };
+        static constexpr std::array<const char*, LoopernicoMidi::DrumNoteMap::laneCount> laneNames = {
+            "KICK", "SNARE", "HH CERRADO", "HH ABIERTO", "CRASH", "RIDE"
+        };
+
+        LoopernicoMidi::DrumMidiPattern pattern;
+        int currentPage{ 0 };
+        juce::Label barsLabel, pageLabel;
+        juce::ComboBox barsSelector, pageSelector;
+        std::array<juce::Label, LoopernicoMidi::DrumNoteMap::laneCount> laneLabels;
+        std::array<juce::Label, LoopernicoMidi::DrumMidiPattern::stepsPerBar> stepLabels;
+        std::array<std::array<juce::TextButton, LoopernicoMidi::DrumMidiPattern::stepsPerBar>,
+                   LoopernicoMidi::DrumNoteMap::laneCount> gridButtons;
     };
-    constexpr const char* kRhythmPatternNames[] = {
-        "Verso",
-        "Remate",
-        "Estribillo"
+
+    class MidiPopupContent : public juce::Component
+    {
+    public:
+        std::function<void(int)> onResult;
+
+        void finish(int result)
+        {
+            if (onResult != nullptr)
+                onResult(result);
+        }
     };
-    constexpr const char* kRhythmModeNames[] = {
-        "Con guitarra",
-        "Solo ritmo",
-        "Metronomo"
+
+    class MidiMapEditorContent final : public MidiPopupContent
+    {
+    public:
+        MidiMapEditorContent(const LoopernicoMidi::DrumNoteMap& initialMap)
+        {
+            static constexpr const char* names[] = {
+                "KICK", "SNARE", "HI-HAT CERRADO", "HI-HAT ABIERTO", "CRASH", "RIDE", "CANAL MIDI"
+            };
+            juce::StringArray noteItems;
+            for (int note = 0; note <= 127; ++note)
+                noteItems.add(juce::String(note));
+            for (int index = 0; index < 6; ++index)
+            {
+                labels[(size_t) index].setText(names[index], juce::dontSendNotification);
+                labels[(size_t) index].setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.90f));
+                addAndMakeVisible(labels[(size_t) index]);
+                for (int note = 0; note <= 127; ++note)
+                    combos[(size_t) index].addItem(juce::String(note), note + 1);
+                combos[(size_t) index].setSelectedId(initialMap.getNote(lanes[(size_t) index]) + 1,
+                                                      juce::dontSendNotification);
+                addAndMakeVisible(combos[(size_t) index]);
+            }
+
+            labels[6].setText(names[6], juce::dontSendNotification);
+            labels[6].setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.90f));
+            addAndMakeVisible(labels[6]);
+            for (int channel = 1; channel <= 16; ++channel)
+                combos[6].addItem(juce::String(channel), channel);
+            combos[6].setSelectedId(initialMap.getChannel(LoopernicoMidi::DrumLane::Kick),
+                                    juce::dontSendNotification);
+            addAndMakeVisible(combos[6]);
+
+            saveButton.setButtonText("GUARDAR");
+            resetButton.setButtonText("RESTABLECER GM");
+            cancelButton.setButtonText("CANCELAR");
+            saveButton.onClick = [this]() { finish(1); };
+            resetButton.onClick = [this]() { finish(2); };
+            cancelButton.onClick = [this]() { finish(0); };
+            addAndMakeVisible(saveButton);
+            addAndMakeVisible(resetButton);
+            addAndMakeVisible(cancelButton);
+            setSize(560, 560);
+        }
+
+        int getNote(int index) const { return combos[(size_t) index].getSelectedId() - 1; }
+        int getChannel() const { return combos[6].getSelectedId(); }
+
+        void resized() override
+        {
+            const int margin = 18;
+            const int columnGap = 18;
+            const int labelWidth = 150;
+            const int comboWidth = juce::jmax(120, getWidth() - margin * 2 - labelWidth - columnGap);
+            for (int index = 0; index < 7; ++index)
+            {
+                const int y = 18 + index * 42;
+                labels[(size_t) index].setBounds(margin, y, labelWidth, 28);
+                combos[(size_t) index].setBounds(margin + labelWidth + columnGap, y, comboWidth, 28);
+            }
+            const int buttonY = getHeight() - 52;
+            saveButton.setBounds(margin, buttonY, 110, 30);
+            resetButton.setBounds(margin + 120, buttonY, 170, 30);
+            cancelButton.setBounds(getWidth() - margin - 110, buttonY, 110, 30);
+        }
+
+    private:
+        static constexpr std::array<LoopernicoMidi::DrumLane, 6> lanes = {
+            LoopernicoMidi::DrumLane::Kick, LoopernicoMidi::DrumLane::Snare,
+            LoopernicoMidi::DrumLane::ClosedHiHat, LoopernicoMidi::DrumLane::OpenHiHat,
+            LoopernicoMidi::DrumLane::Crash, LoopernicoMidi::DrumLane::Ride
+        };
+        std::array<juce::Label, 7> labels;
+        std::array<juce::ComboBox, 7> combos;
+        juce::TextButton saveButton, resetButton, cancelButton;
     };
-    constexpr int kRhythmBarOptions[] = { 1, 2, 4, 8, 12, 16 };
-    constexpr int kRhythmCountInOptions[] = { 0, 1, 2, 4 };
-    constexpr const char* kRhythmCountInSoundNames[] = {
-        "Palillos",
-        "Clicks"
+
+    class MidiPatternEditorContent final : public MidiPopupContent
+    {
+    public:
+        explicit MidiPatternEditorContent(const LoopernicoMidi::DrumMidiPattern& pattern)
+            : editor(pattern), initialPattern(pattern)
+        {
+            addAndMakeVisible(editor);
+            saveButton.setButtonText("GUARDAR");
+            clearButton.setButtonText("LIMPIAR");
+            cancelButton.setButtonText("CANCELAR");
+            saveButton.onClick = [this]() { finish(1); };
+            clearButton.onClick = [this]() { editor.clearPattern(); };
+            cancelButton.onClick = [this]() { finish(0); };
+            addAndMakeVisible(saveButton);
+            addAndMakeVisible(clearButton);
+            addAndMakeVisible(cancelButton);
+            setSize(1000, 500);
+        }
+
+        const LoopernicoMidi::DrumMidiPattern& getPattern() const { return editor.getPattern(); }
+        const LoopernicoMidi::DrumMidiPattern& getInitialPattern() const { return initialPattern; }
+
+        void setPatternChangedCallback(std::function<void(const LoopernicoMidi::DrumMidiPattern&)> callback)
+        {
+            editor.onPatternChanged = std::move(callback);
+        }
+
+        void resized() override
+        {
+            const int margin = 8;
+            const int buttonY = getHeight() - 42;
+            editor.setBounds(margin, margin, getWidth() - margin * 2, buttonY - margin * 2);
+            saveButton.setBounds(margin, buttonY, 110, 30);
+            clearButton.setBounds(margin + 120, buttonY, 100, 30);
+            cancelButton.setBounds(getWidth() - margin - 110, buttonY, 110, 30);
+        }
+
+    private:
+        DrumPatternEditorComponent editor;
+        LoopernicoMidi::DrumMidiPattern initialPattern;
+        juce::TextButton saveButton, clearButton, cancelButton;
+    };
+
+    class MidiEditorWindow final : public juce::DocumentWindow
+    {
+    public:
+        MidiEditorWindow(const juce::String& title,
+                         std::unique_ptr<MidiPopupContent> content,
+                         int width, int height,
+                         int minimumWidth, int minimumHeight,
+                         int maximumWidth, int maximumHeight)
+            : juce::DocumentWindow(title, juce::Colour(0xff101216), juce::DocumentWindow::closeButton),
+              contentComponent(content.release())
+        {
+            setUsingNativeTitleBar(true);
+            setResizable(true, true);
+            setResizeLimits(minimumWidth, minimumHeight, maximumWidth, maximumHeight);
+            setContentOwned(contentComponent, true);
+            setSize(width, height);
+        }
+
+        ~MidiEditorWindow() override
+        {
+            juce::Desktop::getInstance().removeGlobalMouseListener(this);
+        }
+
+        void finish(int result)
+        {
+            if (!closing)
+            {
+                closing = true;
+                exitModalState(result);
+            }
+        }
+
+        void startDismissOnOutsideClick()
+        {
+            juce::Desktop::getInstance().addGlobalMouseListener(this);
+        }
+
+    private:
+        void mouseDown(const juce::MouseEvent& event) override
+        {
+            if (!getScreenBounds().contains(event.getScreenPosition().roundToInt()))
+                finish(0);
+        }
+
+        MidiPopupContent* contentComponent = nullptr;
+        bool closing = false;
     };
 
 }
 
-MainComponent::MainComponent()
+void MainComponent::LoopRangeMarker::setRange(float newStart, float newEnd)
+{
+    start = juce::jlimit(0.0f, 1.0f, newStart);
+    end = juce::jlimit(start, 1.0f, newEnd);
+    repaint();
+}
+
+void MainComponent::LoopRangeMarker::paint(juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat().reduced(1.0f);
+    const float left = bounds.getX() + 10.0f;
+    const float width = juce::jmax(1.0f, bounds.getWidth() - 20.0f);
+    const float startX = left + start * width;
+    const float endX = left + end * width;
+
+    g.setColour(juce::Colour(0xff10151d).withAlpha(0.96f));
+    g.fillRoundedRectangle(bounds, 6.0f);
+    for (int i = 0; i < 52; ++i)
+    {
+        const float x = left + width * (float) i / 51.0f;
+        const float bar = 4.0f + 12.0f * (0.5f + 0.5f * std::sin((float) i * 1.83f));
+        g.setColour(juce::Colour(0xff6a86a8).withAlpha(0.34f));
+        g.fillRoundedRectangle(x - 1.0f, bounds.getCentreY() - bar * 0.5f, 2.0f, bar, 1.0f);
+    }
+    g.setColour(juce::Colour(0xff9d5cff).withAlpha(0.72f));
+    g.fillRoundedRectangle(left, bounds.getY() + 2.0f, juce::jmax(0.0f, startX - left),
+                           bounds.getHeight() - 4.0f, 5.0f);
+    g.setColour(juce::Colour(0xff2e9eea).withAlpha(0.70f));
+    g.fillRoundedRectangle(startX, bounds.getY() + 2.0f, juce::jmax(0.0f, endX - startX),
+                           bounds.getHeight() - 4.0f, 5.0f);
+
+    auto drawHandle = [&g, &bounds](float x, juce::Colour colour, const char* label)
+    {
+        g.setColour(colour.withAlpha(0.22f));
+        g.fillRoundedRectangle(x - 10.0f, bounds.getY(), 20.0f, bounds.getHeight(), 5.0f);
+        g.setColour(juce::Colours::white);
+        g.fillRoundedRectangle(x - 2.0f, bounds.getY() + 2.0f, 4.0f, bounds.getHeight() - 4.0f, 2.0f);
+        g.setFont(juce::Font(juce::FontOptions(8.0f).withStyle("Bold")));
+        g.drawText(label, (int) x - 18, (int) bounds.getY() - 1, 36, 10, juce::Justification::centred);
+    };
+    drawHandle(startX, juce::Colour(0xffb46cff), "IN");
+    drawHandle(endX, juce::Colour(0xff52c9ff), "OUT");
+    g.setColour(juce::Colours::white.withAlpha(0.14f));
+    g.drawRoundedRectangle(bounds, 6.0f, 1.0f);
+}
+
+void MainComponent::LoopRangeMarker::mouseDown(const juce::MouseEvent& e)
+{
+    const float left = 11.0f;
+    const float width = juce::jmax(1.0f, (float) getWidth() - 22.0f);
+    const float x = (float) e.position.x;
+    const float startX = left + start * width;
+    const float endX = left + end * width;
+    dragTarget = std::abs(x - startX) <= std::abs(x - endX) ? DragTarget::start : DragTarget::end;
+    dragSpan = juce::jmax(0.01f, end - start);
+}
+
+void MainComponent::LoopRangeMarker::mouseDrag(const juce::MouseEvent& e)
+{
+    const float left = 11.0f;
+    const float width = juce::jmax(1.0f, (float) getWidth() - 22.0f);
+    const float value = juce::jlimit(0.0f, 1.0f, ((float) e.position.x - left) / width);
+    if (dragTarget == DragTarget::start)
+    {
+        start = juce::jlimit(0.0f, juce::jmax(0.0f, 1.0f - dragSpan), value);
+        end = juce::jlimit(start + 0.01f, 1.0f, start + dragSpan);
+    }
+    else if (dragTarget == DragTarget::end)
+        end = juce::jlimit(juce::jmin(1.0f, start + 0.01f), 1.0f, value);
+    repaint();
+    if (onRangeChanged != nullptr)
+        onRangeChanged(start, end);
+}
+
+MainComponent::FXPedalFocusOverlay::FXPedalFocusOverlay()
+{
+    setVisible(false);
+    setWantsKeyboardFocus(true);
+    closeButton.setTooltip("Cerrar vista ampliada");
+    closeButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff171a1f));
+    closeButton.setColour(juce::TextButton::buttonOnColourId, LnfC::RecRed.darker(0.2f));
+    closeButton.setColour(juce::TextButton::textColourOffId, juce::Colours::white.withAlpha(0.9f));
+    closeButton.onClick = [this]()
+    {
+        if (onDismiss)
+            onDismiss();
+    };
+    addAndMakeVisible(closeButton);
+}
+
+void MainComponent::FXPedalFocusOverlay::showPedal(FXPedalComponent& pedalToShow,
+                                                    int compactWidth, int compactHeight)
+{
+    pedal = &pedalToShow;
+    baseWidth = juce::jmax(1, compactWidth);
+    baseHeight = juce::jmax(1, compactHeight);
+    addAndMakeVisible(pedal);
+    setVisible(true);
+    resized();
+    repaint();
+    toFront(true);
+    grabKeyboardFocus();
+}
+
+void MainComponent::FXPedalFocusOverlay::clearPedal()
+{
+    pedal = nullptr;
+    cardBounds = {};
+    setVisible(false);
+}
+
+void MainComponent::FXPedalFocusOverlay::paint(juce::Graphics& g)
+{
+    g.fillAll(juce::Colours::black.withAlpha(0.82f));
+
+    if (pedal == nullptr || cardBounds.isEmpty())
+        return;
+
+    auto card = cardBounds.toFloat();
+    g.setColour(juce::Colours::black.withAlpha(0.72f));
+    g.fillRoundedRectangle(card.translated(0.0f, 10.0f).expanded(5.0f), 22.0f);
+
+    juce::ColourGradient stage(juce::Colour(0xff22262c), card.getX(), card.getY(),
+                               juce::Colour(0xff08090b), card.getX(), card.getBottom(), false);
+    g.setGradientFill(stage);
+    g.fillRoundedRectangle(card, 18.0f);
+    LoopernicoUi::drawFineRackTexture(g, card, 0.48f);
+    g.setColour(LnfC::OvdAmber.withAlpha(0.48f));
+    g.drawRoundedRectangle(card.reduced(0.8f), 18.0f, 1.4f);
+
+    const auto titleArea = juce::Rectangle<int>(cardBounds.getX() + 24, cardBounds.getY() + 12,
+                                                 cardBounds.getWidth() - 48, 34);
+    g.setColour(juce::Colours::white.withAlpha(0.95f));
+    g.setFont(juce::Font(juce::FontOptions(20.0f).withStyle("Bold")));
+    g.drawText(pedal->getDisplayName() + "  /  VISTA HD", titleArea,
+               juce::Justification::centredLeft, false);
+
+    g.setColour(juce::Colours::white.withAlpha(0.48f));
+    g.setFont(juce::Font(juce::FontOptions(11.5f)));
+    g.drawText("Parametros activos en tiempo real  |  Clic fuera del pedal o ESC para volver",
+               titleArea.translated(0, 29), juce::Justification::centredLeft, false);
+}
+
+void MainComponent::FXPedalFocusOverlay::resized()
+{
+    closeButton.setBounds(getWidth() - 152, 24, 124, 30);
+    if (pedal == nullptr)
+        return;
+
+    auto available = getLocalBounds().reduced(56, 34);
+    available.removeFromTop(64);
+    available.removeFromBottom(24);
+
+    const float fitScale = juce::jmin((float)available.getWidth() / (float)baseWidth,
+                                      (float)available.getHeight() / (float)baseHeight);
+    const float scale = juce::jmin(2.75f, fitScale);
+    const int targetWidth = juce::jmax(1, juce::roundToInt((float)baseWidth * scale));
+    const int targetHeight = juce::jmax(1, juce::roundToInt((float)baseHeight * scale));
+    const int pedalX = available.getCentreX() - targetWidth / 2;
+    const int pedalY = available.getCentreY() - targetHeight / 2 + 12;
+    pedal->setBounds(pedalX, pedalY, targetWidth, targetHeight);
+    pedal->toFront(false);
+
+    cardBounds = pedal->getBounds().expanded(30, 26);
+    cardBounds.setTop(cardBounds.getY() - 58);
+    cardBounds = cardBounds.getIntersection(getLocalBounds().reduced(18));
+    closeButton.toFront(false);
+}
+
+void MainComponent::FXPedalFocusOverlay::mouseDown(const juce::MouseEvent& e)
+{
+    if (!cardBounds.contains(e.getPosition()) && onDismiss)
+        onDismiss();
+}
+
+bool MainComponent::FXPedalFocusOverlay::keyPressed(const juce::KeyPress& key)
+{
+    if (key == juce::KeyPress::escapeKey)
+    {
+        if (onDismiss)
+            onDismiss();
+        return true;
+    }
+    return false;
+}
+
+void MainComponent::MidiMenuSurface::paint(juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat().reduced(0.5f);
+    g.setColour(juce::Colour(0xff141a21).withAlpha(0.98f));
+    g.fillRoundedRectangle(bounds, 7.0f);
+    g.setColour(LnfC::Accent.withAlpha(0.42f));
+    g.drawRoundedRectangle(bounds, 7.0f, 1.0f);
+    g.setColour(LnfC::TextDim);
+    g.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
+    g.drawText("CONFIGURACION MIDI", 14, 7, 180, 16, juce::Justification::centredLeft, false);
+    g.setColour(juce::Colours::white.withAlpha(0.42f));
+    g.setFont(juce::Font(juce::FontOptions(9.0f)));
+    g.drawText("ESC para cerrar", getWidth() - 110, 7, 94, 16, juce::Justification::centredRight, false);
+}
+
+bool MainComponent::MidiMenuSurface::keyPressed(const juce::KeyPress& key)
+{
+    if (key == juce::KeyPress::escapeKey)
+    {
+        if (onEscape != nullptr)
+            onEscape();
+        return true;
+    }
+
+    return false;
+}
+
+void MainComponent::LoadingOverlay::showLoading(const juce::String& detailText)
+{
+    detail = detailText;
+    animationPhase = 0.15f;
+    setVisible(true);
+    toFront(false);
+    startTimerHz(30);
+    repaint();
+}
+
+void MainComponent::LoadingOverlay::hideLoading()
+{
+    stopTimer();
+    setVisible(false);
+}
+
+void MainComponent::LoadingOverlay::timerCallback()
+{
+    animationPhase += 0.035f;
+    if (animationPhase >= 1.0f)
+        animationPhase -= 1.0f;
+    repaint();
+}
+
+void MainComponent::LoadingOverlay::paint(juce::Graphics& g)
+{
+    g.fillAll(juce::Colours::black.withAlpha(0.72f));
+}
+
+MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
 {
     setLookAndFeel(&lnf);
     formatManager.registerBasicFormats();
 
     const auto workingDirectory = juce::File::getCurrentWorkingDirectory();
-    const juce::File textureCandidates[] = {
-        juce::File(__FILE__).getParentDirectory()
-            .getSiblingFile("Assets").getChildFile("Textures/dark-tolex-v1.png"),
-        workingDirectory.getChildFile("Assets/Textures/dark-tolex-v1.png"),
-        workingDirectory.getChildFile("Loopernico Refactorizado/Assets/Textures/dark-tolex-v1.png"),
-        juce::File::getSpecialLocation(juce::File::currentExecutableFile)
-            .getParentDirectory().getChildFile("Assets/Textures/dark-tolex-v1.png")
-    };
-    for (const auto& candidate : textureCandidates)
+    const auto loadUiImage = [&workingDirectory](const juce::String& relativePath)
     {
-        if (candidate.existsAsFile())
-        {
-            rackSurfaceTexture = juce::ImageFileFormat::loadFrom(candidate);
-            if (rackSurfaceTexture.isValid())
-                break;
-        }
-    }
+        juce::Array<juce::File> assetRoots;
+        assetRoots.addIfNotAlreadyThere(juce::File(__FILE__).getParentDirectory().getSiblingFile("Assets"));
+        assetRoots.addIfNotAlreadyThere(workingDirectory.getChildFile("Assets"));
+        assetRoots.addIfNotAlreadyThere(workingDirectory.getChildFile("Loopernico Refactorizado")
+                                                        .getChildFile("Assets"));
 
-    looperFxDivider.onDragBegin = [this]() { dividerStartFxHeight = fxSectionHeight; };
-    looperFxDivider.onDrag = [this](int delta)
-    {
-        const int available = getHeight() - 78 - 118 - 20;
-        const int maxFx = juce::jmax(180, available - controlSectionHeight - 180 - 24);
-        fxSectionHeight = juce::jlimit(180, maxFx, dividerStartFxHeight - delta);
-        resized();
-        repaint();
+        auto directory = juce::File::getSpecialLocation(juce::File::currentExecutableFile)
+                             .getParentDirectory();
+        for (int depth = 0; depth < 8; ++depth)
+        {
+            assetRoots.addIfNotAlreadyThere(directory.getChildFile("Assets"));
+            const auto parent = directory.getParentDirectory();
+            if (parent == directory)
+                break;
+            directory = parent;
+        }
+
+        for (const auto& root : assetRoots)
+        {
+            const auto candidate = root.getChildFile(relativePath);
+            if (candidate.existsAsFile())
+            {
+                auto image = juce::ImageFileFormat::loadFrom(candidate);
+                if (image.isValid())
+                    return image;
+            }
+        }
+
+        return juce::Image {};
     };
-    fxControlDivider.onDragBegin = [this]()
-    {
-        dividerStartFxHeight = fxSectionHeight;
-        dividerStartControlHeight = controlSectionHeight;
-    };
-    fxControlDivider.onDrag = [this](int delta)
-    {
-        const int combined = dividerStartFxHeight + dividerStartControlHeight;
-        fxSectionHeight = juce::jlimit(180, combined - 96, dividerStartFxHeight + delta);
-        controlSectionHeight = combined - fxSectionHeight;
-        resized();
-        repaint();
-    };
-    addAndMakeVisible(looperFxDivider);
-    addAndMakeVisible(fxControlDivider);
+
+    rackSurfaceTexture = loadUiImage("Textures/dark-tolex-v2.png");
+    brandWordmark = loadUiImage("Brand/loopernico-wordmark-mirror-v3.png");
+    if (!brandWordmark.isValid())
+        brandWordmark = loadUiImage("Brand/loopernico-wordmark-beveled-v2.png");
 
     trackViewport.setScrollBarsShown(true, false);
     trackViewport.setScrollBarThickness(7);
@@ -185,23 +891,37 @@ MainComponent::MainComponent()
     BDef tdefs[] = {
         { &btnRecConfirm, "REC / CONFIRM",   LnfC::RecRed                  },
         { &btnStopPlay,   "IR ARRIBA",       LnfC::PlayGreen               },
-        { &btnUndo,       "UNDO",            LnfC::Accent                  },
-        { &btnRedo,       "REDO",            LnfC::Accent                  },
-        { &btnCancel,     "CANCEL",          juce::Colour(0xffcc8800)      },
+        { &btnUndo,       "UNDO",            juce::Colour(0xff28c7e8)      },
+        { &btnRedo,       "REDO",            juce::Colour(0xff4d82ff)      },
+        { &btnCancel,     "CANCEL",          juce::Colour(0xffffb21a)      },
         { &btnMuteAll,    "MUTE ALL",        LnfC::RecRed                  },
-        { &btnPauseAll,   "PAUSE",           juce::Colour(0xff8844cc)      },
-        { &btnReset,      "CLEAR ALL",       juce::Colour(0xffcc4422)      },
+        { &btnPauseAll,   "PAUSE",           juce::Colour(0xffb965ff)      },
+        { &btnReset,      "CLEAR ALL",       juce::Colour(0xffff5a36)      },
     };
     for (auto& d : tdefs) {
         d.b->setButtonText(d.txt);
-        d.b->setColour(juce::TextButton::buttonOnColourId, d.on.withAlpha(0.25f));
+        d.b->setColour(juce::TextButton::buttonOnColourId, d.on);
         addAndMakeVisible(*d.b);
     }
-    btnRecConfirm.setColour(juce::TextButton::textColourOffId, LnfC::RecRed);
-    btnRecConfirm.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff3a0808));
+
+    btnMuteAll.setClickingTogglesState(true);
+
+    auto styleHeaderButton = [](juce::TextButton& button, juce::Colour led)
+    {
+        button.setComponentID("headerConsoleButton");
+        button.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff111419));
+        button.setColour(juce::TextButton::buttonOnColourId, led);
+        button.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffe2e5e9));
+        button.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+        button.setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    };
+    for (auto& d : tdefs)
+        styleHeaderButton(*d.b, d.on);
 
     btnRecConfirm.onClick = [this]() {
         auto prev = looper.getState();
+        if (prev == LooperEngine::State::Stopped || prev == LooperEngine::State::ArmedBase)
+            looper.setBaseRecordingUsesTimingReference(false);
         int  tIdx = (prev == LooperEngine::State::RecordingBase) ? 0 : looper.getTotalTracks()-1;
         looper.recConfirm();
         if ((prev == LooperEngine::State::RecordingBase || prev == LooperEngine::State::RecordingLayer)
@@ -229,52 +949,103 @@ MainComponent::MainComponent()
         if (t >= 0 && t < LooperEngine::kMaxTracks) looper.refreshThumbnail(t, formatManager);
         repaint();
     };
-    btnMuteAll.onClick  = [this]() { looper.setGlobalMute(!looper.isGlobalMuted()); };
-    btnPauseAll.onClick = [this]() { looper.togglePauseAll(); };
+    btnMuteAll.onClick  = [this]()
+    {
+        const bool muted = !looper.isGlobalMuted();
+        looper.setGlobalMute(muted);
+        btnMuteAll.setToggleState(muted, juce::dontSendNotification);
+        repaint();
+    };
+    btnPauseAll.onClick = [this]()
+    {
+        looper.togglePauseAll();
+        btnRecConfirm.setEnabled(!looper.isGlobalPaused());
+    };
     btnReset.onClick    = [this]() {
         looper.resetAll();
-        for (int i = 0; i < LooperEngine::kMaxTracks; ++i) looper.refreshThumbnail(i, formatManager);
+        for (int i = 0; i < LooperEngine::kMaxTracks; ++i)
+        {
+            looper.refreshThumbnail(i, formatManager);
+            if (i < (int) visualTracks.size())
+                visualTracks[(size_t) i]->setDisplayName({});
+        }
         repaint();
     };
 
-    styleVstButton(btnSaveSession, LnfC::Accent);
-    styleVstButton(btnLoadSession, LnfC::PlayGreen);
-    styleVstButton(btnExportMix, LnfC::OvdAmber);
-    styleVstButton(btnExportTracks, LnfC::OvdAmber);
+    styleHeaderButton(btnSaveSession,  juce::Colour(0xff42df83));
+    styleHeaderButton(btnLoadSession,  juce::Colour(0xff33c3ee));
+    styleHeaderButton(btnExportMix,    juce::Colour(0xffff9f2f));
+    styleHeaderButton(btnExportTracks, juce::Colour(0xffec62d5));
     btnSaveSession.onClick = [this]() { saveSessionToFile(); };
     btnLoadSession.onClick = [this]() { loadSessionFromFile(); };
     btnExportMix.onClick = [this]() { exportMixToFile(); };
     btnExportTracks.onClick = [this]() { exportTracksToFolder(); };
+    btnAudioSettings.setButtonText("CONFIGURACION");
+    btnAudioSettings.setTooltip("Abrir configuracion de audio");
+    btnAudioSettings.onClick = [this]() { showAudioSettings(); };
+    styleHeaderButton(btnAudioSettings, LnfC::Accent);
+    btnStemSeparation.setTooltip("Separar una cancion en stems fuera del hilo de audio");
+    btnStemSeparation.onClick = [this]() { showStemSeparationWindow(); };
+    styleHeaderButton(btnStemSeparation, juce::Colour(0xffb36bff));
     addAndMakeVisible(btnSaveSession);
     addAndMakeVisible(btnLoadSession);
     addAndMakeVisible(btnExportMix);
     addAndMakeVisible(btnExportTracks);
+    addAndMakeVisible(btnAudioSettings);
+    addAndMakeVisible(btnStemSeparation);
+
+    lblInputSource.setText("ENTRADA:", juce::dontSendNotification);
+    lblInputSource.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
+    lblInputSource.setColour(juce::Label::textColourId, LnfC::TextDim);
+    lblInputSource.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(lblInputSource);
+
+    inputSourceSelector.addItem("GUITARRA", 1);
+    inputSourceSelector.addItem("NAVEGADOR / WINDOWS", 2);
+    inputSourceSelector.setSelectedId(1, juce::dontSendNotification);
+    inputSourceSelector.setTooltip(
+        "GUITARRA usa la entrada fisica. NAVEGADOR / WINDOWS graba el audio "
+        "que reproduce la salida predeterminada de Windows.");
+    inputSourceSelector.onChange = [this]()
+    {
+        const bool systemInput = inputSourceSelector.getSelectedId() == 2;
+        useSystemAudioInput.store(systemInput, std::memory_order_release);
+        if (systemInput)
+            systemAudioCapture.start();
+        else
+            systemAudioCapture.stop();
+        updateAudioStatusUi();
+    };
+    addAndMakeVisible(inputSourceSelector);
+
+    lblAudioStatus.setFont(juce::Font(juce::FontOptions(10.5f).withStyle("Bold")));
+    lblAudioStatus.setColour(juce::Label::textColourId, LnfC::TextDim);
+    lblAudioStatus.setJustificationType(juce::Justification::centredRight);
+    // El diagnostico detallado de driver/latencia se consulta desde
+    // CONFIGURACION; no ocupa espacio visual permanente en la pantalla.
+    addAndMakeVisible(lblAudioStatus);
 
     setupFXPedals();
-    fxContainer.onPaint = [this](juce::Graphics& g)
-    {
-        juce::Array<FXPedalComponent*> chain;
-        for (int slot = 0; slot < kNumFxPedals; ++slot)
-        {
-            const int pedalIndex = fxOrder[(size_t) slot];
-            if (pedalIndex != draggingFxPedal && fxPedals[pedalIndex] != nullptr)
-                chain.add(fxPedals[pedalIndex].get());
-        }
-        FXPedalboardWiring::CableStyle style;
-        style.sheath = juce::Colour(0xff111216);
-        style.thickness = 7.5f;
-        style.sag = 22.0f;
-        FXPedalboardWiring::drawChain(g, fxContainer, chain, style);
-    };
+    fxPedalFocusOverlay.onDismiss = [this]() { closeFxPedalFocus(); };
+    addChildComponent(fxPedalFocusOverlay);
 
     // MIDI
+    btnMidiMenu.setTooltip("Mostrar u ocultar la configuracion MIDI");
+    styleHeaderButton(btnMidiMenu, LnfC::Accent);
+    btnMidiMenu.onClick = [this]() { setMidiMenuExpanded(!midiMenuExpanded); };
+    addAndMakeVisible(btnMidiMenu);
+
+    midiMenuSurface.onEscape = [this]() { setMidiMenuExpanded(false); };
+    midiMenuSurface.setWantsKeyboardFocus(true);
+    addAndMakeVisible(midiMenuSurface);
+
     midiDeviceSelector.setTextWhenNoChoicesAvailable("No MIDI Devices");
     refreshMidiInputSelector();
-    addAndMakeVisible(midiDeviceSelector);
+    midiMenuSurface.addAndMakeVisible(midiDeviceSelector);
     midiDeviceSelector.onChange = [this]()
     {
         changeMidiInput(midiDeviceSelector.getSelectedItemIndex());
-        saveMidiConfiguration();
+        markMidiConfigurationDirty();
     };
 
     for (int i = 0; i < MidiController::kNumActions; ++i)
@@ -284,23 +1055,22 @@ MainComponent::MainComponent()
     {
         updateMidiMappingLabel();
         updateMidiManualControls();
-        saveMidiConfiguration();
     };
-    addAndMakeVisible(midiActionSelector);
+    midiMenuSurface.addAndMakeVisible(midiActionSelector);
 
     midiMessageTypeSelector.addItem("CC", 1);
     midiMessageTypeSelector.addItem("NOTA", 2);
     midiMessageTypeSelector.addItem("PROGRAM", 3);
     midiMessageTypeSelector.setSelectedId(1);
     midiMessageTypeSelector.onChange = [this]() { applyMidiManualMapping(); };
-    addAndMakeVisible(midiMessageTypeSelector);
+    midiMenuSurface.addAndMakeVisible(midiMessageTypeSelector);
 
     midiNumberSelector.setSliderStyle(juce::Slider::IncDecButtons);
     midiNumberSelector.setRange(0, 127, 1);
     midiNumberSelector.setValue(0);
     midiNumberSelector.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 42, 22);
     midiNumberSelector.onValueChange = [this]() { applyMidiManualMapping(); };
-    addAndMakeVisible(midiNumberSelector);
+    midiMenuSurface.addAndMakeVisible(midiNumberSelector);
 
     styleVstButton(btnMidiClear, juce::Colour(0xffcc4422));
     btnMidiClear.onClick = [this]()
@@ -309,26 +1079,43 @@ MainComponent::MainComponent()
         midiController.setMapping(action, {});
         updateMidiMappingLabel();
         updateMidiManualControls();
-        saveMidiConfiguration();
+        markMidiConfigurationDirty();
     };
-    addAndMakeVisible(btnMidiClear);
+    midiMenuSurface.addAndMakeVisible(btnMidiClear);
+
+    styleVstButton(btnMidiSave, LnfC::PlayGreen);
+    btnMidiSave.onClick = [this]()
+    {
+        const bool saved = saveMidiConfiguration();
+        lblMidiStatus.setText(saved ? "Configuracion MIDI guardada."
+                                    : "No se pudo guardar la configuracion MIDI.",
+                              juce::dontSendNotification);
+        lblMidiStatus.setColour(juce::Label::textColourId,
+                                saved ? LnfC::PlayGreen : LnfC::RecRed);
+    };
+    midiMenuSurface.addAndMakeVisible(btnMidiSave);
 
     btnMidiLearn.setClickingTogglesState(true);
     btnMidiLearn.setColour(juce::TextButton::buttonOnColourId, LnfC::OvdAmber.darker(0.1f));
-    addAndMakeVisible(btnMidiLearn);
+    midiMenuSurface.addAndMakeVisible(btnMidiLearn);
     btnMidiLearn.onClick = [this]() {
         if (btnMidiLearn.getToggleState()) midiController.startLearn(midiActionSelector.getSelectedId()-1);
-        else midiController.stopLearn();
+        else
+        {
+            midiController.stopLearn();
+            lblMidiStatus.setText("MIDI listo.", juce::dontSendNotification);
+            lblMidiStatus.setColour(juce::Label::textColourId, LnfC::TextDim);
+        }
     };
 
     lblMidiStatus.setText("MIDI Input Ready.", juce::dontSendNotification);
     lblMidiStatus.setFont(juce::Font(juce::FontOptions(10.0f)));
     lblMidiStatus.setColour(juce::Label::textColourId, LnfC::TextDim);
-    addAndMakeVisible(lblMidiStatus);
+    midiMenuSurface.addAndMakeVisible(lblMidiStatus);
 
     lblMidiMapping.setFont(juce::Font(juce::FontOptions(10.0f)));
     lblMidiMapping.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.88f));
-    addAndMakeVisible(lblMidiMapping);
+    midiMenuSurface.addAndMakeVisible(lblMidiMapping);
     changeMidiInput(0);
     loadMidiConfiguration();
     updateMidiMappingLabel();
@@ -342,12 +1129,35 @@ MainComponent::MainComponent()
     sldSilenceThreshold.setSliderStyle(juce::Slider::LinearHorizontal);
     sldSilenceThreshold.setRange(-80.0, 0.0, 1.0);
     sldSilenceThreshold.setValue(-60.0);
+    sldSilenceThreshold.setComponentID("signalThresholdSlider");
     sldSilenceThreshold.setTextBoxStyle(juce::Slider::TextBoxRight, false, 48, 18);
     sldSilenceThreshold.setTextValueSuffix(" dB");
     sldSilenceThreshold.onValueChange = [this]() { looper.setSilenceThresholdDb((float)sldSilenceThreshold.getValue()); };
     addAndMakeVisible(sldSilenceThreshold);
 
-    masterKnob.setSliderStyle(juce::Slider::LinearVertical);
+    lblLooperTempo.setText("TEMPO:", juce::dontSendNotification);
+    lblLooperTempo.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
+    lblLooperTempo.setColour(juce::Label::textColourId, LnfC::TextDim);
+    lblLooperTempo.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(lblLooperTempo);
+
+    sldLooperTempo.setSliderStyle(juce::Slider::IncDecButtons);
+    sldLooperTempo.setRange(20.0, 300.0, 1.0);
+    sldLooperTempo.setValue(looper.getBpm(), juce::dontSendNotification);
+    sldLooperTempo.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 72, 18);
+    sldLooperTempo.setTextValueSuffix(" BPM");
+    sldLooperTempo.onValueChange = [this]() { looper.setBpm((float) sldLooperTempo.getValue()); };
+    addAndMakeVisible(sldLooperTempo);
+
+    styleHeaderButton(btnLooperTap, LnfC::OvdAmber);
+    btnLooperTap.onClick = [this]()
+    {
+        looper.tapTempo();
+        sldLooperTempo.setValue(looper.getBpm(), juce::dontSendNotification);
+    };
+    addAndMakeVisible(btnLooperTap);
+
+    masterKnob.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     masterKnob.setRange(0.0, 1.0, 0.01);
     masterKnob.setValue(0.85);
     masterKnob.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
@@ -362,8 +1172,7 @@ MainComponent::MainComponent()
     masterVolume.store((float) masterKnob.getValue(), std::memory_order_relaxed);
 
     btnOutputMode.setClickingTogglesState(true);
-    btnOutputMode.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff252535));
-    btnOutputMode.setColour(juce::TextButton::buttonOnColourId, LnfC::Accent.withAlpha(0.28f));
+    styleHeaderButton(btnOutputMode, LnfC::Accent);
     btnOutputMode.onClick = [this]()
     {
         outputMono.store(btnOutputMode.getToggleState(), std::memory_order_relaxed);
@@ -372,169 +1181,98 @@ MainComponent::MainComponent()
     addAndMakeVisible(btnOutputMode);
     updateOutputModeButton();
 
-    styleVstButton(btnLoadVst3, LnfC::OvdAmber);
-    styleVstButton(btnUnloadVst3, juce::Colour(0xff9c4630));
-    styleVstButton(btnEditVst3, LnfC::Accent);
-    styleVstButton(btnBypassVst3, juce::Colour(0xff2f7d53));
-    btnBypassVst3.setClickingTogglesState(true);
-    btnLoadVst3.onClick = [this]() { loadExternalVst3Plugin(); };
-    btnUnloadVst3.onClick = [this]() { unloadExternalVst3Plugin(); };
-    btnEditVst3.onClick = [this]() { openExternalVst3Editor(); };
-    btnBypassVst3.onClick = [this]()
+    const auto tonexTypeface = loadTonexDisplayTypeface();
+    for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
     {
-        effectsChain.setExternalPluginEnabled(btnBypassVst3.getToggleState());
-        updateExternalVstUi();
-    };
-    lblVst3Status.setFont(juce::Font(juce::FontOptions(10.0f)));
-    lblVst3Status.setColour(juce::Label::textColourId, LnfC::TextDim);
-    lblVst3Status.setJustificationType(juce::Justification::centredLeft);
-    addAndMakeVisible(btnLoadVst3);
-    addAndMakeVisible(btnUnloadVst3);
-    addAndMakeVisible(btnEditVst3);
-    addAndMakeVisible(btnBypassVst3);
-    addAndMakeVisible(lblVst3Status);
+        btnLoadVst3[(size_t) slot].setButtonText("CARGAR");
+        btnUnloadVst3[(size_t) slot].setButtonText("QUITAR");
+        btnEditVst3[(size_t) slot].setButtonText("ABRIR");
+        btnMapVst3[(size_t) slot].setButtonText("MAPA");
+        btnPatternVst3[(size_t) slot].setButtonText("PATRON");
+        btnPatternPlayVst3[(size_t) slot].setButtonText("PLAY");
+        btnBypassVst3[(size_t) slot].setButtonText("VST3 ON");
+        styleVstButton(btnLoadVst3[(size_t) slot], LnfC::OvdAmber);
+        styleVstButton(btnUnloadVst3[(size_t) slot], juce::Colour(0xff9c4630));
+        styleVstButton(btnEditVst3[(size_t) slot], LnfC::Accent);
+        styleVstButton(btnMapVst3[(size_t) slot], juce::Colour(0xffb36bff));
+        styleVstButton(btnPatternVst3[(size_t) slot], juce::Colour(0xff4fcf9d));
+        styleVstButton(btnPatternPlayVst3[(size_t) slot], LnfC::PlayGreen);
+        btnPatternPlayVst3[(size_t) slot].setComponentID("vstPatternTransportButton");
+        btnPatternPlayVst3[(size_t) slot].setTooltip("Reproducir o detener el patron");
+        styleVstButton(btnBypassVst3[(size_t) slot], juce::Colour(0xff2f7d53));
+        for (auto* button : { &btnLoadVst3[(size_t) slot], &btnUnloadVst3[(size_t) slot],
+                              &btnEditVst3[(size_t) slot], &btnMapVst3[(size_t) slot],
+                              &btnPatternVst3[(size_t) slot], &btnPatternPlayVst3[(size_t) slot],
+                              &btnBypassVst3[(size_t) slot] })
+        {
+            button->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff111820));
+            button->setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+        }
+        btnBypassVst3[(size_t) slot].setClickingTogglesState(true);
+        btnLoadVst3[(size_t) slot].onClick = [this, slot]() { loadExternalVst3Plugin(slot); };
+        btnUnloadVst3[(size_t) slot].onClick = [this, slot]() { unloadExternalVst3Plugin(slot); };
+        btnEditVst3[(size_t) slot].onClick = [this, slot]() { openExternalVst3Editor(slot); };
+        btnMapVst3[(size_t) slot].onClick = [this, slot]() { openExternalVst3DrumMapEditor(slot); };
+        btnPatternVst3[(size_t) slot].onClick = [this, slot]() { openExternalVst3PatternEditor(slot); };
+        btnPatternPlayVst3[(size_t) slot].setClickingTogglesState(true);
+        btnPatternPlayVst3[(size_t) slot].onClick = [this, slot]()
+        {
+            effectsChain.setExternalPluginPatternPlaying(
+                btnPatternPlayVst3[(size_t) slot].getToggleState(), slot);
+            updateExternalVstUi(slot);
+        };
+        btnBypassVst3[(size_t) slot].onClick = [this, slot]()
+        {
+            effectsChain.setExternalPluginEnabled(btnBypassVst3[(size_t) slot].getToggleState(), slot);
+            updateExternalVstUi(slot);
+        };
+        auto& status = lblVst3Status[(size_t) slot];
+        if (tonexTypeface != nullptr)
+            status.setFont(juce::Font(juce::FontOptions(tonexTypeface).withHeight(24.0f)));
+        else
+            status.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 15.0f,
+                                                        juce::Font::bold)));
+        status.setColour(juce::Label::textColourId, LnfC::TextDim);
+        status.setColour(juce::Label::backgroundColourId, juce::Colour(0xff070a0d).withAlpha(0.92f));
+        status.setColour(juce::Label::outlineColourId, LnfC::Accent.withAlpha(0.20f));
+        status.setJustificationType(juce::Justification::centred);
+        auto* pedal = vst3Pedals[(size_t) slot].get();
+        if (pedal != nullptr)
+        {
+            pedal->addAndMakeVisible(btnLoadVst3[(size_t) slot]);
+            pedal->addAndMakeVisible(btnUnloadVst3[(size_t) slot]);
+            pedal->addAndMakeVisible(btnEditVst3[(size_t) slot]);
+            pedal->addAndMakeVisible(btnMapVst3[(size_t) slot]);
+            pedal->addAndMakeVisible(btnPatternVst3[(size_t) slot]);
+            pedal->addAndMakeVisible(btnPatternPlayVst3[(size_t) slot]);
+            pedal->addChildComponent(btnBypassVst3[(size_t) slot]);
+            pedal->addAndMakeVisible(status);
+            pedal->onResized = [this](FXPedalComponent& resizedPedal) { layoutVst3PedalControls(resizedPedal); };
+            layoutVst3PedalControls(*pedal);
+        }
+    }
     updateExternalVstUi();
 
-    lblLoopEdit.setText("ARREMANGAR", juce::dontSendNotification);
-    lblLoopEdit.setFont(juce::Font(juce::FontOptions(10.0f)));
-    lblLoopEdit.setColour(juce::Label::textColourId, LnfC::TextDim);
-    addAndMakeVisible(lblLoopEdit);
+    loopRangeMarker.onRangeChanged = [this](float newStart, float newEnd)
+    {
+        const int sourceSamples = looper.getEditableLoopSourceSamples();
+        if (sourceSamples <= 1)
+            return;
 
-    auto styleLoopEditButton = [](juce::TextButton& btn, juce::Colour accent)
-    {
-        btn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff252535));
-        btn.setColour(juce::TextButton::buttonOnColourId, accent.withAlpha(0.22f));
-        btn.setColour(juce::TextButton::textColourOffId, LnfC::TextHi);
+        const int startDelta = juce::roundToInt((newStart - loopMarkerStart) * (float) sourceSamples);
+        const int endDelta = juce::roundToInt((newEnd - loopMarkerEnd) * (float) sourceSamples);
+        if (startDelta != 0)
+            looper.nudgeLoopStart(startDelta);
+        if (endDelta != 0)
+            looper.adjustLoopTail(endDelta);
+        loopMarkerStart = newStart;
+        loopMarkerEnd = newEnd;
+        updateLoopEditButtons();
+        refreshAllThumbnails();
     };
-    styleLoopEditButton(btnLoopInEarlier, LnfC::Accent);
-    styleLoopEditButton(btnLoopInLater,   LnfC::Accent);
-    styleLoopEditButton(btnLoopOutShorter, LnfC::OvdAmber);
-    styleLoopEditButton(btnLoopOutLonger,  LnfC::OvdAmber);
-    btnLoopInEarlier.setTriggeredOnMouseDown(true);
-    btnLoopInLater.setTriggeredOnMouseDown(true);
-    btnLoopOutShorter.setTriggeredOnMouseDown(true);
-    btnLoopOutLonger.setTriggeredOnMouseDown(true);
-    btnLoopInEarlier.setRepeatSpeed(300, 55, 55);
-    btnLoopInLater.setRepeatSpeed(300, 55, 55);
-    btnLoopOutShorter.setRepeatSpeed(300, 55, 55);
-    btnLoopOutLonger.setRepeatSpeed(300, 55, 55);
-    addAndMakeVisible(btnLoopInEarlier);
-    addAndMakeVisible(btnLoopInLater);
-    addAndMakeVisible(btnLoopOutShorter);
-    addAndMakeVisible(btnLoopOutLonger);
+    addAndMakeVisible(loopRangeMarker);
 
-    auto refreshAllLoopThumbnails = [this]()
-    {
-        const int total = looper.getTotalTracks();
-        for (int i = 0; i < total && i < LooperEngine::kMaxTracks; ++i)
-            looper.refreshThumbnail(i, formatManager);
-        repaint();
-    };
-
-    btnLoopInEarlier.onClick = [this, refreshAllLoopThumbnails]()
-    {
-        const int stepSamples = juce::jmax(1, juce::roundToInt(looper.getSampleRate() * kLoopTrimStepSeconds));
-        if (looper.nudgeLoopStart(-stepSamples))
-            refreshAllLoopThumbnails();
-    };
-    btnLoopInLater.onClick = [this, refreshAllLoopThumbnails]()
-    {
-        const int stepSamples = juce::jmax(1, juce::roundToInt(looper.getSampleRate() * kLoopTrimStepSeconds));
-        if (looper.nudgeLoopStart(stepSamples))
-            refreshAllLoopThumbnails();
-    };
-    btnLoopOutShorter.onClick = [this, refreshAllLoopThumbnails]()
-    {
-        const int stepSamples = juce::jmax(1, juce::roundToInt(looper.getSampleRate() * kLoopTrimStepSeconds));
-        if (looper.adjustLoopTail(-stepSamples))
-            refreshAllLoopThumbnails();
-    };
-    btnLoopOutLonger.onClick = [this, refreshAllLoopThumbnails]()
-    {
-        const int stepSamples = juce::jmax(1, juce::roundToInt(looper.getSampleRate() * kLoopTrimStepSeconds));
-        if (looper.adjustLoopTail(stepSamples))
-            refreshAllLoopThumbnails();
-    };
     updateLoopEditButtons();
-
-    auto setupRhythmBarLabel = [this](juce::Label& lbl, const juce::String& text)
-    {
-        lbl.setText(text, juce::dontSendNotification);
-        lbl.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
-        lbl.setColour(juce::Label::textColourId, LnfC::TextDim);
-        addAndMakeVisible(lbl);
-    };
-    setupRhythmBarLabel(lblRhythmVerseBars, "VERSO");
-    setupRhythmBarLabel(lblRhythmChorusBars, "ESTRIBILLO");
-    setupRhythmBarLabel(lblRhythmCountIn, "PRECONTEO");
-    setupRhythmBarLabel(lblRhythmCountSound, "SONIDO");
-    setupRhythmBarLabel(lblRhythmSectionState, "SECCION: VERSO");
-
-    auto setupRhythmBarsSelector = [this](juce::ComboBox& box, int defaultBars)
-    {
-        for (int i = 0; i < (int) juce::numElementsInArray(kRhythmBarOptions); ++i)
-            box.addItem(juce::String(kRhythmBarOptions[i]) + " compases", i + 1);
-
-        int defaultId = 1;
-        for (int i = 0; i < (int) juce::numElementsInArray(kRhythmBarOptions); ++i)
-            if (kRhythmBarOptions[i] == defaultBars)
-                defaultId = i + 1;
-
-        box.setSelectedId(defaultId, juce::dontSendNotification);
-        addAndMakeVisible(box);
-    };
-    setupRhythmBarsSelector(rhythmVerseBarsSelector, 4);
-    setupRhythmBarsSelector(rhythmChorusBarsSelector, 8);
-    rhythmCountInBarsSelector.addItem("Ninguno", 1);
-    rhythmCountInBarsSelector.addItem("1 compas", 2);
-    rhythmCountInBarsSelector.addItem("2 compases", 3);
-    rhythmCountInBarsSelector.addItem("4 compases", 4);
-    rhythmCountInBarsSelector.setSelectedId(2, juce::dontSendNotification);
-    addAndMakeVisible(rhythmCountInBarsSelector);
-    for (int i = 0; i < (int) juce::numElementsInArray(kRhythmCountInSoundNames); ++i)
-        rhythmCountInSoundSelector.addItem(kRhythmCountInSoundNames[i], i + 1);
-    rhythmCountInSoundSelector.setSelectedId(1, juce::dontSendNotification);
-    addAndMakeVisible(rhythmCountInSoundSelector);
-    rhythmVerseBarsSelector.onChange = [this]()
-    {
-        const int idx = juce::jmax(0, rhythmVerseBarsSelector.getSelectedItemIndex());
-        effectsChain.setRhythmVerseBars(kRhythmBarOptions[idx]);
-    };
-    rhythmChorusBarsSelector.onChange = [this]()
-    {
-        const int idx = juce::jmax(0, rhythmChorusBarsSelector.getSelectedItemIndex());
-        effectsChain.setRhythmChorusBars(kRhythmBarOptions[idx]);
-    };
-    rhythmCountInBarsSelector.onChange = [this]()
-    {
-        const int idx = juce::jmax(0, rhythmCountInBarsSelector.getSelectedItemIndex());
-        effectsChain.setRhythmCountInBars(kRhythmCountInOptions[idx]);
-    };
-    rhythmCountInSoundSelector.onChange = [this]()
-    {
-        const int idx = juce::jmax(0, rhythmCountInSoundSelector.getSelectedItemIndex());
-        effectsChain.setRhythmCountInSound((EffectsChain::RhythmCountInSound) idx);
-    };
-    effectsChain.setRhythmVerseBars(4);
-    effectsChain.setRhythmChorusBars(8);
-    effectsChain.setRhythmCountInBars(1);
-    effectsChain.setRhythmCountInSound(EffectsChain::RhythmCountInSound::Sticks);
-
-    btnRhythmCountInToggle.setClickingTogglesState(true);
-    btnRhythmCountInToggle.setToggleState(true, juce::dontSendNotification);
-    btnRhythmCountInToggle.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff252535));
-    btnRhythmCountInToggle.setColour(juce::TextButton::buttonOnColourId, LnfC::PlayGreen.withAlpha(0.22f));
-    btnRhythmCountInToggle.onClick = [this]()
-    {
-        effectsChain.setRhythmCountInEnabled(btnRhythmCountInToggle.getToggleState());
-    };
-    addAndMakeVisible(btnRhythmCountInToggle);
-    effectsChain.setRhythmCountInEnabled(true);
-
-    btnRhythmNextSection.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff252535));
-    btnRhythmNextSection.setColour(juce::TextButton::buttonOnColourId, LnfC::Accent.withAlpha(0.24f));
-    btnRhythmNextSection.onClick = [this]() { effectsChain.queueRhythmSectionChange(); };
-    addAndMakeVisible(btnRhythmNextSection);
 
     // MIDI callbacks
     midiController.setActionCallback(MidiController::RecConfirm, [this]() { if (btnRecConfirm.onClick) btnRecConfirm.onClick(); });
@@ -545,27 +1283,107 @@ MainComponent::MainComponent()
     midiController.setActionCallback(MidiController::MuteAll,    [this]() { if (btnMuteAll.onClick)    btnMuteAll.onClick(); });
     midiController.setActionCallback(MidiController::ResetAll,   [this]() { if (btnReset.onClick)      btnReset.onClick(); });
     midiController.setActionCallback(MidiController::PauseAll,   [this]() { if (btnPauseAll.onClick)   btnPauseAll.onClick(); });
-    midiController.setActionCallback(MidiController::RhythmNextSection, [this]() { effectsChain.queueRhythmSectionChange(); });
-    midiController.setActionStateCallback(MidiController::FreezeToggle, [this](bool pressed, bool hasRelease)
+
+    auto registerPedalToggle = [this](MidiController::Action action, int pedalIndex)
     {
-        auto* freezePedal = fxPedals[4].get();
-        if (freezePedal == nullptr)
+        midiController.setActionCallback(action, [this, pedalIndex]()
+        {
+            toggleFxPedalFromMidi(pedalIndex);
+        });
+    };
+
+    registerPedalToggle(MidiController::NoiseGateToggle,      0);
+    registerPedalToggle(MidiController::CompressorToggle,     2);
+    registerPedalToggle(MidiController::HarmonizerToggle,     3);
+    registerPedalToggle(MidiController::SustainChordsToggle,  5);
+    registerPedalToggle(MidiController::FuzzToggle,            6);
+    registerPedalToggle(MidiController::OverdriveToggle,       7);
+    registerPedalToggle(MidiController::ChorusToggle,          8);
+    registerPedalToggle(MidiController::TremoloToggle,         9);
+    registerPedalToggle(MidiController::TapeDelayToggle,      10);
+    registerPedalToggle(MidiController::RoomReverbToggle,     11);
+    registerPedalToggle(MidiController::OutputEqToggle,       12);
+
+    midiController.setActionCallback(MidiController::Vst3Toggle, [this]()
+    {
+        if (vst3Pedals[0] == nullptr)
             return;
 
-        const bool nextState = hasRelease ? pressed : (pressed ? !freezePedal->onBtn.getToggleState()
-                                                               : freezePedal->onBtn.getToggleState());
-
-        if (nextState == freezePedal->onBtn.getToggleState())
-            return;
-
-        freezePedal->onBtn.setToggleState(nextState, juce::dontSendNotification);
-        if (freezePedal->onBtn.onClick)
-            freezePedal->onBtn.onClick();
+        const bool nextState = !vst3Pedals[0]->onBtn.getToggleState();
+        vst3Pedals[0]->onBtn.setToggleState(nextState, juce::sendNotificationSync);
+        vst3Pedals[0]->repaint();
+        fxContainer.repaint();
+        lblMidiStatus.setText("MIDI PEDAL VST3: " + juce::String(nextState ? "ON" : "OFF"),
+                              juce::dontSendNotification);
+        lblMidiStatus.setColour(juce::Label::textColourId,
+                                nextState ? LnfC::PlayGreen : LnfC::TextDim);
     });
 
     setSize(1600, 960);
-    setAudioChannels(2, 2);
-    optimiseAudioDeviceForLowLatency();
+    const auto audioInitialisation = audioDeviceController.initialise(forceAudioFallbackForDiagnostics);
+    deviceManager.addChangeListener(this);
+    audioSourcePlayer.setSource(this);
+    deviceManager.addAudioCallback(&audioSourcePlayer);
+
+    audioSettingsPanel = std::make_unique<AudioSettingsPanel>(audioDeviceController,
+                                                               vst3PluginCatalog);
+    audioSettingsPanel->onClose = [this]() { closeAudioSettings(); };
+    audioSettingsPanel->onConfigurationChanged = [this]()
+    {
+        updateRecordingLatencyCompensation();
+        updateAudioStatusUi();
+    };
+    addChildComponent(audioSettingsPanel.get());
+    updateRecordingLatencyCompensation();
+    updateAudioStatusUi();
+
+    if (audioInitialisation.usingFallback || !audioInitialisation.audioAvailable)
+    {
+        lblMidiStatus.setText(audioInitialisation.message, juce::dontSendNotification);
+        lblMidiStatus.setColour(juce::Label::textColourId, LnfC::OvdAmber);
+    }
+    midiDeviceListConnection = juce::MidiDeviceListConnection::make(
+        [safeThis = juce::Component::SafePointer<MainComponent>(this)]()
+        {
+            if (safeThis != nullptr)
+                safeThis->handleMidiDeviceListChanged();
+        });
+    setMidiMenuExpanded(false);
+    loadingOverlay.setInterceptsMouseClicks(true, true);
+    addChildComponent(loadingOverlay);
+
+    stemImportController = std::make_unique<LoopernicoStems::StemImportController>(
+        looper, deviceManager.getAudioCallbackLock());
+    stemSeparationPanel = std::make_unique<LoopernicoStems::StemSeparationPanel>(
+        stemSeparationEngine, *stemImportController);
+    stemSeparationPanel->getFreeTrackCount = [safeThis = juce::Component::SafePointer<MainComponent>(this)]()
+    {
+        if (auto* component = safeThis.getComponent())
+            return LooperEngine::kMaxTracks - component->looper.getTotalTracks();
+        return 0;
+    };
+    stemSeparationPanel->onImportFinished =
+        [safeThis = juce::Component::SafePointer<MainComponent>(this)]
+        (const LoopernicoStems::StemImportController::ImportResult& result)
+    {
+        if (auto* component = safeThis.getComponent())
+        {
+            if (result.success)
+            {
+                for (const auto& imported : result.imported)
+                    if (imported.trackIndex >= 0
+                        && imported.trackIndex < (int) component->visualTracks.size())
+                        component->visualTracks[(size_t) imported.trackIndex]
+                            ->setDisplayName(imported.stem.displayName);
+                component->refreshAllThumbnails();
+                component->refreshTrackUiFromLooper();
+                component->repaint();
+            }
+        }
+    };
+    stemSeparationWindow = std::make_unique<LoopernicoStems::StemSeparationWindow>(
+        *stemSeparationPanel);
+    stemSeparationWindow->setVisible(false);
     startTimerHz(24);
 }
 
@@ -576,14 +1394,14 @@ void MainComponent::setupFXPedals()
 {
     struct PDef { const char* name; uint32_t col; const char* l1, *l2, *l3; };
     static const PDef defs[kNumFxPedals] = {
-        { "NOISE GATE",     0xff34434a, "THRESH",  "ATTACK",  "REL"   },
-        { "RHYTHM BOX",     0xff9a2b1f, "BPM",     "LEVEL",   "SWING" },
+        { "NOISE GATE",     0xffd8d7d1, "THRESH",  "ATTACK",  "REL"   },
+        { "REMOVED",        0xff9a2b1f, "",        "",        ""      },
         { "COMPRESSOR",     0xffb8880a, "THRESH",  "RATIO",   "LEVEL" },
-        { "HARMONIZER",     0xff0f6e28, "INTERV",  "MIX",     "LEVEL" },
-        { "SUSTAIN GRAN",   0xff2d5c7d, "MIX",     "SIZE",    "FADE"  },
-        { "SUSTAIN CHORDS", 0xff486d89, "MIX",     "SIZE",    "FADE"  },
+        { "HARMONIZER",     0xfff1f1f1, "VOL",     "BLEND",   "SWEEP" },
+        { "REMOVED",        0xff9a2b1f, "",        "",        ""      },
+        { "SUSTAIN CHORDS", 0xff486d89, "LEVEL",   "RISE",    "DECAY" },
         { "FUZZ",           0xff0f3a88, "FUZZ",    "TONE",    "LEVEL" },
-        { "OVERDRIVE",      0xff1a7a28, "DRIVE",   "TONE",    "LEVEL" },
+        { "SUNSET",         0xffc91522, "VOLUME 1", "GAIN 1",  "TONE 1" },
         { "CHORUS",         0xff0f4e88, "MIX",     "RATE",    "DEPTH" },
         { "TREMOLO",        0xff0b7f73, "MIX",     "RATE",    "DEPTH" },
         { "TAPE DELAY",     0xffaa5a08, "MIX",     "TIME",    "FEEDB" },
@@ -596,12 +1414,71 @@ void MainComponent::setupFXPedals()
     fxViewport.setViewedComponent(&fxContainer, false);
     addAndMakeVisible(fxViewport);
 
+    for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
+    {
+        auto& vstPedal = vst3Pedals[(size_t) slot];
+        vstPedal = std::make_unique<FXPedalComponent>(
+            "VST3 HOST", juce::Colour(0xff20262c), "", "", "");
+        for (auto* control : { &vstPedal->knob1, &vstPedal->knob2, &vstPedal->knob3,
+                               &vstPedal->knob4, &vstPedal->knob5, &vstPedal->knob6,
+                               &vstPedal->knob7, &vstPedal->knob8, &vstPedal->knob9 })
+            control->setVisible(false);
+        vstPedal->onBtn.onClick = [this, slot]()
+        {
+            if (!effectsChain.hasExternalPlugin(slot))
+            {
+                vst3Pedals[(size_t) slot]->onBtn.setToggleState(false, juce::dontSendNotification);
+                updateExternalVstUi(slot);
+                return;
+            }
+            effectsChain.setExternalPluginEnabled(vst3Pedals[(size_t) slot]->onBtn.getToggleState(), slot);
+            updateExternalVstUi(slot);
+        };
+        vstPedal->onDragStart = [this](FXPedalComponent& pedal, const juce::MouseEvent& e) { beginFxPedalDrag(pedal, e); };
+        vstPedal->onDragMove = [this](FXPedalComponent& pedal, const juce::MouseEvent& e) { updateFxPedalDrag(pedal, e); };
+        vstPedal->onDragEnd = [this](FXPedalComponent& pedal, const juce::MouseEvent& e) { endFxPedalDrag(pedal, e); };
+        vstPedal->onZoomRequest = [this](FXPedalComponent& pedal) { toggleFxPedalFocus(pedal); };
+        fxContainer.addAndMakeVisible(vstPedal.get());
+
+        auto& selector = vstPresetSelectors[(size_t) slot];
+        auto& save = vstPresetSaveButtons[(size_t) slot];
+        auto& remove = vstPresetDeleteButtons[(size_t) slot];
+        selector.setTextWhenNothingSelected("PRESETS");
+        selector.setTooltip("Elegir un preset guardado para este VST3");
+        selector.onChange = [this, slot]()
+        {
+            const auto name = vstPresetSelectors[(size_t) slot].getText();
+            if (name.isNotEmpty() && name != "PRESETS")
+                applyVstPreset(slot, name);
+        };
+        save.setButtonText("+");
+        save.setTooltip("Guardar o sobrescribir el preset seleccionado");
+        save.onClick = [this, slot]() { saveVstPreset(slot); };
+        remove.setButtonText("-");
+        remove.setTooltip("Borrar el preset seleccionado");
+        remove.onClick = [this, slot]() { deleteVstPreset(slot); };
+        fxContainer.addAndMakeVisible(selector);
+        fxContainer.addAndMakeVisible(save);
+        fxContainer.addAndMakeVisible(remove);
+    }
+
     for (int i = 0; i < kNumFxPedals; ++i)
     {
+        if (i == EffectsChain::RhythmPedal || i == EffectsChain::LegacySustainGranPedal)
+        {
+            // El hueco conserva el indice de sesiones antiguas, pero el
+            // BeatBuddy ya no se construye ni entra en la cadena activa.
+            fxPedals[i].reset();
+            continue;
+        }
+
         auto& d = defs[i];
-        fxOrder[(size_t) i] = i;
         fxPedals[i] = std::make_unique<FXPedalComponent>(
             d.name, juce::Colour(d.col), d.l1, d.l2, d.l3);
+        if (i == EffectsChain::SustainChordsPedal)
+            fxPedals[i]->setDisplayName("Gamechanger Audio Plus Pedal II");
+        if (i == EffectsChain::HarmonizerPedal)
+            fxPedals[i]->setDisplayName("Electro-Harmonix Pico Pitch Fork");
         fxPedals[i]->onDragStart = [this](FXPedalComponent& pedal, const juce::MouseEvent& e)
         {
             beginFxPedalDrag(pedal, e);
@@ -614,8 +1491,19 @@ void MainComponent::setupFXPedals()
         {
             endFxPedalDrag(pedal, e);
         };
+        fxPedals[i]->onZoomRequest = [this](FXPedalComponent& pedal)
+        {
+            toggleFxPedalFocus(pedal);
+        };
         fxContainer.addAndMakeVisible(fxPedals[i].get());
     }
+    fxOrder[0] = kNumFxPedals;
+    int nextOrderSlot = 1;
+    for (int i = 0; i < kNumFxPedals; ++i)
+        if (i != EffectsChain::RhythmPedal && i != EffectsChain::LegacySustainGranPedal)
+            fxOrder[(size_t) nextOrderSlot++] = i;
+    for (int slot = 1; slot < kMaxVst3Pedals; ++slot)
+        fxOrder[(size_t) nextOrderSlot++] = kNumFxPedals + slot;
     effectsChain.setPedalOrder(fxOrder);
 
     auto cfg = [](juce::Slider& s, double lo, double hi, double val) {
@@ -623,6 +1511,9 @@ void MainComponent::setupFXPedals()
     };
 
     fxPedals[0]->configureExtendedKnobs("THRESH", "ATTACK", "REL", "", "", "");
+    fxPedals[0]->knob1.setComponentID("bossNoiseKnob");
+    fxPedals[0]->knob2.setComponentID("bossNoiseKnob");
+    fxPedals[0]->knob3.setComponentID("bossNoiseKnob");
     cfg(fxPedals[0]->knob1,-80.0,-20.0,-55.0);
     cfg(fxPedals[0]->knob2,0.5,40.0,4.0);
     cfg(fxPedals[0]->knob3,20.0,600.0,90.0);
@@ -637,111 +1528,15 @@ void MainComponent::setupFXPedals()
     fxPedals[0]->setKnobValueFormatter(1, formatMs);
     fxPedals[0]->setKnobValueFormatter(2, formatMs);
 
-    fxPedals[1]->configureExtendedKnobs("BPM", "MIX", "COLOR", "STYLE", "PATTERN", "MODO");
-    fxPedals[1]->knob1.setComponentID("beatBuddyKnob");
-    fxPedals[1]->knob2.setComponentID("beatBuddyKnob");
-    fxPedals[1]->knob3.setComponentID("beatBuddyKnob");
-    cfg(fxPedals[1]->knob1, 60.0, 180.0, 112.0);
-    cfg(fxPedals[1]->knob2, 0.0, 1.4, 0.78);
-    cfg(fxPedals[1]->knob3, 0.0, 1.0, 0.5);
-    fxPedals[1]->knob4.setRange(0, 8, 1); fxPedals[1]->knob4.setValue(0);
-    fxPedals[1]->knob5.setRange(0, 2, 1); fxPedals[1]->knob5.setValue(0);
-    fxPedals[1]->knob6.setRange(0, 2, 1); fxPedals[1]->knob6.setValue(0);
-    fxPedals[1]->knob4.setVisible(false);
-    fxPedals[1]->knob5.setVisible(false);
-    fxPedals[1]->knob6.setVisible(false);
 
-    auto styleRhythmInfoLabel = [](juce::Label& lbl, const juce::String& text)
-    {
-        lbl.setText(text, juce::dontSendNotification);
-        lbl.setJustificationType(juce::Justification::centred);
-        lbl.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.88f));
-        lbl.setFont(juce::Font(juce::FontOptions(8.0f).withStyle("Bold")));
-    };
-
-    styleRhythmInfoLabel(lblRhythmStyle,   "STYLE");
-    styleRhythmInfoLabel(lblRhythmPattern, "PARTE");
-    styleRhythmInfoLabel(lblRhythmMode,    "MODO");
-    for (auto* lbl : { &lblRhythmStyle, &lblRhythmPattern, &lblRhythmMode })
-        lbl->setColour(juce::Label::textColourId, juce::Colour(0xff82e6eb).withAlpha(0.90f));
-    for (auto* lbl : { &lblRhythmStyle, &lblRhythmPattern, &lblRhythmMode, &lblRhythmBpmValue, &lblRhythmColorValue })
-        fxPedals[1]->addAndMakeVisible(*lbl);
-
-    rhythmStyleSelector.clear(juce::dontSendNotification);
-    for (int i = 0; i < (int) juce::numElementsInArray(kRhythmStyleNames); ++i)
-        rhythmStyleSelector.addItem(kRhythmStyleNames[i], i + 1);
-    rhythmStyleSelector.setSelectedId(1, juce::dontSendNotification);
-    rhythmStyleSelector.setJustificationType(juce::Justification::centredLeft);
-    rhythmStyleSelector.setTextWhenNothingSelected("STYLE");
-    rhythmStyleSelector.setMouseCursor(juce::MouseCursor::PointingHandCursor);
-    rhythmStyleSelector.setComponentID("rhythmScreenCombo");
-    rhythmStyleSelector.setColour(juce::ComboBox::textColourId, juce::Colour(0xffdffcff));
-    fxPedals[1]->addAndMakeVisible(rhythmStyleSelector);
-
-    rhythmPatternSelector.clear(juce::dontSendNotification);
-    for (int i = 0; i < (int) juce::numElementsInArray(kRhythmPatternNames); ++i)
-        rhythmPatternSelector.addItem(kRhythmPatternNames[i], i + 1);
-    rhythmPatternSelector.setSelectedId(1, juce::dontSendNotification);
-    rhythmPatternSelector.setJustificationType(juce::Justification::centredLeft);
-    rhythmPatternSelector.setMouseCursor(juce::MouseCursor::PointingHandCursor);
-    rhythmPatternSelector.setComponentID("rhythmScreenCombo");
-    rhythmPatternSelector.setColour(juce::ComboBox::textColourId, juce::Colour(0xffdffcff));
-    fxPedals[1]->addAndMakeVisible(rhythmPatternSelector);
-
-    rhythmModeSelector.clear(juce::dontSendNotification);
-    for (int i = 0; i < (int) juce::numElementsInArray(kRhythmModeNames); ++i)
-        rhythmModeSelector.addItem(kRhythmModeNames[i], i + 1);
-    rhythmModeSelector.setSelectedId(1, juce::dontSendNotification);
-    rhythmModeSelector.setJustificationType(juce::Justification::centredLeft);
-    rhythmModeSelector.setMouseCursor(juce::MouseCursor::PointingHandCursor);
-    rhythmModeSelector.setComponentID("rhythmScreenCombo");
-    rhythmModeSelector.setColour(juce::ComboBox::textColourId, juce::Colour(0xffdffcff));
-    fxPedals[1]->addAndMakeVisible(rhythmModeSelector);
-
-    fxPedals[1]->onBtn.onClick=[this](){ effectsChain.setRhythmEnabled(fxPedals[1]->onBtn.getToggleState()); };
-    fxPedals[1]->onSecondaryFootswitch=[this](){ effectsChain.queueRhythmSectionChange(); };
-    fxPedals[1]->onTap=[this]()
-    {
-        const juce::int64 now = juce::Time::currentTimeMillis();
-        const juce::int64 elapsed = now - lastRhythmTapMs;
-        lastRhythmTapMs = now;
-        if (elapsed >= 333 && elapsed <= 1000)
-        {
-            const double bpm = juce::jlimit(60.0, 180.0, 60000.0 / (double) elapsed);
-            fxPedals[1]->knob1.setValue(bpm, juce::sendNotificationSync);
-        }
-    };
-    fxPedals[1]->knob1.onValueChange=[this](){ effectsChain.setRhythmTempo((float)fxPedals[1]->knob1.getValue()); updateRhythmBoxReadouts(); };
-    fxPedals[1]->knob2.onValueChange=[this](){ effectsChain.setRhythmLevel((float)fxPedals[1]->knob2.getValue()); updateRhythmBoxReadouts(); };
-    fxPedals[1]->knob3.onValueChange=[this](){ effectsChain.setRhythmTone((float)fxPedals[1]->knob3.getValue()); updateRhythmBoxReadouts(); };
-    rhythmStyleSelector.onChange=[this]()
-    {
-        const int styleIndex = juce::jmax(0, rhythmStyleSelector.getSelectedItemIndex());
-        fxPedals[1]->knob4.setValue(styleIndex, juce::dontSendNotification);
-        effectsChain.setRhythmStyle(styleIndex);
-    };
-    rhythmPatternSelector.onChange=[this]()
-    {
-        const int sectionIndex = juce::jmax(0, rhythmPatternSelector.getSelectedItemIndex());
-        fxPedals[1]->knob5.setValue(sectionIndex, juce::dontSendNotification);
-        effectsChain.setRhythmSection((EffectsChain::RhythmSection) sectionIndex);
-    };
-    rhythmModeSelector.onChange=[this]()
-    {
-        const int modeIndex = juce::jmax(0, rhythmModeSelector.getSelectedItemIndex());
-        fxPedals[1]->knob6.setValue(modeIndex, juce::dontSendNotification);
-        effectsChain.setRhythmMode((EffectsChain::RhythmMode) modeIndex);
-    };
-    effectsChain.setRhythmTone((float) fxPedals[1]->knob3.getValue());
-    updateRhythmBoxReadouts();
-
-    fxPedals[2]->configureExtendedKnobs("MIX", "GAIN", "COMP", "ACTION", "TAIL", "EQ");
+    fxPedals[2]->configureExtendedKnobs("BLEND", "GAIN", "COMP", "ATTACK", "", "TONE");
     fxPedals[2]->knob1.setComponentID("dedaloJetKnob");
     fxPedals[2]->knob2.setComponentID("dedaloJetKnob");
     fxPedals[2]->knob3.setComponentID("dedaloJetKnob");
     fxPedals[2]->knob4.setComponentID("dedaloJetKnob");
     fxPedals[2]->knob5.setComponentID("dedaloJetKnob");
     fxPedals[2]->knob6.setComponentID("dedaloJetKnob");
+    fxPedals[2]->knob5.setVisible(false); // Release is fixed on the physical JET 2.
     cfg(fxPedals[2]->knob1,0.0,1.0,0.65);
     cfg(fxPedals[2]->knob2,0.5,2.5,1.0);
     cfg(fxPedals[2]->knob3,-36.0,-6.0,-18.0);
@@ -756,40 +1551,61 @@ void MainComponent::setupFXPedals()
     fxPedals[2]->knob5.onValueChange=[this](){ effectsChain.setCompTail((float)fxPedals[2]->knob5.getValue()); };
     fxPedals[2]->knob6.onValueChange=[this](){ effectsChain.setCompEq((float)fxPedals[2]->knob6.getValue()); };
 
-    fxPedals[3]->knob1.setRange(-12,12,1); fxPedals[3]->knob1.setValue(7);
+    // The historical HARMONIZER slot now models the compact EHX Pico Pitch
+    // Fork. Hidden knobs 5 and 6 persist MODE and LATCH/MOMENTARY without
+    // changing the generic session layout or the pedal's historical index.
+    fxPedals[3]->configureExtendedKnobs("VOL", "BLEND", "SWEEP", "SHIFT", "", "");
+    for (auto* knob : { &fxPedals[3]->knob1, &fxPedals[3]->knob2,
+                        &fxPedals[3]->knob3, &fxPedals[3]->knob4 })
+        knob->setComponentID("ehxPicoKnob");
+    cfg(fxPedals[3]->knob1, 0.0, 1.0, 0.50);
+    cfg(fxPedals[3]->knob2, 0.0, 1.0, 0.40);
+    cfg(fxPedals[3]->knob3, 0.0, 4.0, 0.0);
+    fxPedals[3]->knob4.setRange(0.0, 9.0, 1.0); fxPedals[3]->knob4.setValue(7.0);
+    fxPedals[3]->knob5.setRange(0.0, 2.0, 1.0); fxPedals[3]->knob5.setValue(2.0);
+    fxPedals[3]->knob6.setRange(0.0, 1.0, 1.0); fxPedals[3]->knob6.setValue(0.0);
+    fxPedals[3]->knob5.setVisible(false);
+    fxPedals[3]->knob6.setVisible(false);
+    fxPedals[3]->knob7.setVisible(false);
+    fxPedals[3]->knob8.setVisible(false);
+    fxPedals[3]->knob9.setVisible(false);
     fxPedals[3]->onBtn.onClick=[this](){ effectsChain.setHarmonicEnabled(fxPedals[3]->onBtn.getToggleState()); };
-    fxPedals[3]->knob1.onValueChange=[this](){ effectsChain.setHarmonicInterval((int)fxPedals[3]->knob1.getValue()); };
-    fxPedals[3]->knob2.onValueChange=[this](){ effectsChain.setHarmonicMix((float)fxPedals[3]->knob2.getValue()); };
-    fxPedals[3]->knob3.onValueChange=[this](){ effectsChain.setHarmonicLevel((float)fxPedals[3]->knob3.getValue()); };
+    fxPedals[3]->knob1.onValueChange=[this](){ effectsChain.setPicoVolume((float)fxPedals[3]->knob1.getValue()); };
+    fxPedals[3]->knob2.onValueChange=[this](){ effectsChain.setPicoBlend((float)fxPedals[3]->knob2.getValue()); };
+    fxPedals[3]->knob3.onValueChange=[this](){ effectsChain.setPicoSweepSeconds((float)fxPedals[3]->knob3.getValue()); };
+    fxPedals[3]->knob4.onValueChange=[this](){ effectsChain.setPicoShiftIndex((int)fxPedals[3]->knob4.getValue()); fxPedals[3]->repaint(); };
+    fxPedals[3]->knob5.onValueChange=[this](){ effectsChain.setPicoMode((int)fxPedals[3]->knob5.getValue()); fxPedals[3]->repaint(); };
+    fxPedals[3]->setKnobValueFormatter(0, formatPercent01);
+    fxPedals[3]->setKnobValueFormatter(1, formatPercent01);
+    fxPedals[3]->setKnobValueFormatter(2, [](double v){ return juce::String(v, 2) + " s"; });
+    fxPedals[3]->setKnobValueFormatter(3, [](double v)
+    {
+        static const juce::StringArray names {
+            "DETUNE", "m2", "M2", "M3", "P4", "P5", "M6", "1 OCT", "2 OCT", "3 OCT"
+        };
+        return names[juce::jlimit(0, names.size() - 1, juce::roundToInt(v))];
+    });
+    effectsChain.setPicoVolume((float) fxPedals[3]->knob1.getValue());
+    effectsChain.setPicoBlend((float) fxPedals[3]->knob2.getValue());
+    effectsChain.setPicoSweepSeconds((float) fxPedals[3]->knob3.getValue());
+    effectsChain.setPicoShiftIndex((int) fxPedals[3]->knob4.getValue());
+    effectsChain.setPicoMode((int) fxPedals[3]->knob5.getValue());
 
-    fxPedals[4]->configureExtendedKnobs("BLEND", "RISE", "TAIL", "TONE", "SIZE", "DENS");
-    cfg(fxPedals[4]->knob1,0.0,2.0,1.0);
-    cfg(fxPedals[4]->knob2,0.0,1200.0,110.0);
-    cfg(fxPedals[4]->knob3,0.0,2200.0,420.0);
-    cfg(fxPedals[4]->knob4,0.0,1.0,1.0);
-    cfg(fxPedals[4]->knob5,180.0,900.0,900.0);
-    cfg(fxPedals[4]->knob6,0.0,1.0,1.0);
-    fxPedals[4]->onBtn.onClick=[this](){ effectsChain.setFreezeEnabled(fxPedals[4]->onBtn.getToggleState()); };
-    fxPedals[4]->knob1.onValueChange=[this](){ effectsChain.setFreezeMix((float)fxPedals[4]->knob1.getValue()); };
-    fxPedals[4]->knob2.onValueChange=[this](){ effectsChain.setFreezeRiseMs((float)fxPedals[4]->knob2.getValue()); };
-    fxPedals[4]->knob3.onValueChange=[this](){ effectsChain.setFreezeTailMs((float)fxPedals[4]->knob3.getValue()); };
-    fxPedals[4]->knob4.onValueChange=[this](){ effectsChain.setFreezeTone((float)fxPedals[4]->knob4.getValue()); };
-    fxPedals[4]->knob5.onValueChange=[this](){ effectsChain.setFreezeWindowMs((float)fxPedals[4]->knob5.getValue()); };
-    fxPedals[4]->knob6.onValueChange=[this](){ effectsChain.setFreezeDensity((float) fxPedals[4]->knob6.getValue()); };
-    fxPedals[4]->setKnobValueFormatter(0, formatBlend);
-    fxPedals[4]->setKnobValueFormatter(1, formatMs);
-    fxPedals[4]->setKnobValueFormatter(2, formatMs);
-    fxPedals[4]->setKnobValueFormatter(3, formatPercent01);
-    fxPedals[4]->setKnobValueFormatter(4, formatMs);
-    fxPedals[4]->setKnobValueFormatter(5, formatPercent01);
-
-    fxPedals[5]->configureExtendedKnobs("BLEND", "RISE", "TAIL", "TONE", "SIZE", "DENS");
+    // Keep the historical knob indices for session compatibility while placing
+    // the controls according to the Plus Pedal II artwork in resized().
+    fxPedals[5]->configureExtendedKnobs("LEVEL", "RISE", "DECAY", "TONE", "RESONANCE", "LAYERS");
     cfg(fxPedals[5]->knob1,0.0,2.0,1.0);
     cfg(fxPedals[5]->knob2,0.0,1200.0,110.0);
     cfg(fxPedals[5]->knob3,0.0,2200.0,420.0);
     cfg(fxPedals[5]->knob4,0.0,1.0,1.0);
     cfg(fxPedals[5]->knob5,180.0,900.0,900.0);
     cfg(fxPedals[5]->knob6,0.0,1.0,1.0);
+    fxPedals[5]->knob1.setComponentID("gamechangerPlusLargeKnob");
+    fxPedals[5]->knob2.setComponentID("gamechangerPlusLargeKnob");
+    fxPedals[5]->knob3.setComponentID("gamechangerPlusLargeKnob");
+    fxPedals[5]->knob4.setComponentID("gamechangerPlusMiniKnob");
+    fxPedals[5]->knob5.setComponentID("gamechangerPlusMiniKnob");
+    fxPedals[5]->knob6.setComponentID("gamechangerPlusLargeKnob");
     fxPedals[5]->onBtn.onClick=[this](){ effectsChain.setChordFreezeEnabled(fxPedals[5]->onBtn.getToggleState()); };
     fxPedals[5]->knob1.onValueChange=[this](){ effectsChain.setChordFreezeMix((float)fxPedals[5]->knob1.getValue()); };
     fxPedals[5]->knob2.onValueChange=[this](){ effectsChain.setChordFreezeRiseMs((float)fxPedals[5]->knob2.getValue()); };
@@ -813,60 +1629,696 @@ void MainComponent::setupFXPedals()
     fxPedals[6]->knob2.onValueChange=[this](){ effectsChain.setFuzzTone((float)fxPedals[6]->knob2.getValue()); };
     fxPedals[6]->knob3.onValueChange=[this](){ effectsChain.setFuzzLevel((float)fxPedals[6]->knob3.getValue()); };
 
-    cfg(fxPedals[7]->knob1,0,1,0.5); cfg(fxPedals[7]->knob2,0.05,1,0.6); cfg(fxPedals[7]->knob3,0,1,0.8);
-    fxPedals[7]->knob1.setComponentID("mirrorDriveKnob");
-    fxPedals[7]->knob2.setComponentID("mirrorDriveKnob");
-    fxPedals[7]->knob3.setComponentID("mirrorDriveKnob");
-    fxPedals[7]->onBtn.onClick=[this](){ effectsChain.setDriveEnabled(fxPedals[7]->onBtn.getToggleState()); };
-    fxPedals[7]->knob1.onValueChange=[this](){ effectsChain.setDrive((float)fxPedals[7]->knob1.getValue()); };
-    fxPedals[7]->knob2.onValueChange=[this](){ effectsChain.setDriveTone((float)fxPedals[7]->knob2.getValue()); };
-    fxPedals[7]->knob3.onValueChange=[this](){ effectsChain.setDriveLevel((float)fxPedals[7]->knob3.getValue()); };
+    fxPedals[7]->configureExtendedKnobs("VOLUME 1", "GAIN 1", "TONE 1",
+                                        "VOLUME 2", "GAIN 2", "TONE 2");
+    fxPedals[7]->setDisplayName("VOX COOLTRON DUEL OVERDRIVE");
+    for (auto* knob : { &fxPedals[7]->knob1, &fxPedals[7]->knob2,
+                        &fxPedals[7]->knob4, &fxPedals[7]->knob5 })
+        knob->setComponentID("voxCooltronLargeKnob");
+    fxPedals[7]->knob3.setComponentID("voxCooltronSmallKnob");
+    fxPedals[7]->knob6.setComponentID("voxCooltronSmallKnob");
+    fxPedals[7]->knob7.setComponentID("voxCooltronSmallKnob");
+    fxPedals[7]->knob7.setVisible(true);
+    fxPedals[7]->knob7.setRange(0.0, 2.0, 1.0);
+    fxPedals[7]->knob7.setRotaryParameters(-0.88f, 0.88f, true);
+    fxPedals[7]->knob7.setValue(0.0, juce::dontSendNotification);
+    cfg(fxPedals[7]->knob1, 0.0, 1.0, 0.52); // VOLUME 1
+    cfg(fxPedals[7]->knob2, 0.0, 1.0, 0.42); // GAIN 1
+    cfg(fxPedals[7]->knob3, 0.0, 1.0, 0.55); // TONE 1
+    cfg(fxPedals[7]->knob4, 0.0, 1.0, 0.52); // VOLUME 2
+    cfg(fxPedals[7]->knob5, 0.0, 1.0, 0.36); // GAIN 2
+    cfg(fxPedals[7]->knob6, 0.0, 1.0, 0.55); // TONE 2
+    fxPedals[7]->knob1.setTooltip("VOLUME 1");
+    fxPedals[7]->knob2.setTooltip("GAIN 1");
+    fxPedals[7]->knob3.setTooltip("TONE 1");
+    fxPedals[7]->knob4.setTooltip("VOLUME 2");
+    fxPedals[7]->knob5.setTooltip("GAIN 2");
+    fxPedals[7]->knob6.setTooltip("TONE 2");
+    fxPedals[7]->knob7.setTooltip("BASS BOOST: OFF / OD2 / BOTH");
+    fxPedals[7]->onBtn.setTooltip("EFFECT");
+    fxPedals[7]->onBtn.onClick=[this](){ effectsChain.setCooltronEnabled(fxPedals[7]->onBtn.getToggleState()); };
+    fxPedals[7]->onTertiaryFootswitch=[this](){
+        effectsChain.setCooltronOd2Selected(fxPedals[7]->isTertiaryFootswitchLatched());
+    };
+    fxPedals[7]->knob1.onValueChange=[this](){ effectsChain.setCooltronVolume1((float)fxPedals[7]->knob1.getValue()); };
+    fxPedals[7]->knob2.onValueChange=[this](){ effectsChain.setCooltronGain1((float)fxPedals[7]->knob2.getValue()); };
+    fxPedals[7]->knob3.onValueChange=[this](){ effectsChain.setCooltronTone1((float)fxPedals[7]->knob3.getValue()); };
+    fxPedals[7]->knob4.onValueChange=[this](){ effectsChain.setCooltronVolume2((float)fxPedals[7]->knob4.getValue()); };
+    fxPedals[7]->knob5.onValueChange=[this](){ effectsChain.setCooltronGain2((float)fxPedals[7]->knob5.getValue()); };
+    fxPedals[7]->knob6.onValueChange=[this](){ effectsChain.setCooltronTone2((float)fxPedals[7]->knob6.getValue()); };
+    fxPedals[7]->knob7.onValueChange=[this](){
+        fxPedals[7]->setCooltronBassBoost(juce::roundToInt(fxPedals[7]->knob7.getValue()));
+    };
+    fxPedals[7]->onCooltronBassBoostChange=[this](int position){
+        effectsChain.setCooltronBassBoost(position);
+    };
+    effectsChain.setCooltronVolume1((float)fxPedals[7]->knob1.getValue());
+    effectsChain.setCooltronGain1((float)fxPedals[7]->knob2.getValue());
+    effectsChain.setCooltronTone1((float)fxPedals[7]->knob3.getValue());
+    effectsChain.setCooltronVolume2((float)fxPedals[7]->knob4.getValue());
+    effectsChain.setCooltronGain2((float)fxPedals[7]->knob5.getValue());
+    effectsChain.setCooltronTone2((float)fxPedals[7]->knob6.getValue());
+    effectsChain.setCooltronEnabled(fxPedals[7]->onBtn.getToggleState());
+    effectsChain.setCooltronOd2Selected(fxPedals[7]->isTertiaryFootswitchLatched());
+    effectsChain.setCooltronBassBoost(fxPedals[7]->getCooltronBassBoost());
 
-    cfg(fxPedals[8]->knob1,0,1,0.5); cfg(fxPedals[8]->knob2,0.1,8,1.2); cfg(fxPedals[8]->knob3,0,1,0.35);
+    fxPedals[8]->knob1.setComponentID("smallCloneMix");
+    fxPedals[8]->knob2.setComponentID("smallCloneRateKnob");
+    fxPedals[8]->knob3.setComponentID("smallCloneDepthSwitch");
+    cfg(fxPedals[8]->knob1,0,1,0.5); cfg(fxPedals[8]->knob2,0.1,8,1.2);
+    fxPedals[8]->knob3.setRange(0.0, 1.0, 1.0); fxPedals[8]->knob3.setValue(0.0);
+    fxPedals[8]->knob1.setTooltip("MIX - arrastrar sobre la placa SMALL CLONE");
+    fxPedals[8]->knob2.setTooltip("RATE");
+    fxPedals[8]->knob3.setTooltip("DEPTH");
     fxPedals[8]->onBtn.onClick=[this](){ effectsChain.setChorusEnabled(fxPedals[8]->onBtn.getToggleState()); };
     fxPedals[8]->knob1.onValueChange=[this](){ effectsChain.setChorusMix((float)fxPedals[8]->knob1.getValue()); };
     fxPedals[8]->knob2.onValueChange=[this](){ effectsChain.setChorusRate((float)fxPedals[8]->knob2.getValue()); };
     fxPedals[8]->knob3.onValueChange=[this](){ effectsChain.setChorusDepth((float)fxPedals[8]->knob3.getValue()); };
+    fxPedals[8]->setKnobValueFormatter(0, formatPercent01);
+    fxPedals[8]->setKnobValueFormatter(1, [](double v){ return juce::String(v, 2) + " Hz"; });
+    fxPedals[8]->setKnobValueFormatter(2, [](double v){ return v >= 0.5 ? "HIGH" : "LOW"; });
+    effectsChain.setChorusMix((float) fxPedals[8]->knob1.getValue());
+    effectsChain.setChorusRate((float) fxPedals[8]->knob2.getValue());
+    effectsChain.setChorusDepth((float) fxPedals[8]->knob3.getValue());
 
-    cfg(fxPedals[9]->knob1,0,1,0.75); cfg(fxPedals[9]->knob2,0.2,12.0,3.2); cfg(fxPedals[9]->knob3,0.0,1.0,0.55);
+    fxPedals[9]->configureExtendedKnobs("DEPTH", "MODE", "RATE / f IN", "BEATS", "SYM / f OUT", "");
+    for (auto* knob : { &fxPedals[9]->knob1, &fxPedals[9]->knob2, &fxPedals[9]->knob3,
+                        &fxPedals[9]->knob4, &fxPedals[9]->knob5 })
+        knob->setComponentID("dedaloJetKnob");
+    fxPedals[9]->knob6.setVisible(false);
+    cfg(fxPedals[9]->knob1, 0.0, 1.0, 0.72);
+    fxPedals[9]->knob2.setRange(0.0, 4.0, 1.0); fxPedals[9]->knob2.setValue(3.0);
+    cfg(fxPedals[9]->knob3, 0.4, 14.0, 3.2);
+    fxPedals[9]->knob4.setRange(0.0, 6.0, 1.0); fxPedals[9]->knob4.setValue(2.0);
+    cfg(fxPedals[9]->knob5, 0.0, 1.0, 0.5);
     fxPedals[9]->onBtn.onClick=[this](){ effectsChain.setTremoloEnabled(fxPedals[9]->onBtn.getToggleState()); };
-    fxPedals[9]->knob1.onValueChange=[this](){ effectsChain.setTremoloMix((float)fxPedals[9]->knob1.getValue()); };
-    fxPedals[9]->knob2.onValueChange=[this](){ effectsChain.setTremoloRate((float)fxPedals[9]->knob2.getValue()); };
-    fxPedals[9]->knob3.onValueChange=[this](){ effectsChain.setTremoloDepth((float)fxPedals[9]->knob3.getValue()); };
+    fxPedals[9]->knob1.onValueChange=[this](){ effectsChain.setTremoloDepth((float)fxPedals[9]->knob1.getValue()); };
+    fxPedals[9]->knob2.onValueChange=[this](){ effectsChain.setTremoloMode(juce::roundToInt(fxPedals[9]->knob2.getValue())); };
+    fxPedals[9]->knob3.onValueChange=[this](){ effectsChain.setTremoloRate((float)fxPedals[9]->knob3.getValue()); };
+    fxPedals[9]->knob4.onValueChange=[this](){ effectsChain.setTremoloBeats(juce::roundToInt(fxPedals[9]->knob4.getValue())); };
+    fxPedals[9]->knob5.onValueChange=[this](){ effectsChain.setTremoloSymmetry((float)fxPedals[9]->knob5.getValue()); };
+    fxPedals[9]->onSecondaryFootswitch=[this]()
+    {
+        effectsChain.setTremoloControlPressed(true);
+        if (juce::roundToInt(fxPedals[9]->knob2.getValue()) == 4)
+            return;
+        effectsChain.syncTremolo();
+        const auto now = juce::Time::currentTimeMillis();
+        const auto elapsed = now - lastTremoloTapMs;
+        lastTremoloTapMs = now;
+        if (elapsed >= 70 && elapsed <= 2500)
+            fxPedals[9]->knob3.setValue(juce::jlimit(0.4, 14.0, 1000.0 / (double)elapsed),
+                                        juce::sendNotificationSync);
+    };
+    fxPedals[9]->onSecondaryFootswitchRelease=[this]()
+    {
+        effectsChain.setTremoloControlPressed(false);
+    };
 
-    cfg(fxPedals[10]->knob1,0,1,0.3); cfg(fxPedals[10]->knob2,50,1500,400); cfg(fxPedals[10]->knob3,0,0.95,0.4);
+    fxPedals[10]->configureNineKnobs("TIME", "REPEATS", "FILTER", "GRIT", "SPEED",
+                                     "DEPTH", "MIX", "TYPE", "VALUE");
+    for (auto* knob : { &fxPedals[10]->knob1, &fxPedals[10]->knob2, &fxPedals[10]->knob3,
+                        &fxPedals[10]->knob4, &fxPedals[10]->knob5, &fxPedals[10]->knob6,
+                        &fxPedals[10]->knob7, &fxPedals[10]->knob8, &fxPedals[10]->knob9 })
+        knob->setComponentID("timeLineKnob");
+    cfg(fxPedals[10]->knob1, 50.0, 1500.0, 400.0); // TIME
+    cfg(fxPedals[10]->knob2, 0.0, 0.95, 0.40);     // REPEATS
+    cfg(fxPedals[10]->knob3, 0.0, 1.0, 0.62);      // FILTER
+    cfg(fxPedals[10]->knob4, 0.0, 1.0, 0.12);      // GRIT
+    cfg(fxPedals[10]->knob5, 0.02, 12.0, 0.35);    // SPEED
+    cfg(fxPedals[10]->knob6, 0.0, 1.0, 0.10);      // DEPTH
+    cfg(fxPedals[10]->knob7, 0.0, 1.0, 0.30);      // MIX
+    fxPedals[10]->knob8.setRange(0.0, 11.0, 1.0); fxPedals[10]->knob8.setValue(6.0); // TYPE
+    cfg(fxPedals[10]->knob9, 0.0, 1.0, 0.50);      // VALUE
     fxPedals[10]->onBtn.onClick=[this](){ effectsChain.setDelayEnabled(fxPedals[10]->onBtn.getToggleState()); };
-    fxPedals[10]->knob1.onValueChange=[this](){ effectsChain.setDelayMix((float)fxPedals[10]->knob1.getValue()); };
-    fxPedals[10]->knob2.onValueChange=[this](){ effectsChain.setDelayTimeMs((float)fxPedals[10]->knob2.getValue()); };
-    fxPedals[10]->knob3.onValueChange=[this](){ effectsChain.setDelayFeedback((float)fxPedals[10]->knob3.getValue()); };
+    fxPedals[10]->knob1.onValueChange=[this](){ effectsChain.setDelayTimeMs((float)fxPedals[10]->knob1.getValue()); fxPedals[10]->repaint(); };
+    fxPedals[10]->knob2.onValueChange=[this](){ effectsChain.setDelayFeedback((float)fxPedals[10]->knob2.getValue()); };
+    fxPedals[10]->knob3.onValueChange=[this](){ effectsChain.setDelayFilter((float)fxPedals[10]->knob3.getValue()); };
+    fxPedals[10]->knob4.onValueChange=[this](){ effectsChain.setDelayGrit((float)fxPedals[10]->knob4.getValue()); };
+    fxPedals[10]->knob5.onValueChange=[this](){ effectsChain.setDelayModRate((float)fxPedals[10]->knob5.getValue()); };
+    fxPedals[10]->knob6.onValueChange=[this](){ effectsChain.setDelayModDepth((float)fxPedals[10]->knob6.getValue()); };
+    fxPedals[10]->knob7.onValueChange=[this](){ effectsChain.setDelayMix((float)fxPedals[10]->knob7.getValue()); };
+    fxPedals[10]->knob8.onValueChange=[this](){ effectsChain.setDelayType(juce::roundToInt(fxPedals[10]->knob8.getValue())); fxPedals[10]->repaint(); };
+    fxPedals[10]->knob9.onValueChange=[this](){ effectsChain.setDelayValue((float)fxPedals[10]->knob9.getValue()); fxPedals[10]->repaint(); };
+    fxPedals[10]->onSecondaryFootswitch=[this]()
+    {
+        const double nextValue = fxPedals[10]->knob9.getValue() < 0.5 ? 0.75 : 0.25;
+        fxPedals[10]->knob9.setValue(nextValue, juce::sendNotificationSync);
+    };
+    fxPedals[10]->onTap=[this]()
+    {
+        const juce::int64 now = juce::Time::currentTimeMillis();
+        const juce::int64 elapsed = now - lastDelayTapMs;
+        lastDelayTapMs = now;
+        if (elapsed >= 50 && elapsed <= 1500)
+            fxPedals[10]->knob1.setValue((double) elapsed, juce::sendNotificationSync);
+    };
+    fxPedals[10]->setKnobValueFormatter(0, formatMs);
+    fxPedals[10]->setKnobValueFormatter(1, formatPercent01);
+    fxPedals[10]->setKnobValueFormatter(2, formatPercent01);
+    fxPedals[10]->setKnobValueFormatter(3, formatPercent01);
+    fxPedals[10]->setKnobValueFormatter(4, [](double v){ return juce::String(v, 2) + " Hz"; });
+    fxPedals[10]->setKnobValueFormatter(5, formatPercent01);
+    fxPedals[10]->setKnobValueFormatter(6, formatPercent01);
+    effectsChain.setDelayTimeMs((float) fxPedals[10]->knob1.getValue());
+    effectsChain.setDelayFeedback((float) fxPedals[10]->knob2.getValue());
+    effectsChain.setDelayFilter((float) fxPedals[10]->knob3.getValue());
+    effectsChain.setDelayGrit((float) fxPedals[10]->knob4.getValue());
+    effectsChain.setDelayModRate((float) fxPedals[10]->knob5.getValue());
+    effectsChain.setDelayModDepth((float) fxPedals[10]->knob6.getValue());
+    effectsChain.setDelayMix((float) fxPedals[10]->knob7.getValue());
+    effectsChain.setDelayType(juce::roundToInt(fxPedals[10]->knob8.getValue()));
+    effectsChain.setDelayValue((float) fxPedals[10]->knob9.getValue());
 
-    cfg(fxPedals[11]->knob1,0,1,0.22); cfg(fxPedals[11]->knob2,0.05,1.0,0.45); cfg(fxPedals[11]->knob3,0.05,0.95,0.3);
+    fxPedals[11]->configureNineKnobs("DECAY", "PRE-DELAY", "MIX", "TONE", "PARAM 1",
+                                        "PARAM 2", "MOD", "TYPE", "VALUE");
+    for (auto* knob : { &fxPedals[11]->knob1, &fxPedals[11]->knob2, &fxPedals[11]->knob3,
+                        &fxPedals[11]->knob4, &fxPedals[11]->knob5, &fxPedals[11]->knob6,
+                        &fxPedals[11]->knob7, &fxPedals[11]->knob8, &fxPedals[11]->knob9 })
+        knob->setComponentID("bigSkyKnob");
+    cfg(fxPedals[11]->knob1, 0.05, 1.0, 0.55);       // DECAY
+    cfg(fxPedals[11]->knob2, 0.0, 1500.0, 80.0);    // PRE-DELAY
+    cfg(fxPedals[11]->knob3, 0.0, 1.0, 0.28);       // MIX
+    cfg(fxPedals[11]->knob4, 0.0, 1.0, 0.58);       // TONE
+    cfg(fxPedals[11]->knob5, 0.0, 1.0, 0.85);       // PARAM 1 / WIDTH
+    cfg(fxPedals[11]->knob6, 0.0, 1.0, 0.65);       // PARAM 2 / DIFFUSION
+    cfg(fxPedals[11]->knob7, 0.0, 1.0, 0.18);       // MOD
+    fxPedals[11]->knob8.setRange(0.0, 11.0, 1.0); fxPedals[11]->knob8.setValue(1.0); // TYPE
+    cfg(fxPedals[11]->knob9, 0.0, 1.0, 0.5);        // VALUE
     fxPedals[11]->onBtn.onClick=[this](){ effectsChain.setReverbEnabled(fxPedals[11]->onBtn.getToggleState()); };
-    fxPedals[11]->knob1.onValueChange=[this](){ effectsChain.setReverbMix((float)fxPedals[11]->knob1.getValue()); };
-    fxPedals[11]->knob2.onValueChange=[this](){ effectsChain.setReverbRoomSize((float)fxPedals[11]->knob2.getValue()); };
-    fxPedals[11]->knob3.onValueChange=[this](){ effectsChain.setReverbDamping((float)fxPedals[11]->knob3.getValue()); };
+    fxPedals[11]->knob1.onValueChange=[this](){ effectsChain.setReverbRoomSize((float)fxPedals[11]->knob1.getValue()); fxPedals[11]->repaint(); };
+    fxPedals[11]->knob2.onValueChange=[this](){ effectsChain.setReverbPreDelayMs((float)fxPedals[11]->knob2.getValue()); fxPedals[11]->repaint(); };
+    fxPedals[11]->knob3.onValueChange=[this](){ effectsChain.setReverbMix((float)fxPedals[11]->knob3.getValue()); fxPedals[11]->repaint(); };
+    fxPedals[11]->knob4.onValueChange=[this](){ const float tone=(float)fxPedals[11]->knob4.getValue(); effectsChain.setReverbTone(tone); effectsChain.setReverbDamping(1.0f-tone); fxPedals[11]->repaint(); };
+    fxPedals[11]->knob5.onValueChange=[this](){ effectsChain.setReverbWidth((float)fxPedals[11]->knob5.getValue()); fxPedals[11]->repaint(); };
+    fxPedals[11]->knob6.onValueChange=[this](){ effectsChain.setReverbDiffusion((float)fxPedals[11]->knob6.getValue()); fxPedals[11]->repaint(); };
+    fxPedals[11]->knob7.onValueChange=[this](){ effectsChain.setReverbMod((float)fxPedals[11]->knob7.getValue()); fxPedals[11]->repaint(); };
+    fxPedals[11]->knob8.onValueChange=[this](){ effectsChain.setReverbType(juce::roundToInt(fxPedals[11]->knob8.getValue())); fxPedals[11]->repaint(); };
+    fxPedals[11]->knob9.onValueChange=[this](){ effectsChain.setReverbValue((float)fxPedals[11]->knob9.getValue()); fxPedals[11]->repaint(); };
+    fxPedals[11]->onSecondaryFootswitch=[this]()
+    {
+        const int type = juce::roundToInt(fxPedals[11]->knob8.getValue());
+        fxPedals[11]->knob8.setValue((type + 11) % 12, juce::sendNotificationSync);
+    };
+    fxPedals[11]->onTertiaryFootswitch=[this]()
+    {
+        effectsChain.setReverbInfinite(fxPedals[11]->isTertiaryFootswitchLatched());
+    };
+    effectsChain.setReverbRoomSize((float)fxPedals[11]->knob1.getValue());
+    effectsChain.setReverbPreDelayMs((float)fxPedals[11]->knob2.getValue());
+    effectsChain.setReverbMix((float)fxPedals[11]->knob3.getValue());
+    effectsChain.setReverbTone((float)fxPedals[11]->knob4.getValue());
+    effectsChain.setReverbDamping(1.0f - (float)fxPedals[11]->knob4.getValue());
+    effectsChain.setReverbWidth((float)fxPedals[11]->knob5.getValue());
+    effectsChain.setReverbDiffusion((float)fxPedals[11]->knob6.getValue());
+    effectsChain.setReverbMod((float)fxPedals[11]->knob7.getValue());
+    effectsChain.setReverbType(juce::roundToInt(fxPedals[11]->knob8.getValue()));
+    effectsChain.setReverbValue((float)fxPedals[11]->knob9.getValue());
 
-    fxPedals[12]->configureExtendedKnobs("63", "250", "500", "2K", "4K", "8K");
-    cfg(fxPedals[12]->knob1, -18.0, 18.0, 0.0);
-    cfg(fxPedals[12]->knob2, -18.0, 18.0, 0.0);
-    cfg(fxPedals[12]->knob3, -18.0, 18.0, 0.0);
-    cfg(fxPedals[12]->knob4, -18.0, 18.0, 0.0);
-    cfg(fxPedals[12]->knob5, -18.0, 18.0, 0.0);
-    cfg(fxPedals[12]->knob6, -18.0, 18.0, 0.0);
-    fxPedals[12]->onBtn.onClick=[this](){ effectsChain.setEqEnabled(fxPedals[12]->onBtn.getToggleState()); };
-    fxPedals[12]->knob1.onValueChange=[this](){ effectsChain.setEqBandGain(1, (float) fxPedals[12]->knob1.getValue()); };
-    fxPedals[12]->knob2.onValueChange=[this](){ effectsChain.setEqBandGain(3, (float) fxPedals[12]->knob2.getValue()); };
-    fxPedals[12]->knob3.onValueChange=[this](){ effectsChain.setEqBandGain(4, (float) fxPedals[12]->knob3.getValue()); };
-    fxPedals[12]->knob4.onValueChange=[this](){ effectsChain.setEqBandGain(6, (float) fxPedals[12]->knob4.getValue()); };
-    fxPedals[12]->knob5.onValueChange=[this](){ effectsChain.setEqBandGain(7, (float) fxPedals[12]->knob5.getValue()); };
-    fxPedals[12]->knob6.onValueChange=[this](){ effectsChain.setEqBandGain(8, (float) fxPedals[12]->knob6.getValue()); };
-    fxPedals[12]->setKnobValueFormatter(0, formatDb);
-    fxPedals[12]->setKnobValueFormatter(1, formatDb);
-    fxPedals[12]->setKnobValueFormatter(2, formatDb);
-    fxPedals[12]->setKnobValueFormatter(3, formatDb);
-    fxPedals[12]->setKnobValueFormatter(4, formatDb);
-    fxPedals[12]->setKnobValueFormatter(5, formatDb);
+    fxPedals[12]->configureTenBandGraphicEq();
+    cfg(fxPedals[12]->eqVolumeSlider, -12.0, 12.0, 0.0);
+    cfg(fxPedals[12]->eqGainSlider, -12.0, 12.0, 0.0);
+    fxPedals[12]->eqVolumeSlider.onValueChange=[this]()
+    {
+        effectsChain.setEqOutputVolume((float)fxPedals[12]->eqVolumeSlider.getValue());
+        fxPedals[12]->repaint();
+    };
+    fxPedals[12]->eqGainSlider.onValueChange=[this]()
+    {
+        effectsChain.setEqInputGain((float)fxPedals[12]->eqGainSlider.getValue());
+        fxPedals[12]->repaint();
+    };
+    fxPedals[12]->onBtn.onClick=[this]()
+    {
+        const bool active = fxPedals[12]->onBtn.getToggleState();
+        effectsChain.setEqEnabled(active);
+        for (auto& slider : fxPedals[12]->eqBandSliders)
+            slider.setColour(juce::Slider::trackColourId,
+                             active ? juce::Colour(0xff29b7ff) : juce::Colour(0xff18506b));
+        fxPedals[12]->eqVolumeSlider.setColour(juce::Slider::trackColourId,
+                                               active ? juce::Colour(0xff29b7ff) : juce::Colour(0xff18506b));
+        fxPedals[12]->eqGainSlider.setColour(juce::Slider::trackColourId,
+                                             active ? juce::Colour(0xff29b7ff) : juce::Colour(0xff18506b));
+        fxPedals[12]->repaint();
+    };
+    for (int band = 0; band < 10; ++band)
+    {
+        auto& slider = fxPedals[12]->eqBandSliders[(size_t)band];
+        cfg(slider, -12.0, 12.0, 0.0);
+        slider.onValueChange = [this, band]()
+        {
+            effectsChain.setEqBandGain(band, (float)fxPedals[12]->eqBandSliders[(size_t)band].getValue());
+            fxPedals[12]->repaint();
+        };
+    }
 
+    // La biblioteca de presets vive fuera de la sesion. Los controles se
+    // colocan en una franja propia debajo de cada pedal, nunca sobre el asset.
+    for (int pedalIndex = 0; pedalIndex < kNumFxPedals; ++pedalIndex)
+    {
+        if (fxPedals[pedalIndex] == nullptr)
+            continue;
+
+        auto& selector = pedalPresetSelectors[(size_t) pedalIndex];
+        auto& save = pedalPresetSaveButtons[(size_t) pedalIndex];
+        auto& remove = pedalPresetDeleteButtons[(size_t) pedalIndex];
+        selector.setTextWhenNothingSelected("PRESETS");
+        selector.setTooltip("Elegir un preset guardado para este pedal");
+        selector.onChange = [this, pedalIndex]()
+        {
+            const auto name = pedalPresetSelectors[(size_t) pedalIndex].getText();
+            if (name.isNotEmpty() && name != "PRESETS")
+                applyPedalPreset(pedalIndex, name);
+        };
+        save.setButtonText("+");
+        save.setTooltip("Guardar o sobrescribir el preset seleccionado");
+        save.onClick = [this, pedalIndex]() { savePedalPreset(pedalIndex); };
+        remove.setButtonText("-");
+        remove.setTooltip("Borrar el preset seleccionado");
+        remove.onClick = [this, pedalIndex]() { deletePedalPreset(pedalIndex); };
+        fxContainer.addAndMakeVisible(selector);
+        fxContainer.addAndMakeVisible(save);
+        fxContainer.addAndMakeVisible(remove);
+    }
+    loadPedalPresets();
+    for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
+        refreshVstPresetSelector(slot);
+
+}
+
+juce::File MainComponent::getPedalPresetFile() const
+{
+    auto directory = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                         .getChildFile("Loopernico");
+    return directory.getChildFile("pedal-presets.xml");
+}
+
+void MainComponent::loadPedalPresets()
+{
+    pedalPresets = juce::ValueTree("LOOPERNICO_PEDAL_PRESETS");
+    const auto file = getPedalPresetFile();
+    if (file.existsAsFile())
+        if (auto xml = juce::parseXML(file))
+        {
+            auto loaded = juce::ValueTree::fromXml(*xml);
+            if (loaded.isValid() && loaded.hasType("LOOPERNICO_PEDAL_PRESETS"))
+                pedalPresets = loaded;
+        }
+
+    for (int pedalIndex = 0; pedalIndex < kNumFxPedals; ++pedalIndex)
+        refreshPedalPresetSelector(pedalIndex);
+}
+
+void MainComponent::refreshPedalPresetSelector(int pedalIndex)
+{
+    if (pedalIndex < 0 || pedalIndex >= kNumFxPedals || fxPedals[pedalIndex] == nullptr)
+        return;
+
+    auto& selector = pedalPresetSelectors[(size_t) pedalIndex];
+    const auto previous = selector.getText();
+    selector.clear(juce::dontSendNotification);
+    int itemId = 1;
+    for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+    {
+        const auto pedal = pedalPresets.getChild(i);
+        if ((int) pedal.getProperty("index", -1) != pedalIndex)
+            continue;
+        for (int p = 0; p < pedal.getNumChildren(); ++p)
+        {
+            const auto preset = pedal.getChild(p);
+            if (preset.hasType("PRESET"))
+                selector.addItem(preset.getProperty("name", "Preset").toString(), itemId++);
+        }
+    }
+    selector.setText(previous, juce::dontSendNotification);
+    pedalPresetDeleteButtons[(size_t) pedalIndex].setEnabled(selector.getNumItems() > 0);
+}
+
+void MainComponent::refreshVstPresetSelector(int slot)
+{
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
+        return;
+
+    auto& selector = vstPresetSelectors[(size_t) slot];
+    const auto previous = selector.getText();
+    selector.clear(juce::dontSendNotification);
+    int itemId = 1;
+    for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+    {
+        const auto node = pedalPresets.getChild(i);
+        if (node.getProperty("kind", "PEDAL").toString() != "VST"
+            || (int) node.getProperty("index", -1) != slot)
+            continue;
+        for (int p = 0; p < node.getNumChildren(); ++p)
+            if (node.getChild(p).hasType("PRESET"))
+                selector.addItem(node.getChild(p).getProperty("name", "Preset").toString(), itemId++);
+    }
+    selector.setText(previous, juce::dontSendNotification);
+    vstPresetDeleteButtons[(size_t) slot].setEnabled(selector.getNumItems() > 0);
+}
+
+void MainComponent::saveVstPreset(int slot)
+{
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals)
+        || !effectsChain.hasExternalPlugin(slot))
+        return;
+
+    auto* alert = new juce::AlertWindow("Guardar preset VST3",
+                                        "Nombre para " + effectsChain.getExternalPluginName(slot),
+                                        juce::AlertWindow::NoIcon);
+    const auto selectedName = vstPresetSelectors[(size_t) slot].getText();
+    alert->addTextEditor("name", selectedName.isNotEmpty() && selectedName != "PRESETS"
+                                      ? selectedName : "Mi preset", "Nombre");
+    alert->addButton("GUARDAR", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    alert->addButton("CANCELAR", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    alert->enterModalState(true, juce::ModalCallbackFunction::create(
+        [this, alert, slot](int result)
+        {
+            if (result != 1)
+                return;
+            const auto name = alert->getTextEditorContents("name").trim();
+            if (name.isEmpty())
+                return;
+
+            saveVstPresetWithName(slot, name);
+        }));
+}
+
+void MainComponent::saveVstPresetWithName(int slot, const juce::String& name)
+{
+    juce::ValueTree node;
+    for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+    {
+        const auto candidate = pedalPresets.getChild(i);
+        if (candidate.getProperty("kind", "PEDAL").toString() == "VST"
+            && (int) candidate.getProperty("index", -1) == slot)
+            node = candidate;
+    }
+    bool confirmOverwrite = false;
+    if (node.isValid())
+        for (int i = 0; i < node.getNumChildren(); ++i)
+            confirmOverwrite = confirmOverwrite
+                || node.getChild(i).getProperty("name", "").toString() == name;
+    if (confirmOverwrite)
+    {
+        juce::AlertWindow::showOkCancelBox(
+            juce::AlertWindow::WarningIcon, "Sobrescribir preset",
+            "Ya existe un preset llamado \"" + name + "\". \n¿Sobrescribirlo?", "SOBRESCRIBIR", "CANCELAR",
+            nullptr, juce::ModalCallbackFunction::create(
+                [this, slot, name](int result)
+                {
+                    if (result != 1) return;
+                    for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+                    {
+                        auto candidate = pedalPresets.getChild(i);
+                        if (candidate.getProperty("kind", "PEDAL").toString() == "VST"
+                            && (int) candidate.getProperty("index", -1) == slot)
+                            for (int p = candidate.getNumChildren() - 1; p >= 0; --p)
+                                if (candidate.getChild(p).getProperty("name", "").toString() == name)
+                                    candidate.removeChild(p, nullptr);
+                    }
+                    saveVstPresetWithName(slot, name);
+                }));
+        return;
+    }
+
+    juce::MemoryBlock state;
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        if (auto* plugin = effectsChain.getExternalPluginInstance(slot))
+            plugin->suspendProcessing(true);
+        effectsChain.copyExternalPluginState(state, slot);
+        if (auto* plugin = effectsChain.getExternalPluginInstance(slot))
+            plugin->suspendProcessing(false);
+    }
+    if (state.getSize() == 0)
+        return;
+    if (!node.isValid())
+    {
+        node = juce::ValueTree("PEDAL");
+        node.setProperty("kind", "VST", nullptr);
+        node.setProperty("index", slot, nullptr);
+        pedalPresets.addChild(node, -1, nullptr);
+    }
+    for (int i = node.getNumChildren() - 1; i >= 0; --i)
+        if (node.getChild(i).getProperty("name", "").toString() == name)
+            node.removeChild(i, nullptr);
+    auto preset = juce::ValueTree("PRESET");
+    preset.setProperty("name", name, nullptr);
+    preset.setProperty("pluginPath", effectsChain.getExternalPluginPath(slot), nullptr);
+    preset.setProperty("enabled", effectsChain.isExternalPluginEnabled(slot), nullptr);
+    preset.setProperty("stateBase64", state.toBase64Encoding(), nullptr);
+    node.addChild(preset, -1, nullptr);
+    const auto file = getPedalPresetFile();
+    file.getParentDirectory().createDirectory();
+    if (auto xml = pedalPresets.createXml())
+    {
+        file.getParentDirectory().createDirectory();
+        xml->writeTo(file);
+    }
+    refreshVstPresetSelector(slot);
+    vstPresetSelectors[(size_t) slot].setText(name, juce::dontSendNotification);
+}
+
+void MainComponent::deleteVstPreset(int slot)
+{
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
+        return;
+    const auto name = vstPresetSelectors[(size_t) slot].getText();
+    if (name.isEmpty() || name == "PRESETS")
+        return;
+    juce::AlertWindow::showOkCancelBox(
+        juce::AlertWindow::WarningIcon, "Borrar preset", "¿Borrar \"" + name + "\"?", "BORRAR", "CANCELAR",
+        nullptr, juce::ModalCallbackFunction::create([this, slot, name](int result)
+        {
+            if (result != 1) return;
+            for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+            {
+                auto node = pedalPresets.getChild(i);
+                if (node.getProperty("kind", "PEDAL").toString() == "VST"
+                    && (int) node.getProperty("index", -1) == slot)
+                    for (int p = node.getNumChildren() - 1; p >= 0; --p)
+                        if (node.getChild(p).getProperty("name", "").toString() == name)
+                            node.removeChild(p, nullptr);
+            }
+            if (auto xml = pedalPresets.createXml()) xml->writeTo(getPedalPresetFile());
+            refreshVstPresetSelector(slot);
+            vstPresetSelectors[(size_t) slot].setSelectedItemIndex(0, juce::dontSendNotification);
+            vstPresetDeleteButtons[(size_t) slot].setEnabled(false);
+        }));
+}
+
+void MainComponent::applyVstPreset(int slot, const juce::String& presetName)
+{
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals)
+        || !effectsChain.hasExternalPlugin(slot))
+        return;
+
+    juce::ValueTree preset;
+    for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+    {
+        const auto node = pedalPresets.getChild(i);
+        if (node.getProperty("kind", "PEDAL").toString() != "VST"
+            || (int) node.getProperty("index", -1) != slot)
+            continue;
+        for (int p = 0; p < node.getNumChildren(); ++p)
+            if (node.getChild(p).getProperty("name", "").toString() == presetName)
+                preset = node.getChild(p);
+    }
+    if (!preset.isValid())
+        return;
+
+    const auto storedPath = preset.getProperty("pluginPath", "").toString();
+    if (storedPath != effectsChain.getExternalPluginPath(slot))
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                                               "Preset VST3",
+                                               "Este preset pertenece a otro plugin VST3.");
+        return;
+    }
+
+    juce::MemoryBlock state;
+    if (!state.fromBase64Encoding(preset.getProperty("stateBase64", "").toString()))
+        return;
+    juce::String error;
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        if (auto* plugin = effectsChain.getExternalPluginInstance(slot))
+            plugin->suspendProcessing(true);
+        effectsChain.restoreExternalPluginState(state, error, slot);
+        if (auto* plugin = effectsChain.getExternalPluginInstance(slot))
+            plugin->suspendProcessing(false);
+    }
+    if (error.isNotEmpty())
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                               "No se pudo cargar el preset VST3", error);
+    effectsChain.setExternalPluginEnabled((bool) preset.getProperty("enabled", true), slot);
+    updateExternalVstUi(slot);
+}
+
+void MainComponent::savePedalPreset(int pedalIndex)
+{
+    if (pedalIndex < 0 || pedalIndex >= kNumFxPedals || fxPedals[pedalIndex] == nullptr)
+        return;
+
+    auto* alert = new juce::AlertWindow("Guardar preset",
+                                        "Nombre para la configuracion de "
+                                            + fxPedals[pedalIndex]->getDisplayName(),
+                                        juce::AlertWindow::NoIcon);
+    const auto selectedName = pedalPresetSelectors[(size_t) pedalIndex].getText();
+    alert->addTextEditor("name", selectedName.isNotEmpty() && selectedName != "PRESETS"
+                                      ? selectedName : "Mi preset", "Nombre");
+    alert->addButton("GUARDAR", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    alert->addButton("CANCELAR", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    alert->enterModalState(true, juce::ModalCallbackFunction::create(
+        [this, pedalIndex, alert](int result)
+        {
+            if (result != 1)
+                return;
+
+            const auto name = alert->getTextEditorContents("name").trim();
+            if (name.isEmpty())
+                return;
+
+            savePedalPresetWithName(pedalIndex, name);
+        }));
+}
+
+void MainComponent::savePedalPresetWithName(int pedalIndex, const juce::String& name)
+{
+    juce::ValueTree pedal;
+    for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+    {
+        const auto candidate = pedalPresets.getChild(i);
+        if (candidate.getProperty("kind", "PEDAL").toString() != "VST"
+            && (int) candidate.getProperty("index", -1) == pedalIndex)
+            pedal = candidate;
+    }
+    bool confirmOverwrite = false;
+    if (pedal.isValid())
+        for (int i = 0; i < pedal.getNumChildren(); ++i)
+            confirmOverwrite = confirmOverwrite
+                || pedal.getChild(i).getProperty("name", "").toString() == name;
+    if (confirmOverwrite)
+    {
+        juce::AlertWindow::showOkCancelBox(
+            juce::AlertWindow::WarningIcon, "Sobrescribir preset",
+            "Ya existe un preset llamado \"" + name + "\".\nSobrescribirlo?",
+            "SOBRESCRIBIR", "CANCELAR", nullptr,
+            juce::ModalCallbackFunction::create([this, pedalIndex, name](int result)
+            {
+                if (result != 1) return;
+                for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+                {
+                    auto candidate = pedalPresets.getChild(i);
+                    if (candidate.getProperty("kind", "PEDAL").toString() != "VST"
+                        && (int) candidate.getProperty("index", -1) == pedalIndex)
+                        for (int p = candidate.getNumChildren() - 1; p >= 0; --p)
+                            if (candidate.getChild(p).getProperty("name", "").toString() == name)
+                                candidate.removeChild(p, nullptr);
+                }
+                savePedalPresetWithName(pedalIndex, name);
+            }));
+        return;
+    }
+    if (!pedal.isValid())
+    {
+        pedal = juce::ValueTree("PEDAL");
+        pedal.setProperty("index", pedalIndex, nullptr);
+        pedalPresets.addChild(pedal, -1, nullptr);
+    }
+    auto preset = juce::ValueTree("PRESET");
+    preset.setProperty("name", name, nullptr);
+    auto& ui = *fxPedals[pedalIndex];
+    preset.setProperty("on", ui.onBtn.getToggleState(), nullptr);
+    juce::Slider* knobs[] = { &ui.knob1, &ui.knob2, &ui.knob3, &ui.knob4, &ui.knob5,
+                              &ui.knob6, &ui.knob7, &ui.knob8, &ui.knob9 };
+    for (int knob = 0; knob < 9; ++knob)
+        preset.setProperty("knob" + juce::String(knob + 1), knobs[knob]->getValue(), nullptr);
+    preset.setProperty("eqVolume", ui.eqVolumeSlider.getValue(), nullptr);
+    preset.setProperty("eqGain", ui.eqGainSlider.getValue(), nullptr);
+    for (int band = 0; band < 10; ++band)
+        preset.setProperty("eqBand" + juce::String(band + 1), ui.eqBandSliders[(size_t) band].getValue(), nullptr);
+    preset.setProperty("voxOd2", ui.isTertiaryFootswitchLatched(), nullptr);
+    preset.setProperty("voxBass", ui.getCooltronBassBoost(), nullptr);
+    preset.setProperty("picoMomentary", ui.knob6.getValue() >= 0.5, nullptr);
+    pedal.addChild(preset, -1, nullptr);
+    const auto file = getPedalPresetFile();
+    file.getParentDirectory().createDirectory();
+    if (auto xml = pedalPresets.createXml()) xml->writeTo(file);
+    refreshPedalPresetSelector(pedalIndex);
+    pedalPresetSelectors[(size_t) pedalIndex].setText(name, juce::dontSendNotification);
+}
+
+void MainComponent::deletePedalPreset(int pedalIndex)
+{
+    if (pedalIndex < 0 || pedalIndex >= kNumFxPedals)
+        return;
+    const auto name = pedalPresetSelectors[(size_t) pedalIndex].getText();
+    if (name.isEmpty() || name == "PRESETS")
+        return;
+    juce::AlertWindow::showOkCancelBox(
+        juce::AlertWindow::WarningIcon, "Borrar preset", "Borrar \"" + name + "\"?", "BORRAR", "CANCELAR",
+        nullptr, juce::ModalCallbackFunction::create([this, pedalIndex, name](int result)
+        {
+            if (result != 1) return;
+            for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+            {
+                auto pedal = pedalPresets.getChild(i);
+                if (pedal.getProperty("kind", "PEDAL").toString() == "VST"
+                    || (int) pedal.getProperty("index", -1) != pedalIndex)
+                    continue;
+                for (int p = pedal.getNumChildren() - 1; p >= 0; --p)
+                    if (pedal.getChild(p).getProperty("name", "").toString() == name)
+                        pedal.removeChild(p, nullptr);
+            }
+            if (auto xml = pedalPresets.createXml()) xml->writeTo(getPedalPresetFile());
+            refreshPedalPresetSelector(pedalIndex);
+            pedalPresetSelectors[(size_t) pedalIndex].setSelectedItemIndex(0, juce::dontSendNotification);
+            pedalPresetDeleteButtons[(size_t) pedalIndex].setEnabled(false);
+        }));
+}
+
+void MainComponent::applyPedalPreset(int pedalIndex, const juce::String& presetName)
+{
+    if (pedalIndex < 0 || pedalIndex >= kNumFxPedals || fxPedals[pedalIndex] == nullptr)
+        return;
+
+    juce::ValueTree preset;
+    for (int i = 0; i < pedalPresets.getNumChildren(); ++i)
+    {
+        const auto pedal = pedalPresets.getChild(i);
+        if (pedal.getProperty("kind", "PEDAL").toString() == "VST"
+            || (int) pedal.getProperty("index", -1) != pedalIndex)
+            continue;
+        for (int p = 0; p < pedal.getNumChildren(); ++p)
+            if (pedal.getChild(p).getProperty("name", "").toString() == presetName)
+                preset = pedal.getChild(p);
+    }
+    if (!preset.isValid())
+        return;
+
+    auto& ui = *fxPedals[pedalIndex];
+    juce::Slider* knobs[] = { &ui.knob1, &ui.knob2, &ui.knob3, &ui.knob4, &ui.knob5,
+                              &ui.knob6, &ui.knob7, &ui.knob8, &ui.knob9 };
+    for (int knob = 0; knob < 9; ++knob)
+    {
+        knobs[knob]->setValue((double) preset.getProperty("knob" + juce::String(knob + 1),
+                                                           knobs[knob]->getValue()),
+                              juce::dontSendNotification);
+        if (knobs[knob]->onValueChange)
+            knobs[knob]->onValueChange();
+    }
+    ui.eqVolumeSlider.setValue((double) preset.getProperty("eqVolume", ui.eqVolumeSlider.getValue()), juce::dontSendNotification);
+    ui.eqGainSlider.setValue((double) preset.getProperty("eqGain", ui.eqGainSlider.getValue()), juce::dontSendNotification);
+    for (int band = 0; band < 10; ++band)
+        ui.eqBandSliders[(size_t) band].setValue((double) preset.getProperty("eqBand" + juce::String(band + 1), ui.eqBandSliders[(size_t) band].getValue()), juce::dontSendNotification);
+    ui.setTertiaryFootswitchLatched((bool) preset.getProperty("voxOd2", ui.isTertiaryFootswitchLatched()));
+    ui.setCooltronBassBoost((int) preset.getProperty("voxBass", ui.getCooltronBassBoost()));
+    ui.onBtn.setToggleState((bool) preset.getProperty("on", ui.onBtn.getToggleState()), juce::dontSendNotification);
+    if (ui.onBtn.onClick)
+        ui.onBtn.onClick();
+    ui.repaint();
 }
 
 int MainComponent::findFxPedalIndex(const FXPedalComponent& pedal) const
@@ -878,46 +2330,151 @@ int MainComponent::findFxPedalIndex(const FXPedalComponent& pedal) const
     return -1;
 }
 
+int MainComponent::findChainItemId(const FXPedalComponent& pedal) const
+{
+    const int internal = findFxPedalIndex(pedal);
+    if (internal >= 0)
+        return internal;
+    for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
+        if (vst3Pedals[(size_t) slot].get() == &pedal)
+            return kNumFxPedals + slot;
+    return -1;
+}
+
+FXPedalComponent* MainComponent::getChainItemPedal(int chainItem) const
+{
+    if (juce::isPositiveAndBelow(chainItem, kNumFxPedals))
+        return fxPedals[chainItem].get();
+    const int slot = chainItem - kNumFxPedals;
+    return juce::isPositiveAndBelow(slot, kMaxVst3Pedals) ? vst3Pedals[(size_t) slot].get() : nullptr;
+}
+
 int MainComponent::fxPedalBodyWidth(int pedalIndex) const
 {
-    if (pedalIndex == 1) return 225;
+    if (pedalIndex >= kNumFxPedals) return kVst3PedalBodyWidth;
+    if (pedalIndex == EffectsChain::SustainChordsPedal) return 110;
+    if (pedalIndex == 1) return 180;
     if (pedalIndex == 2) return 245;
-    if (pedalIndex == 6) return 270;
-    if (pedalIndex == 7) return 225;
+    if (pedalIndex == 9) return 245;
+    if (pedalIndex == 3) return 156;
+    if (pedalIndex == 6) return 156;
+    if (pedalIndex == 7) return 270;
+    if (pedalIndex == 8) return 158;
+    if (pedalIndex == 12) return 270;
+    if (pedalIndex == 11) return 320;
+    if (pedalIndex == 10) return 330;
     return 156;
 }
 
 int MainComponent::fxPedalPitch(int pedalIndex) const
 {
+    // Keep the Plus Pedal's larger compact footprint in the same pitch
+    // calculation used by the drag order and fxContainer width.
     return fxPedalBodyWidth(pedalIndex) + 28;
+}
+
+void MainComponent::revealFxPedal(int pedalIndex)
+{
+    if (pedalIndex < 0 || pedalIndex >= kNumFxPedals || fxPedals[pedalIndex] == nullptr)
+        return;
+
+    const int centredX = fxPedals[pedalIndex]->getBounds().getCentreX() - fxViewport.getWidth() / 2;
+    fxViewport.setViewPosition(juce::jlimit(0, juce::jmax(0, fxContainer.getWidth() - fxViewport.getWidth()), centredX), 0);
+}
+
+void MainComponent::focusFxPedalForSnapshot(int pedalIndex)
+{
+    if (pedalIndex == -1 && vst3Pedals[0] != nullptr)
+    {
+        toggleFxPedalFocus(*vst3Pedals[0]);
+        return;
+    }
+
+    if (pedalIndex >= 0 && pedalIndex < kNumFxPedals && fxPedals[pedalIndex] != nullptr)
+        toggleFxPedalFocus(*fxPedals[pedalIndex]);
+}
+
+void MainComponent::setVst3DisplayTextForSnapshot(const juce::String& text)
+{
+    lblVst3Status[0].setDisplayText(text);
+}
+
+void MainComponent::toggleFxPedalFocus(FXPedalComponent& pedal)
+{
+    if (fxPedalFocusOverlay.getPedal() == &pedal)
+    {
+        closeFxPedalFocus();
+        return;
+    }
+
+    if (fxPedalFocusOverlay.getPedal() != nullptr)
+        closeFxPedalFocus();
+
+    const int pedalIndex = findChainItemId(pedal);
+    if (pedalIndex < 0)
+        return;
+
+    if (draggingFxPedal >= 0)
+    {
+        if (auto* dragged = getChainItemPedal(draggingFxPedal))
+            dragged->setDragHintVisible(false);
+        draggingFxPedal = -1;
+        dragInsertSlot = -1;
+    }
+
+    focusedFxPedalIndex = pedalIndex;
+    const int compactWidth = fxPedalBodyWidth(pedalIndex);
+    const int compactHeight = juce::jmax(1, fxContainer.getHeight() - 8);
+    fxPedalFocusOverlay.setBounds(getLocalBounds());
+    fxPedalFocusOverlay.showPedal(pedal, compactWidth, compactHeight);
+    resized();
+    fxPedalFocusOverlay.toFront(true);
+    fxContainer.repaint();
+}
+
+void MainComponent::closeFxPedalFocus()
+{
+    auto* pedal = fxPedalFocusOverlay.getPedal();
+    if (pedal == nullptr)
+        return;
+
+    const int previousIndex = focusedFxPedalIndex;
+    fxContainer.addAndMakeVisible(pedal);
+    fxPedalFocusOverlay.clearPedal();
+    focusedFxPedalIndex = -2;
+    resized();
+    fxContainer.repaint();
+
+    if (previousIndex >= 0)
+        revealFxPedal(previousIndex);
 }
 
 int MainComponent::fxSlotStartX(int slot) const
 {
-    int x = 0;
-    for (int i = 0; i < juce::jlimit(0, kNumFxPedals, slot); ++i)
+    int x = 10;
+    for (int i = 0; i < juce::jlimit(0, kChainItemCount, slot); ++i)
         x += fxPedalPitch(fxOrder[(size_t) i]);
     return x;
 }
 
 int MainComponent::fxSlotForX(int x) const
 {
-    for (int slot = 0; slot < kNumFxPedals; ++slot)
+    for (int slot = 0; slot < kChainItemCount; ++slot)
     {
         const int start = fxSlotStartX(slot);
         const int end = start + fxPedalPitch(fxOrder[(size_t) slot]);
         if (x < (start + end) / 2)
             return slot;
     }
-    return kNumFxPedals - 1;
+    return kChainItemCount - 1;
 }
 
 void MainComponent::moveFxPedalToSlot(int pedalIndex, int targetSlot)
 {
-    targetSlot = juce::jlimit(0, kNumFxPedals - 1, targetSlot);
+    targetSlot = juce::jlimit(0, kChainItemCount - 1, targetSlot);
 
     int currentSlot = -1;
-    for (int i = 0; i < kNumFxPedals; ++i)
+    for (int i = 0; i < kChainItemCount; ++i)
     {
         if (fxOrder[(size_t) i] == pedalIndex)
         {
@@ -946,7 +2503,7 @@ void MainComponent::moveFxPedalToSlot(int pedalIndex, int targetSlot)
 
 void MainComponent::beginFxPedalDrag(FXPedalComponent& pedal, const juce::MouseEvent& e)
 {
-    draggingFxPedal = findFxPedalIndex(pedal);
+    draggingFxPedal = findChainItemId(pedal);
     if (draggingFxPedal < 0)
         return;
 
@@ -958,7 +2515,7 @@ void MainComponent::beginFxPedalDrag(FXPedalComponent& pedal, const juce::MouseE
 
 void MainComponent::updateFxPedalDrag(FXPedalComponent& pedal, const juce::MouseEvent& e)
 {
-    if (draggingFxPedal != findFxPedalIndex(pedal))
+    if (draggingFxPedal != findChainItemId(pedal))
         return;
 
     auto relativeEvent = e.getEventRelativeTo(&fxContainer);
@@ -966,13 +2523,16 @@ void MainComponent::updateFxPedalDrag(FXPedalComponent& pedal, const juce::Mouse
 
     auto bounds = pedal.getBounds();
     bounds.setCentre((int) relativeEvent.position.x, bounds.getCentreY());
-    bounds.setX(juce::jlimit(5, juce::jmax(5, fxContainer.getWidth() - bounds.getWidth() - 5), bounds.getX()));
+    bounds.setX(juce::jlimit(5,
+                             juce::jmax(5,
+                                        fxContainer.getWidth() - bounds.getWidth() - 5),
+                             bounds.getX()));
     pedal.setBounds(bounds);
 }
 
 void MainComponent::endFxPedalDrag(FXPedalComponent& pedal, const juce::MouseEvent& e)
 {
-    const int pedalIndex = findFxPedalIndex(pedal);
+    const int pedalIndex = findChainItemId(pedal);
     if (draggingFxPedal == pedalIndex && pedalIndex >= 0)
     {
         auto relativeEvent = e.getEventRelativeTo(&fxContainer);
@@ -986,6 +2546,49 @@ void MainComponent::endFxPedalDrag(FXPedalComponent& pedal, const juce::MouseEve
     resized();
 }
 
+void MainComponent::layoutVst3PedalControls(FXPedalComponent& pedal)
+{
+    const int slot = findChainItemId(pedal) - kNumFxPedals;
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
+        return;
+
+    auto body = pedal.getLocalBounds().toFloat().reduced(3.0f);
+    const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / 1.20f);
+    body = { body.getX(), body.getCentreY() - bodyHeight * 0.5f,
+             body.getWidth(), bodyHeight };
+
+    // These proportions match the cropped model-host-face-v2 artwork. Keeping every
+    // coordinate relative to the same body rectangle prevents the live display from
+    // drifting away from its recess when the focus overlay enlarges the pedal.
+    const auto screen = juce::Rectangle<float>(body.getX() + body.getWidth() * 0.168f,
+                                                body.getY() + body.getHeight() * 0.155f,
+                                                body.getWidth() * 0.664f,
+                                                body.getHeight() * 0.334f);
+    lblVst3Status[(size_t) slot].setBounds(screen.toNearestInt());
+
+    const int buttonGap = juce::jmax(5, juce::roundToInt(body.getWidth() * 0.025f));
+    const int contentX = juce::roundToInt(body.getX() + body.getWidth() * 0.090f);
+    const int contentW = juce::roundToInt(body.getWidth() * 0.820f);
+    const int buttonH = juce::jlimit(18, 26, juce::roundToInt(body.getHeight() * 0.095f));
+    const int controlsTop = juce::roundToInt(body.getY() + body.getHeight() * 0.040f);
+    const int secondRowY = juce::roundToInt(body.getY() + body.getHeight() * 0.515f);
+    const int buttonW = (contentW - buttonGap * 2) / 3;
+
+    // Keep one row above the display and the second in the gap below it, above
+    // the TONEX artwork. The proportions scale with the normal and focused size.
+    btnLoadVst3[(size_t) slot].setBounds(contentX, controlsTop, buttonW, buttonH);
+    btnUnloadVst3[(size_t) slot].setBounds(contentX + buttonW + buttonGap,
+                                           controlsTop, buttonW, buttonH);
+    btnEditVst3[(size_t) slot].setBounds(contentX + (buttonW + buttonGap) * 2,
+                                         controlsTop, buttonW, buttonH);
+    btnMapVst3[(size_t) slot].setBounds(contentX, secondRowY, buttonW, buttonH);
+    btnPatternVst3[(size_t) slot].setBounds(contentX + buttonW + buttonGap,
+                                            secondRowY, buttonW, buttonH);
+    btnPatternPlayVst3[(size_t) slot].setBounds(contentX + (buttonW + buttonGap) * 2,
+                                                secondRowY, buttonW, buttonH);
+    btnBypassVst3[(size_t) slot].setBounds(0, 0, 0, 0);
+}
+
 void MainComponent::styleVstButton(juce::TextButton& button, juce::Colour accent)
 {
     button.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff252535));
@@ -993,70 +2596,132 @@ void MainComponent::styleVstButton(juce::TextButton& button, juce::Colour accent
     button.setColour(juce::TextButton::textColourOffId, LnfC::TextHi);
 }
 
-void MainComponent::loadExternalVst3Plugin()
+void MainComponent::loadExternalVst3Plugin(int slot)
 {
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
+        return;
+
+    const auto catalogPlugins = vst3PluginCatalog.getPlugins();
+    juce::Array<juce::File> plugins;
+    juce::PopupMenu menu;
+    int itemId = 1;
+    for (const auto& plugin : catalogPlugins)
+    {
+        if (plugin.exists())
+        {
+            plugins.add(plugin);
+            menu.addItem(itemId++, plugin.getFileNameWithoutExtension() + "  -  "
+                                   + plugin.getParentDirectory().getFileName());
+        }
+    }
+
+    if (itemId > 1)
+        menu.addSeparator();
+    const int browseItem = itemId++;
+    const int scanItem = itemId;
+    menu.addItem(browseItem, "ELEGIR ARCHIVO VST3...");
+    menu.addItem(scanItem, "ESCANEAR CARPETAS EN CONFIGURACION...");
+
+    auto safeThis = juce::Component::SafePointer<MainComponent>(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&btnLoadVst3[(size_t) slot]),
+        [safeThis, plugins, slot, browseItem, scanItem](int result)
+        {
+            if (auto* component = safeThis.getComponent())
+            {
+                if (result > 0 && result < browseItem
+                    && juce::isPositiveAndBelow(result - 1, plugins.size()))
+                    component->loadExternalVst3FromFile(slot, plugins.getReference(result - 1));
+                else if (result == browseItem)
+                    component->chooseExternalVst3File(slot);
+                else if (result == scanItem)
+                {
+                    component->showAudioSettings();
+                    if (component->audioSettingsPanel != nullptr)
+                        component->audioSettingsPanel->showPluginSettings();
+                }
+            }
+        });
+}
+
+void MainComponent::chooseExternalVst3File(int slot)
+{
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
+        return;
     juce::File defaultFolder = juce::File::getSpecialLocation(juce::File::globalApplicationsDirectory)
         .getChildFile("Common Files")
         .getChildFile("VST3");
 
-    vst3FileChooser = std::make_unique<juce::FileChooser>("Seleccionar plugin VST3",
+    auto& fileChooser = vst3FileChoosers[(size_t) slot];
+    fileChooser = std::make_unique<juce::FileChooser>("Seleccionar plugin VST3",
                                                           defaultFolder.exists() ? defaultFolder : juce::File(),
                                                           "*.vst3");
 
     const auto chooserFlags = juce::FileBrowserComponent::openMode
                             | juce::FileBrowserComponent::canSelectFiles;
 
-    vst3FileChooser->launchAsync(chooserFlags, [this](const juce::FileChooser& chooser)
+    fileChooser->launchAsync(chooserFlags, [this, slot](const juce::FileChooser& chooser)
     {
         const auto selectedFile = chooser.getResult();
-        vst3FileChooser.reset();
+        vst3FileChoosers[(size_t) slot].reset();
 
         if (selectedFile == juce::File())
             return;
-
-        EffectsChain::PreparedExternalPlugin candidate;
-        juce::String errorMessage;
-        if (!effectsChain.prepareExternalVst3(selectedFile, candidate, errorMessage))
-        {
-            updateExternalVstUi();
-            lblVst3Status.setText(errorMessage, juce::dontSendNotification);
-            return;
-        }
-
-        closeExternalVst3Editor();
-        EffectsChain::PreparedExternalPlugin retired;
-        {
-            const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
-            retired = effectsChain.commitExternalPlugin(std::move(candidate));
-        }
-
-        updateExternalVstUi();
+        loadExternalVst3FromFile(slot, selectedFile);
     });
 }
 
-void MainComponent::unloadExternalVst3Plugin()
+void MainComponent::loadExternalVst3FromFile(int slot, const juce::File& pluginFile)
 {
-    closeExternalVst3Editor();
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals) || !pluginFile.exists())
+        return;
+
+    EffectsChain::PreparedExternalPlugin candidate;
+    juce::String errorMessage;
+    if (!effectsChain.prepareExternalVst3(pluginFile, candidate, errorMessage))
+    {
+        updateExternalVstUi(slot);
+        lblVst3Status[(size_t) slot].setDisplayText(errorMessage);
+        return;
+    }
+
+    closeExternalVst3Editor(slot);
+    EffectsChain::PreparedExternalPlugin retired;
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        retired = effectsChain.commitExternalPlugin(std::move(candidate), slot);
+    }
+
+    updateExternalVstUi(slot);
+}
+
+void MainComponent::unloadExternalVst3Plugin(int slot)
+{
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
+        return;
+    closeExternalVst3Editor(slot);
 
     EffectsChain::PreparedExternalPlugin retired;
     {
         const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
-        retired = effectsChain.detachExternalPlugin();
+        retired = effectsChain.detachExternalPlugin(slot);
     }
 
-    updateExternalVstUi();
+    updateExternalVstUi(slot);
 }
 
-void MainComponent::openExternalVst3Editor()
+void MainComponent::openExternalVst3Editor(int slot)
 {
-    auto* plugin = effectsChain.getExternalPluginInstance();
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
+        return;
+    auto* plugin = effectsChain.getExternalPluginInstance(slot);
     if (plugin == nullptr || !plugin->hasEditor())
         return;
 
-    if (vst3EditorWindow != nullptr)
+    auto& editorWindow = vst3EditorWindows[(size_t) slot];
+    if (editorWindow != nullptr)
     {
-        vst3EditorWindow->toFront(true);
-        vst3EditorWindow->setVisible(true);
+        editorWindow->toFront(true);
+        editorWindow->setVisible(true);
         return;
     }
 
@@ -1064,40 +2729,240 @@ void MainComponent::openExternalVst3Editor()
     if (editor == nullptr)
         return;
 
-    vst3EditorWindow = std::make_unique<ExternalPluginEditorWindow>("VST3 - " + effectsChain.getExternalPluginName(),
+    editorWindow = std::make_unique<ExternalPluginEditorWindow>("VST3 - " + effectsChain.getExternalPluginName(slot),
                                                                     std::move(editor));
-    vst3EditorWindow->setVisible(true);
+    editorWindow->setVisible(true);
 }
 
-void MainComponent::closeExternalVst3Editor()
+void MainComponent::openExternalVst3DrumMapEditor(int slot)
 {
-    vst3EditorWindow.reset();
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
+        return;
+
+    static constexpr LoopernicoMidi::DrumLane mapLanes[] = {
+        LoopernicoMidi::DrumLane::Kick, LoopernicoMidi::DrumLane::Snare,
+        LoopernicoMidi::DrumLane::ClosedHiHat, LoopernicoMidi::DrumLane::OpenHiHat,
+        LoopernicoMidi::DrumLane::Crash, LoopernicoMidi::DrumLane::Ride
+    };
+    auto content = std::make_unique<MidiMapEditorContent>(effectsChain.getExternalPluginDrumMap(slot));
+    auto* contentPtr = content.get();
+    const auto pluginName = effectsChain.getExternalPluginName(slot);
+    const auto title = "MAPA MIDI - " + (pluginName.isNotEmpty() ? pluginName : "SLOT " + juce::String(slot + 1));
+    auto* window = new MidiEditorWindow(title, std::move(content), 560, 560, 520, 420, 1200, 900);
+    contentPtr->onResult = [window](int result) { window->finish(result); };
+    window->centreAroundComponent(vst3Pedals[(size_t) slot].get(), 560, 560);
+    window->enterModalState(true,
+                           juce::ModalCallbackFunction::create([this, window, contentPtr, slot](int result)
+    {
+        if (result == 1)
+        {
+            for (int i = 0; i < 6; ++i)
+                effectsChain.setExternalPluginDrumNote(slot, mapLanes[i], contentPtr->getNote(i));
+            for (const auto lane : mapLanes)
+                effectsChain.setExternalPluginDrumChannel(slot, lane, contentPtr->getChannel());
+        }
+        else if (result == 2)
+            effectsChain.resetExternalPluginDrumMap(slot);
+        delete window;
+    }), false);
+    window->startDismissOnOutsideClick();
+    return;
+
+#if 0
+
+    static constexpr LoopernicoMidi::DrumLane lanes[] = {
+        LoopernicoMidi::DrumLane::Kick,
+        LoopernicoMidi::DrumLane::Snare,
+        LoopernicoMidi::DrumLane::ClosedHiHat,
+        LoopernicoMidi::DrumLane::OpenHiHat,
+        LoopernicoMidi::DrumLane::Crash,
+        LoopernicoMidi::DrumLane::Ride
+    };
+    static constexpr const char* names[] = {
+        "kick", "snare", "closed_hihat", "open_hihat", "crash", "ride"
+    };
+    static constexpr const char* labels[] = {
+        "KICK", "SNARE", "HI-HAT CERRADO", "HI-HAT ABIERTO", "CRASH", "RIDE"
+    };
+
+    auto* alert = new ClickOutsideDismissableAlertWindow("MAPA MIDI - " + effectsChain.getExternalPluginName(slot),
+                                        "Elegí la nota MIDI para cada instrumento.",
+                                        juce::AlertWindow::NoIcon,
+                                        this);
+    juce::StringArray noteItems;
+    for (int note = 0; note <= 127; ++note)
+        noteItems.add(juce::String(note));
+
+    const auto& map = effectsChain.getExternalPluginDrumMap(slot);
+    for (int i = 0; i < 6; ++i)
+    {
+        alert->addComboBox(names[i], noteItems, labels[i]);
+        if (auto* combo = alert->getComboBoxComponent(names[i]))
+            combo->setSelectedId(map.getNote(lanes[i]) + 1, juce::dontSendNotification);
+    }
+
+    juce::StringArray channelItems;
+    for (int channel = 1; channel <= 16; ++channel)
+        channelItems.add(juce::String(channel));
+    alert->addComboBox("channel", channelItems, "CANAL MIDI");
+    if (auto* combo = alert->getComboBoxComponent("channel"))
+        combo->setSelectedId(map.getChannel(LoopernicoMidi::DrumLane::Kick), juce::dontSendNotification);
+
+    alert->addButton("GUARDAR", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    alert->addButton("RESTABLECER GM", 2);
+    alert->addButton("CANCELAR", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    alert->enableResizing(520, 520, 1200, 900);
+    alert->centreAroundComponent(vst3Pedals[(size_t) slot].get(), 560, 560);
+    alert->enterModalState(true,
+                           juce::ModalCallbackFunction::create([this, alert, slot](int result)
+    {
+        if (result == 1 || result == 2)
+        {
+            if (result == 2)
+                effectsChain.resetExternalPluginDrumMap(slot);
+            else
+            {
+                for (int i = 0; i < 6; ++i)
+                    if (auto* combo = alert->getComboBoxComponent(names[i]))
+                        effectsChain.setExternalPluginDrumNote(slot, lanes[i], combo->getSelectedId() - 1);
+
+                if (auto* combo = alert->getComboBoxComponent("channel"))
+                    for (const auto lane : lanes)
+                        effectsChain.setExternalPluginDrumChannel(slot, lane, combo->getSelectedId());
+            }
+        }
+        delete alert;
+    }), false);
+    alert->startDismissOnOutsideClick();
+#endif
 }
 
-void MainComponent::updateExternalVstUi()
+void MainComponent::openExternalVst3PatternEditor(int slot)
 {
-    const bool hasPlugin = effectsChain.hasExternalPlugin();
-    const bool pluginEnabled = effectsChain.isExternalPluginEnabled();
-    const auto pluginName = effectsChain.getExternalPluginName();
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
+        return;
 
-    btnUnloadVst3.setEnabled(hasPlugin);
-    btnEditVst3.setEnabled(hasPlugin);
-    btnBypassVst3.setEnabled(hasPlugin);
-    btnBypassVst3.setToggleState(pluginEnabled, juce::dontSendNotification);
-    btnBypassVst3.setButtonText(pluginEnabled ? "VST3 ON" : "VST3 OFF");
+    auto content = std::make_unique<MidiPatternEditorContent>(effectsChain.getExternalPluginDrumPattern(slot));
+    auto* contentPtr = content.get();
+    const auto pluginName = effectsChain.getExternalPluginName(slot);
+    const auto title = "PATRON MIDI - " + (pluginName.isNotEmpty() ? pluginName : "SLOT " + juce::String(slot + 1));
+    auto* window = new MidiEditorWindow(title, std::move(content), 1000, 500, 980, 430, 1500, 900);
+    contentPtr->onResult = [window](int result) { window->finish(result); };
+    contentPtr->setPatternChangedCallback([this, slot](const LoopernicoMidi::DrumMidiPattern& pattern)
+    {
+        effectsChain.setExternalPluginDrumPattern(slot, pattern);
+    });
+    window->centreAroundComponent(vst3Pedals[(size_t) slot].get(), 1000, 500);
+    window->enterModalState(true,
+                           juce::ModalCallbackFunction::create([this, window, contentPtr, slot](int result)
+    {
+            if (result == 1)
+                effectsChain.setExternalPluginDrumPattern(slot, contentPtr->getPattern());
+            else if (result == 0)
+                effectsChain.setExternalPluginDrumPattern(slot, contentPtr->getInitialPattern());
+        delete window;
+    }), false);
+    window->startDismissOnOutsideClick();
+    return;
 
-    if (!hasPlugin)
-        lblVst3Status.setText("VST3 al inicio de la cadena: sin plugin cargado.", juce::dontSendNotification);
-    else if (pluginEnabled)
-        lblVst3Status.setText("Inicio de cadena: " + pluginName, juce::dontSendNotification);
-    else
-        lblVst3Status.setText("Inicio de cadena en bypass: " + pluginName, juce::dontSendNotification);
+#if 0
+
+    auto* editor = new DrumPatternEditorComponent(effectsChain.getExternalPluginDrumPattern(slot));
+    auto* alert = new ClickOutsideDismissableAlertWindow("PATRON MIDI - " + effectsChain.getExternalPluginName(slot),
+                                        "Edita la grilla sin reproducirla todavia.",
+                                        juce::AlertWindow::NoIcon,
+                                        this);
+    alert->addCustomComponent(editor);
+    alert->addButton("GUARDAR", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    alert->addButton("LIMPIAR", 2);
+    alert->addButton("CANCELAR", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    alert->enableResizing(980, 500, 1500, 900);
+    alert->centreAroundComponent(vst3Pedals[(size_t) slot].get(), 1000, 500);
+    alert->enterModalState(true,
+                           juce::ModalCallbackFunction::create([this, alert, editor, slot](int result)
+    {
+        if (result == 1)
+        {
+            effectsChain.setExternalPluginDrumPattern(slot, editor->getPattern());
+        }
+        else if (result == 2)
+        {
+            editor->clearPattern();
+            effectsChain.setExternalPluginDrumPattern(slot, editor->getPattern());
+        }
+
+        delete alert;
+    }), false);
+    alert->startDismissOnOutsideClick();
+#endif
+}
+
+void MainComponent::closeExternalVst3Editor(int slot)
+{
+    if (slot < 0)
+    {
+        for (auto& editor : vst3EditorWindows)
+            editor.reset();
+    }
+    else if (juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
+        vst3EditorWindows[(size_t) slot].reset();
+}
+
+void MainComponent::updateExternalVstUi(int requestedSlot)
+{
+    const int first = requestedSlot < 0 ? 0 : requestedSlot;
+    const int last = requestedSlot < 0 ? kMaxVst3Pedals : requestedSlot + 1;
+    for (int slot = first; slot < last; ++slot)
+    {
+        const bool hasPlugin = effectsChain.hasExternalPlugin(slot);
+        const bool pluginEnabled = effectsChain.isExternalPluginEnabled(slot);
+        const auto pluginName = effectsChain.getExternalPluginName(slot);
+        btnUnloadVst3[(size_t) slot].setEnabled(hasPlugin);
+        btnEditVst3[(size_t) slot].setEnabled(hasPlugin);
+        vstPresetSaveButtons[(size_t) slot].setEnabled(hasPlugin);
+        vstPresetDeleteButtons[(size_t) slot].setEnabled(vstPresetSelectors[(size_t) slot].getNumItems() > 0);
+        vstPresetSelectors[(size_t) slot].setEnabled(hasPlugin || vstPresetSelectors[(size_t) slot].getNumItems() > 0);
+        // El mapa y el patron pertenecen al slot, no a la instancia cargada.
+        // Se pueden preparar antes de elegir o cargar el VST3.
+        btnMapVst3[(size_t) slot].setEnabled(true);
+        btnPatternVst3[(size_t) slot].setEnabled(true);
+        btnPatternPlayVst3[(size_t) slot].setEnabled(hasPlugin);
+        btnPatternPlayVst3[(size_t) slot].setToggleState(
+            hasPlugin && effectsChain.isExternalPluginPatternPlaying(slot),
+            juce::dontSendNotification);
+        btnPatternPlayVst3[(size_t) slot].setButtonText(
+            effectsChain.isExternalPluginPatternPlaying(slot) ? "STOP" : "PLAY");
+        btnBypassVst3[(size_t) slot].setEnabled(hasPlugin);
+        btnBypassVst3[(size_t) slot].setToggleState(pluginEnabled, juce::dontSendNotification);
+        btnBypassVst3[(size_t) slot].setButtonText(pluginEnabled ? "ENGINE ACTIVE" : "ENGINE BYPASS");
+        if (auto* pedal = vst3Pedals[(size_t) slot].get())
+        {
+            pedal->onBtn.setToggleState(hasPlugin && pluginEnabled, juce::dontSendNotification);
+            pedal->repaint();
+        }
+        auto& status = lblVst3Status[(size_t) slot];
+        if (!hasPlugin)
+            status.setDisplayText("SIN VST");
+        else if (pluginEnabled)
+            status.setDisplayText(pluginName + " / LAT "
+                                  + juce::String(effectsChain.getExternalPluginReportedLatencySamples(slot))
+                                  + " SMP");
+        else
+            status.setDisplayText("BYPASS - " + pluginName);
+        status.setColour(juce::Label::textColourId,
+                         !hasPlugin ? LnfC::TextDim : (pluginEnabled ? juce::Colour(0xff87edf2) : LnfC::OvdAmber));
+        status.setColour(juce::Label::outlineColourId,
+                         (pluginEnabled ? juce::Colour(0xff55dce5) : LnfC::OvdAmber)
+                            .withAlpha(hasPlugin ? 0.52f : 0.20f));
+    }
+    updateRecordingLatencyCompensation();
 }
 
 bool MainComponent::captureLooperSnapshotIncrementally(LooperEngine::SessionSnapshot& snapshot,
                                                        juce::String& errorMessage)
 {
-    constexpr int kChunkSamplesPerChannel = 4096;
+    // Keep each callback-lock hold comfortably below a 64/128-sample period.
+    constexpr int kChunkSamplesPerChannel = 1024;
     constexpr int kMaxAttempts = 3;
 
     for (int attempt = 0; attempt < kMaxAttempts; ++attempt)
@@ -1167,37 +3032,8 @@ void MainComponent::saveSessionToFile()
         if (!selectedFile.hasFileExtension("loopernico"))
             selectedFile = selectedFile.withFileExtension(".loopernico");
 
-        LooperEngine::SessionSnapshot looperSnapshot;
-        juce::MemoryBlock vstState;
-        juce::String snapshotError;
-        if (!captureLooperSnapshotIncrementally(looperSnapshot, snapshotError))
-        {
-            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
-                                                   "No se pudo capturar la sesion",
-                                                   snapshotError);
-            return;
-        }
-
-        juce::AudioPluginInstance* suspendedPlugin = nullptr;
-        {
-            const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
-            suspendedPlugin = effectsChain.getExternalPluginInstance();
-            if (suspendedPlugin != nullptr)
-                suspendedPlugin->suspendProcessing(true);
-        }
-
-        effectsChain.copyExternalPluginState(vstState);
-
-        if (suspendedPlugin != nullptr)
-        {
-            const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
-            if (effectsChain.getExternalPluginInstance() == suspendedPlugin)
-                suspendedPlugin->suspendProcessing(false);
-        }
-
-        const auto sessionTree = createSessionTree(looperSnapshot, vstState);
         juce::String errorMessage;
-        if (!SessionManager::writeSessionFile(selectedFile, sessionTree, looperSnapshot, vstState, errorMessage))
+        if (!saveCurrentSessionToFile(selectedFile, errorMessage))
         {
             juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                    "No se pudo guardar",
@@ -1209,6 +3045,278 @@ void MainComponent::saveSessionToFile()
                               juce::dontSendNotification);
         lblMidiStatus.setColour(juce::Label::textColourId, LnfC::PlayGreen);
     });
+}
+
+bool MainComponent::saveCurrentSessionToFile(const juce::File& sessionFile,
+                                             juce::String& errorMessage)
+{
+    LooperEngine::SessionSnapshot looperSnapshot;
+    juce::MemoryBlock vstState;
+    if (!captureLooperSnapshotIncrementally(looperSnapshot, errorMessage))
+        return false;
+
+    const auto snapshotHasCompleteActiveAudio = [] (const LooperEngine::SessionSnapshot& candidate)
+    {
+        if (candidate.totalTracks <= 0 || candidate.baseLoopLengthSamples <= 0)
+            return candidate.totalTracks == 0 && candidate.baseLoopLengthSamples == 0;
+
+        if (candidate.totalTracks > LooperEngine::kMaxTracks)
+            return false;
+
+        for (int track = 0; track < candidate.totalTracks; ++track)
+        {
+            const auto& activeTrack = candidate.tracks[(size_t) track];
+            const int requiredSamples = juce::jmax(candidate.baseLoopLengthSamples,
+                                                   activeTrack.lengthSamples);
+            if (requiredSamples <= 0
+                || activeTrack.audio.getNumChannels() < 2
+                || activeTrack.audio.getNumSamples() < requiredSamples)
+                return false;
+        }
+        return true;
+    };
+
+    // The incremental capture is the normal path. If its own metadata and
+    // buffers disagree, retry once as one coherent point-in-time snapshot.
+    if (!snapshotHasCompleteActiveAudio(looperSnapshot))
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        looperSnapshot = looper.createSessionSnapshot();
+    }
+    if (!snapshotHasCompleteActiveAudio(looperSnapshot))
+    {
+        errorMessage = "El estado del loop y sus buffers de audio no coinciden. "
+                       "La sesion no se guardo para evitar perder la grabacion.";
+        return false;
+    }
+
+    std::array<juce::AudioPluginInstance*, kMaxVst3Pedals> suspendedPlugins{};
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
+            if ((suspendedPlugins[(size_t) slot] = effectsChain.getExternalPluginInstance(slot)) != nullptr)
+                suspendedPlugins[(size_t) slot]->suspendProcessing(true);
+    }
+
+    std::array<juce::MemoryBlock, kMaxVst3Pedals> states;
+    for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
+        effectsChain.copyExternalPluginState(states[(size_t) slot], slot);
+    vstState = packVstStates(states);
+
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
+            if (suspendedPlugins[(size_t) slot] != nullptr
+                && effectsChain.getExternalPluginInstance(slot) == suspendedPlugins[(size_t) slot])
+                suspendedPlugins[(size_t) slot]->suspendProcessing(false);
+    }
+
+    const auto sessionTree = createSessionTree(looperSnapshot, vstState);
+    return SessionManager::writeSessionFile(sessionFile, sessionTree,
+                                            looperSnapshot, vstState, errorMessage);
+}
+
+bool MainComponent::saveSessionFileForSnapshot(const juce::File& sessionFile,
+                                               juce::String& errorMessage)
+{
+    const bool saved = saveCurrentSessionToFile(sessionFile, errorMessage);
+    audioDeviceController.log(saved
+        ? "Diagnostico de guardado durante reproduccion correcto: " + sessionFile.getFullPathName()
+        : "Diagnostico de guardado fallo: " + errorMessage);
+    return saved;
+}
+
+bool MainComponent::runSessionPersistenceDiagnostic(const juce::File& sessionFile,
+                                                    juce::String& report)
+{
+    constexpr int testSamples = 4096;
+    constexpr int testPedal = EffectsChain::NoiseGatePedal;
+    const juce::String initialPresetName("SESSION TEST PRESET OLD");
+    const juce::String testPresetName("SESSION TEST PRESET");
+    juce::StringArray stages;
+    auto fail = [&report, &stages] (const juce::String& reason)
+    {
+        stages.add("FALLO: " + reason);
+        report = stages.joinIntoString("\n");
+        return false;
+    };
+
+    LooperEngine::SessionSnapshot beforeSave;
+    std::array<int, kChainItemCount> expectedOrder{};
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        looper.resetAll();
+        looper.setBarsPerLoop(0);
+        looper.setQuantizeEnabled(false);
+        looper.setSilenceThresholdDb(-80.0f);
+        looper.recConfirm();
+
+        juce::AudioBuffer<float> input(2, testSamples);
+        juce::AudioBuffer<float> output(2, testSamples);
+        for (int sample = 0; sample < testSamples; ++sample)
+        {
+            const float value = 0.35f * std::sin(
+                juce::MathConstants<float>::twoPi * 440.0f
+                * (float) sample / juce::jmax(1.0f, looper.getSampleRate()));
+            input.setSample(0, sample, value);
+            input.setSample(1, sample, value * 0.75f);
+        }
+        output.clear();
+        looper.processBlock(input, 0, output, 0, testSamples, false);
+        if (looper.getState() != LooperEngine::State::RecordingBase)
+            return fail("la entrada determinista no inicio la grabacion base");
+        looper.recConfirm();
+        if (looper.getState() != LooperEngine::State::Playing
+            || looper.getTotalTracks() != 1
+            || looper.getBaseLoopSamples() <= 0)
+            return fail("la transicion grabacion -> reproduccion no publico el loop");
+
+        input.clear();
+        output.clear();
+        looper.processBlock(input, 0, output, 0, testSamples / 4, false);
+        looper.pauseAll();
+    }
+    stages.add("OK grabacion: 1 pista, " + juce::String(looper.getBaseLoopSamples())
+               + " muestras");
+
+    moveFxPedalToSlot(testPedal, 2);
+    expectedOrder = fxOrder;
+    auto& presetSelector = pedalPresetSelectors[(size_t) testPedal];
+    const int testPresetId = 30000;
+    if (presetSelector.indexOfItemId(testPresetId) < 0)
+        presetSelector.addItem(initialPresetName, testPresetId);
+    presetSelector.setSelectedId(testPresetId, juce::dontSendNotification);
+
+    juce::String error;
+    if (!captureLooperSnapshotIncrementally(beforeSave, error))
+        return fail("captura previa: " + error);
+    if (beforeSave.totalTracks != 1
+        || beforeSave.baseLoopLengthSamples <= 0
+        || beforeSave.tracks[0].audio.getNumSamples() < beforeSave.baseLoopLengthSamples
+        || beforeSave.tracks[0].audio.getMagnitude(0, beforeSave.baseLoopLengthSamples) < 0.01f
+        || !beforeSave.globalPaused
+        || beforeSave.tracks[0].pausedReadPos <= 0)
+        return fail("el snapshot previo al guardado no contiene el audio grabado");
+    for (int track = 1; track < LooperEngine::kMaxTracks; ++track)
+        if (beforeSave.tracks[(size_t) track].audio.getNumSamples() != 0
+            || beforeSave.tracks[(size_t) track].pausedReadPos != 0)
+            return fail("una pista vacia heredo el cursor de pausa global");
+    stages.add("OK snapshot previo: audio no nulo y longitudes coherentes");
+
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        const double activeSampleRate = looper.getSampleRate();
+        looper.releaseResources();
+        looper.prepare(activeSampleRate, 512, formatManager);
+    }
+    LooperEngine::SessionSnapshot afterDeviceRestart;
+    if (!captureLooperSnapshotIncrementally(afterDeviceRestart, error))
+        return fail("captura posterior a reinicializar audio: " + error);
+    if (afterDeviceRestart.totalTracks != beforeSave.totalTracks
+        || afterDeviceRestart.baseLoopLengthSamples != beforeSave.baseLoopLengthSamples
+        || afterDeviceRestart.tracks[0].audio.getNumSamples()
+             != beforeSave.tracks[0].audio.getNumSamples())
+        return fail("reinicializar el dispositivo borro o cambio el loop");
+    for (int channel = 0; channel < 2; ++channel)
+        if (std::memcmp(afterDeviceRestart.tracks[0].audio.getReadPointer(channel),
+                        beforeSave.tracks[0].audio.getReadPointer(channel),
+                        (size_t) beforeSave.tracks[0].audio.getNumSamples() * sizeof(float)) != 0)
+            return fail("reinicializar el dispositivo cambio las muestras del loop");
+    beforeSave = std::move(afterDeviceRestart);
+    stages.add("OK reinicializacion de audio: el loop permanece exacto");
+
+    if (!sessionFile.getParentDirectory().createDirectory())
+        return fail("no se pudo crear la carpeta temporal del diagnostico");
+    if (!saveCurrentSessionToFile(sessionFile, error))
+        return fail("primera escritura: " + error);
+
+    moveFxPedalToSlot(testPedal, 3);
+    expectedOrder = fxOrder;
+    const int finalPresetId = testPresetId + 1;
+    if (presetSelector.indexOfItemId(finalPresetId) < 0)
+        presetSelector.addItem(testPresetName, finalPresetId);
+    presetSelector.setSelectedId(finalPresetId, juce::dontSendNotification);
+    if (!saveCurrentSessionToFile(sessionFile, error))
+        return fail("sobrescritura: " + error);
+
+    juce::ValueTree storedTree;
+    LooperEngine::SessionSnapshot storedSnapshot;
+    juce::MemoryBlock storedVstState;
+    if (!SessionManager::readSessionFile(sessionFile, storedTree, storedSnapshot,
+                                         storedVstState, error))
+        return fail("lectura inmediata: " + error);
+
+    const auto storedFx = storedTree.getChildWithName("FX");
+    const auto storedOrder = storedFx.getChildWithName("ORDER");
+    if (!storedOrder.isValid())
+        return fail("el archivo no contiene el nodo ORDER");
+    for (int slot = 0; slot < kChainItemCount; ++slot)
+        if ((int) storedOrder.getProperty("slot" + juce::String(slot), -1)
+            != expectedOrder[(size_t) slot])
+            return fail("el orden binario/XML difiere en el slot " + juce::String(slot));
+
+    juce::String storedPreset;
+    for (int i = 0; i < storedFx.getNumChildren(); ++i)
+    {
+        const auto node = storedFx.getChild(i);
+        if (node.hasType("PEDAL") && (int) node.getProperty("index", -1) == testPedal)
+            storedPreset = node.getProperty("presetName", "").toString();
+    }
+    if (storedPreset != testPresetName)
+        return fail("el archivo no conserva el nombre del preset seleccionado");
+    if (storedSnapshot.totalTracks != beforeSave.totalTracks
+        || storedSnapshot.baseLoopLengthSamples != beforeSave.baseLoopLengthSamples
+        || storedSnapshot.tracks[0].audio.getNumSamples()
+             != beforeSave.tracks[0].audio.getNumSamples())
+        return fail("la escritura/lectura binaria cambio las longitudes del loop");
+    for (int channel = 0; channel < 2; ++channel)
+        if (std::memcmp(storedSnapshot.tracks[0].audio.getReadPointer(channel),
+                        beforeSave.tracks[0].audio.getReadPointer(channel),
+                        (size_t) beforeSave.tracks[0].audio.getNumSamples() * sizeof(float)) != 0)
+            return fail("la escritura/lectura binaria cambio las muestras de audio");
+    stages.add("OK archivo sobrescrito: audio exacto, ORDER nuevo y presetName nuevo");
+
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        looper.resetAll();
+    }
+    moveFxPedalToSlot(testPedal, 0);
+    presetSelector.setSelectedItemIndex(-1, juce::dontSendNotification);
+    if (!applySessionTree(storedTree, storedSnapshot, storedVstState, error))
+        return fail("restauracion: " + error);
+
+    LooperEngine::SessionSnapshot afterLoad;
+    if (!captureLooperSnapshotIncrementally(afterLoad, error))
+        return fail("captura posterior: " + error);
+    if (afterLoad.totalTracks != 1
+        || afterLoad.baseLoopLengthSamples != storedSnapshot.baseLoopLengthSamples
+        || afterLoad.tracks[0].audio.getNumSamples()
+             != storedSnapshot.tracks[0].audio.getNumSamples()
+        || afterLoad.tracks[0].audio.getMagnitude(0, afterLoad.baseLoopLengthSamples) < 0.01f)
+        return fail("el looper restaurado no contiene el audio esperado");
+    if (fxOrder != expectedOrder)
+        return fail("la UI/DSP no restauro el orden guardado");
+    if (presetSelector.getText() != testPresetName)
+        return fail("la UI no muestra el preset guardado");
+
+    if (!looper.isGlobalPaused() || btnRecConfirm.isEnabled())
+        return fail("REC no quedo bloqueado al reabrir el loop pausado");
+    const auto stateBeforeBlockedRecord = looper.getState();
+    const int tracksBeforeBlockedRecord = looper.getTotalTracks();
+    looper.recConfirm();
+    if (looper.getState() != stateBeforeBlockedRecord
+        || looper.getTotalTracks() != tracksBeforeBlockedRecord)
+        return fail("una orden de grabacion evadio el bloqueo de pausa");
+    if (btnPauseAll.onClick)
+        btnPauseAll.onClick();
+    if (looper.isGlobalPaused() || !btnRecConfirm.isEnabled())
+        return fail("REC no se habilito al reanudar el loop");
+    if (btnPauseAll.onClick)
+        btnPauseAll.onClick();
+
+    stages.add("OK reapertura: audio, orden, preset y bloqueo de REC restaurados");
+    report = stages.joinIntoString("\n");
+    return true;
 }
 
 void MainComponent::loadSessionFromFile()
@@ -1228,31 +3336,71 @@ void MainComponent::loadSessionFromFile()
         if (selectedFile == juce::File())
             return;
 
-        juce::ValueTree sessionTree;
-        LooperEngine::SessionSnapshot looperSnapshot;
-        juce::MemoryBlock vstState;
-        juce::String errorMessage;
-
-        if (!SessionManager::readSessionFile(selectedFile, sessionTree, looperSnapshot, vstState, errorMessage))
-        {
-            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                                   "No se pudo abrir",
-                                                   errorMessage);
-            return;
-        }
-
-        if (!applySessionTree(sessionTree, looperSnapshot, vstState, errorMessage))
-        {
-            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                                   "No se pudo restaurar",
-                                                   errorMessage);
-            return;
-        }
-
-        lblMidiStatus.setText("Sesion cargada: " + selectedFile.getFileName(),
-                              juce::dontSendNotification);
-        lblMidiStatus.setColour(juce::Label::textColourId, LnfC::PlayGreen);
+        openSessionFileAsync(selectedFile);
     });
+}
+
+void MainComponent::openSessionFileAsync(const juce::File& sessionFile)
+{
+    loadingOverlay.showLoading(sessionFile.getFileName());
+    repaint();
+    if (auto* peer = getPeer())
+        peer->performAnyPendingRepaintsNow();
+
+    OrbitLoadingIndicator::shared().start("CARGANDO SESION", sessionFile.getFileName());
+
+    juce::Timer::callAfterDelay(160,
+        [safeThis = juce::Component::SafePointer<MainComponent>(this), sessionFile]
+        {
+            if (auto* component = safeThis.getComponent())
+            {
+                component->openSessionFile(sessionFile);
+                component->finishLoadingSession();
+            }
+        });
+}
+
+void MainComponent::finishLoadingSession()
+{
+    OrbitLoadingIndicator::shared().stop();
+    loadingOverlay.hideLoading();
+}
+
+bool MainComponent::openSessionFile(const juce::File& sessionFile)
+{
+    if (!sessionFile.existsAsFile() || !sessionFile.hasFileExtension("loopernico"))
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                               "No se pudo abrir",
+                                               "El archivo de sesion no existe o no tiene la extension .loopernico.");
+        return false;
+    }
+
+    juce::ValueTree sessionTree;
+    LooperEngine::SessionSnapshot looperSnapshot;
+    juce::MemoryBlock vstState;
+    juce::String errorMessage;
+
+    if (!SessionManager::readSessionFile(sessionFile, sessionTree, looperSnapshot, vstState, errorMessage))
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                               "No se pudo abrir",
+                                               errorMessage);
+        return false;
+    }
+
+    if (!applySessionTree(sessionTree, looperSnapshot, vstState, errorMessage))
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                               "No se pudo restaurar",
+                                               errorMessage);
+        return false;
+    }
+
+    lblMidiStatus.setText("Sesion cargada: " + sessionFile.getFileName(),
+                          juce::dontSendNotification);
+    lblMidiStatus.setColour(juce::Label::textColourId, LnfC::PlayGreen);
+    return true;
 }
 
 void MainComponent::exportMixToFile()
@@ -1337,16 +3485,6 @@ juce::ValueTree MainComponent::createSessionTree(const LooperEngine::SessionSnap
     juce::ValueTree global("GLOBAL");
     global.setProperty("masterVolume", masterKnob.getValue(), nullptr);
     global.setProperty("outputMono", outputMono.load(std::memory_order_relaxed), nullptr);
-    global.setProperty("midiListenAllInputs", midiListenAllInputs, nullptr);
-    global.setProperty("midiInputIndex", lastMidiInputIndex, nullptr);
-    global.setProperty("midiInputIdentifier",
-                       (!midiListenAllInputs
-                        && lastMidiInputIndex >= 0
-                        && lastMidiInputIndex < juce::MidiInput::getAvailableDevices().size())
-                           ? juce::MidiInput::getAvailableDevices().getReference(lastMidiInputIndex).identifier
-                           : juce::String(),
-                       nullptr);
-    global.setProperty("midiActionSelected", midiActionSelector.getSelectedId(), nullptr);
     root.addChild(global, -1, nullptr);
 
     juce::ValueTree looperState("LOOPER");
@@ -1391,19 +3529,20 @@ juce::ValueTree MainComponent::createSessionTree(const LooperEngine::SessionSnap
 
     juce::ValueTree fx("FX");
     fx.setProperty("outputMono", outputMono.load(std::memory_order_relaxed), nullptr);
-    fx.setProperty("rhythmStyle", rhythmStyleSelector.getSelectedItemIndex(), nullptr);
-    fx.setProperty("rhythmPattern", rhythmPatternSelector.getSelectedItemIndex(), nullptr);
-    fx.setProperty("rhythmMode", rhythmModeSelector.getSelectedItemIndex(), nullptr);
-    fx.setProperty("rhythmVerseBars", rhythmVerseBarsSelector.getSelectedId(), nullptr);
-    fx.setProperty("rhythmChorusBars", rhythmChorusBarsSelector.getSelectedId(), nullptr);
-    fx.setProperty("rhythmCountInBars", rhythmCountInBarsSelector.getSelectedId(), nullptr);
-    fx.setProperty("rhythmCountInSound", rhythmCountInSoundSelector.getSelectedId(), nullptr);
-    fx.setProperty("rhythmCountInToggle", btnRhythmCountInToggle.getToggleState(), nullptr);
+    juce::ValueTree orderNode("ORDER");
+    for (int slot = 0; slot < kChainItemCount; ++slot)
+        orderNode.setProperty("slot" + juce::String(slot), fxOrder[(size_t) slot], nullptr);
+    fx.addChild(orderNode, -1, nullptr);
     for (int i = 0; i < kNumFxPedals; ++i)
     {
+        if (fxPedals[i] == nullptr)
+            continue;
         juce::ValueTree pedal("PEDAL");
         pedal.setProperty("index", i, nullptr);
         pedal.setProperty("slot", (int) (std::find(fxOrder.begin(), fxOrder.end(), i) - fxOrder.begin()), nullptr);
+        const auto presetName = pedalPresetSelectors[(size_t) i].getText();
+        if (presetName.isNotEmpty() && presetName != "PRESETS")
+            pedal.setProperty("presetName", presetName, nullptr);
         pedal.setProperty("on", fxPedals[i]->onBtn.getToggleState(), nullptr);
         pedal.setProperty("knob1", fxPedals[i]->knob1.getValue(), nullptr);
         pedal.setProperty("knob2", fxPedals[i]->knob2.getValue(), nullptr);
@@ -1411,29 +3550,53 @@ juce::ValueTree MainComponent::createSessionTree(const LooperEngine::SessionSnap
         pedal.setProperty("knob4", fxPedals[i]->knob4.getValue(), nullptr);
         pedal.setProperty("knob5", fxPedals[i]->knob5.getValue(), nullptr);
         pedal.setProperty("knob6", fxPedals[i]->knob6.getValue(), nullptr);
+        if (i != 7)
+        {
+            pedal.setProperty("knob7", fxPedals[i]->knob7.getValue(), nullptr);
+            pedal.setProperty("knob8", fxPedals[i]->knob8.getValue(), nullptr);
+            pedal.setProperty("knob9", fxPedals[i]->knob9.getValue(), nullptr);
+        }
+        if (i == 7)
+        {
+            pedal.setProperty("voxCooltronVersion", 1, nullptr);
+            pedal.setProperty("voxOd2Selected", fxPedals[i]->isTertiaryFootswitchLatched(), nullptr);
+            pedal.setProperty("voxBassBoost", fxPedals[i]->getCooltronBassBoost(), nullptr);
+        }
+        if (i == EffectsChain::HarmonizerPedal)
+        {
+            pedal.setProperty("picoPitchForkVersion", 1, nullptr);
+            pedal.setProperty("picoMode", juce::roundToInt(fxPedals[i]->knob5.getValue()), nullptr);
+            pedal.setProperty("picoMomentary", fxPedals[i]->knob6.getValue() >= 0.5, nullptr);
+        }
+        if (i == 12)
+        {
+            pedal.setProperty("eqVolume", fxPedals[i]->eqVolumeSlider.getValue(), nullptr);
+            pedal.setProperty("eqGain", fxPedals[i]->eqGainSlider.getValue(), nullptr);
+            for (int band = 0; band < 10; ++band)
+                pedal.setProperty("eqBand" + juce::String(band + 1),
+                                  fxPedals[i]->eqBandSliders[(size_t)band].getValue(), nullptr);
+        }
         fx.addChild(pedal, -1, nullptr);
     }
 
-    juce::ValueTree vst("VST");
-    vst.setProperty("path", effectsChain.getExternalPluginPath(), nullptr);
-    vst.setProperty("enabled", effectsChain.isExternalPluginEnabled(), nullptr);
-    vst.setProperty("hasState", vstState.getSize() > 0, nullptr);
-    fx.addChild(vst, -1, nullptr);
-    root.addChild(fx, -1, nullptr);
-
-    juce::ValueTree midi("MIDI");
-    for (int i = 0; i < MidiController::kNumActions; ++i)
+    for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
     {
-        const auto mapping = midiController.getMapping(i);
-        juce::ValueTree mappingNode("MAPPING");
-        mappingNode.setProperty("action", i, nullptr);
-        mappingNode.setProperty("isMapped", mapping.isMapped, nullptr);
-        mappingNode.setProperty("isProgramChange", mapping.isProgramChange, nullptr);
-        mappingNode.setProperty("isNote", mapping.isNote, nullptr);
-        mappingNode.setProperty("number", mapping.number, nullptr);
-        midi.addChild(mappingNode, -1, nullptr);
+        juce::ValueTree vst("VST");
+        vst.setProperty("index", slot, nullptr);
+        vst.setProperty("slot", (int) (std::find(fxOrder.begin(), fxOrder.end(), kNumFxPedals + slot)
+                                        - fxOrder.begin()), nullptr);
+        vst.setProperty("path", effectsChain.getExternalPluginPath(slot), nullptr);
+        vst.setProperty("enabled", effectsChain.isExternalPluginEnabled(slot), nullptr);
+        vst.setProperty("hasState", vstState.getSize() > 0, nullptr);
+        const auto presetName = vstPresetSelectors[(size_t) slot].getText();
+        if (presetName.isNotEmpty() && presetName != "PRESETS")
+            vst.setProperty("presetName", presetName, nullptr);
+        const auto& pattern = effectsChain.getExternalPluginDrumPattern(slot);
+        vst.setProperty("patternBars", pattern.getBars(), nullptr);
+        vst.setProperty("patternData", serializeDrumPattern(pattern), nullptr);
+        fx.addChild(vst, -1, nullptr);
     }
-    root.addChild(midi, -1, nullptr);
+    root.addChild(fx, -1, nullptr);
 
     return root;
 }
@@ -1458,6 +3621,31 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
             box.onChange();
     };
 
+    auto restorePresetName = [] (juce::ComboBox& box, const juce::String& presetName)
+    {
+        if (presetName.isEmpty())
+        {
+            box.setSelectedItemIndex(-1, juce::dontSendNotification);
+            return;
+        }
+
+        for (int item = 0; item < box.getNumItems(); ++item)
+            if (box.getItemText(item) == presetName)
+            {
+                box.setSelectedItemIndex(item, juce::dontSendNotification);
+                return;
+            }
+
+        // Keep the session informative even if its separate preset-library
+        // entry was moved or deleted. This temporary item is not written to
+        // pedal-presets.xml and disappears when the selector is refreshed.
+        int temporaryId = 30000;
+        while (box.indexOfItemId(temporaryId) >= 0)
+            ++temporaryId;
+        box.addItem(presetName, temporaryId);
+        box.setSelectedId(temporaryId, juce::dontSendNotification);
+    };
+
     auto setToggle = [](auto& button, bool state)
     {
         button.setToggleState(state, juce::dontSendNotification);
@@ -1467,21 +3655,38 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
 
     const auto global = sessionTree.getChildWithName("GLOBAL");
     const auto fx = sessionTree.getChildWithName("FX");
-    const auto midi = sessionTree.getChildWithName("MIDI");
     const auto looperNode = sessionTree.getChildWithName("LOOPER");
-    const auto vst = fx.getChildWithName("VST");
-
-    const juce::String pluginPath = vst.getProperty("path").toString();
-    const bool pluginEnabled = (bool) vst.getProperty("enabled", true);
-    EffectsChain::PreparedExternalPlugin candidate;
-    if (pluginPath.isNotEmpty())
+    const auto vstStates = unpackVstStates(vstState);
+    std::array<juce::String, kMaxVst3Pedals> pluginPaths;
+    std::array<bool, kMaxVst3Pedals> pluginEnabled{};
+    std::array<int, kMaxVst3Pedals> patternBars{};
+    std::array<juce::String, kMaxVst3Pedals> patternData;
+    std::array<juce::String, kMaxVst3Pedals> presetNames;
+    std::array<EffectsChain::PreparedExternalPlugin, kMaxVst3Pedals> candidates;
+    int vstNodeCount = 0;
+    for (int i = 0; i < fx.getNumChildren(); ++i)
     {
-        juce::String pluginError;
-        if (!effectsChain.prepareExternalVst3(juce::File(pluginPath), candidate,
-                                              pluginError, &vstState))
+        const auto node = fx.getChild(i);
+        if (!node.hasType("VST"))
+            continue;
+        const int slot = juce::jlimit(0, kMaxVst3Pedals - 1,
+                                      (int) node.getProperty("index", vstNodeCount));
+        ++vstNodeCount;
+        pluginPaths[(size_t) slot] = node.getProperty("path").toString();
+        pluginEnabled[(size_t) slot] = (bool) node.getProperty("enabled", true);
+        patternBars[(size_t) slot] = (int) node.getProperty("patternBars", 1);
+        patternData[(size_t) slot] = node.getProperty("patternData", "").toString();
+        presetNames[(size_t) slot] = node.getProperty("presetName", "").toString();
+        if (pluginPaths[(size_t) slot].isNotEmpty())
         {
-            errorMessage = pluginError;
-            return false;
+            juce::String pluginError;
+            if (!effectsChain.prepareExternalVst3(juce::File(pluginPaths[(size_t) slot]),
+                                                  candidates[(size_t) slot], pluginError,
+                                                  &vstStates[(size_t) slot]))
+            {
+                errorMessage = "VST " + juce::String(slot + 1) + ": " + pluginError;
+                return false;
+            }
         }
     }
     auto preparedLooper = looper.prepareSessionRestore(looperSnapshot);
@@ -1489,34 +3694,77 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
     setSlider(masterKnob, (double) global.getProperty("masterVolume", 0.85));
     outputMono.store((bool) global.getProperty("outputMono", true), std::memory_order_relaxed);
     updateOutputModeButton();
-    midiActionSelector.setSelectedId((int) global.getProperty("midiActionSelected", 1), juce::dontSendNotification);
-    refreshMidiInputSelector();
-    updateMidiMappingLabel();
-
-    std::array<int, kNumFxPedals> loadedOrder{};
-    loadedOrder.fill(0);
-    std::array<bool, kNumFxPedals> seen{};
+    const bool legacySingleVst = vstNodeCount <= 1;
+    std::array<int, kChainItemCount> loadedOrder{};
+    loadedOrder.fill(-1);
+    std::array<bool, kChainItemCount> seenSlots{};
+    std::array<bool, kChainItemIdLimit> seenItems{};
     for (int i = 0; i < fx.getNumChildren(); ++i)
     {
         const auto pedal = fx.getChild(i);
-        if (!pedal.hasType("PEDAL"))
+        int item = -1;
+        int desiredSlot = -1;
+        if (pedal.hasType("PEDAL"))
+        {
+            item = juce::jlimit(0, kNumFxPedals - 1, (int) pedal.getProperty("index", 0));
+            if (item == EffectsChain::RhythmPedal || item == EffectsChain::LegacySustainGranPedal)
+                continue;
+            desiredSlot = (int) pedal.getProperty("slot", item) + (legacySingleVst ? 1 : 0);
+        }
+        else if (pedal.hasType("VST"))
+        {
+            const int vstIndex = juce::jlimit(0, kMaxVst3Pedals - 1,
+                                               (int) pedal.getProperty("index", 0));
+            item = kNumFxPedals + vstIndex;
+            desiredSlot = legacySingleVst ? 0 : (int) pedal.getProperty("slot", item);
+        }
+        if (item < 0 || item >= kChainItemIdLimit || seenItems[(size_t) item])
             continue;
-
-        const int pedalIndex = juce::jlimit(0, kNumFxPedals - 1, (int) pedal.getProperty("index", 0));
-        int slot = (int) pedal.getProperty("slot", pedalIndex);
-        slot = juce::jlimit(0, kNumFxPedals - 1, slot);
-        while (seen[(size_t) slot])
-            slot = (slot + 1) % kNumFxPedals;
-        loadedOrder[(size_t) slot] = pedalIndex;
-        seen[(size_t) slot] = true;
+        desiredSlot = juce::jlimit(0, kChainItemCount - 1, desiredSlot);
+        while (seenSlots[(size_t) desiredSlot])
+            desiredSlot = (desiredSlot + 1) % kChainItemCount;
+        loadedOrder[(size_t) desiredSlot] = item;
+        seenSlots[(size_t) desiredSlot] = true;
+        seenItems[(size_t) item] = true;
     }
-    for (int slot = 0, nextPedal = 0; slot < kNumFxPedals; ++slot)
+    for (int slot = 0, nextItem = 0; slot < kChainItemCount; ++slot)
     {
-        if (seen[(size_t) slot])
+        if (seenSlots[(size_t) slot])
             continue;
-        while (nextPedal < kNumFxPedals && std::find(loadedOrder.begin(), loadedOrder.end(), nextPedal) != loadedOrder.end())
-            ++nextPedal;
-        loadedOrder[(size_t) slot] = juce::jlimit(0, kNumFxPedals - 1, nextPedal);
+        while (nextItem < kChainItemIdLimit
+               && (nextItem == EffectsChain::RhythmPedal || seenItems[(size_t) nextItem]))
+            ++nextItem;
+        if (nextItem >= kChainItemIdLimit)
+            break;
+        loadedOrder[(size_t) slot] = nextItem;
+        seenItems[(size_t) loadedOrder[(size_t) slot]] = true;
+    }
+
+    // New sessions carry one authoritative order node.  Keep the per-pedal
+    // slot fallback above for older files, but prefer the explicit sequence
+    // whenever it is present and valid.
+    const auto savedOrder = fx.getChildWithName("ORDER");
+    if (savedOrder.isValid())
+    {
+        std::array<int, kChainItemCount> explicitOrder{};
+        std::array<bool, kChainItemIdLimit> explicitSeen{};
+        bool validOrder = true;
+        for (int slot = 0; slot < kChainItemCount; ++slot)
+        {
+            const int item = (int) savedOrder.getProperty("slot" + juce::String(slot), -1);
+            if (item < 0 || item >= kChainItemIdLimit
+                || item == EffectsChain::RhythmPedal
+                || item == EffectsChain::LegacySustainGranPedal
+                || explicitSeen[(size_t) item])
+            {
+                validOrder = false;
+                break;
+            }
+            explicitOrder[(size_t) slot] = item;
+            explicitSeen[(size_t) item] = true;
+        }
+        if (validOrder)
+            loadedOrder = explicitOrder;
     }
     fxOrder = loadedOrder;
     refreshFxUiOrder();
@@ -1531,6 +3779,7 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
         auto* pedalUi = fxPedals[pedalIndex].get();
         if (pedalUi == nullptr)
             continue;
+        bool pedalOn = (bool) pedal.getProperty("on", false);
 
         setSlider(pedalUi->knob1, (double) pedal.getProperty("knob1", pedalUi->knob1.getValue()));
         setSlider(pedalUi->knob2, (double) pedal.getProperty("knob2", pedalUi->knob2.getValue()));
@@ -1538,20 +3787,110 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
         setSlider(pedalUi->knob4, (double) pedal.getProperty("knob4", pedalUi->knob4.getValue()));
         setSlider(pedalUi->knob5, (double) pedal.getProperty("knob5", pedalUi->knob5.getValue()));
         setSlider(pedalUi->knob6, (double) pedal.getProperty("knob6", pedalUi->knob6.getValue()));
-        setToggle(pedalUi->onBtn, (bool) pedal.getProperty("on", false));
+        if (pedalIndex != 7)
+        {
+            setSlider(pedalUi->knob7, (double) pedal.getProperty("knob7", pedalUi->knob7.getValue()));
+            setSlider(pedalUi->knob8, (double) pedal.getProperty("knob8", pedalUi->knob8.getValue()));
+            setSlider(pedalUi->knob9, (double) pedal.getProperty("knob9", pedalUi->knob9.getValue()));
+        }
+        if (pedalIndex == EffectsChain::HarmonizerPedal)
+        {
+            if (pedal.hasProperty("picoPitchForkVersion"))
+            {
+                setSlider(pedalUi->knob5, (double) pedal.getProperty("picoMode", 2));
+                setSlider(pedalUi->knob6, (bool) pedal.getProperty("picoMomentary", false) ? 1.0 : 0.0);
+            }
+            else
+            {
+                // Explicit H90 -> Pico migration. Preserve the wet balance and
+                // choose the closest published DUAL pairing to the two former
+                // chromatic voices; delay/feedback have no physical Pico
+                // equivalent and become an instantaneous sweep.
+                static constexpr float dualPairs[][2] = {
+                    { -0.08f, 0.08f }, { -0.17f, 0.17f }, { 2.0f, 9.0f },
+                    { 4.0f, 7.0f }, { 5.0f, -7.0f }, { 7.0f, -12.0f },
+                    { 9.0f, -7.0f }, { 12.0f, -12.0f }, { 24.0f, -12.0f },
+                    { 36.0f, -12.0f }
+                };
+                const float oldA = (float) pedal.getProperty("knob1", 7.0);
+                const float oldB = (float) pedal.getProperty("knob2", 12.0);
+                int closest = 0;
+                float closestError = std::numeric_limits<float>::max();
+                for (int pair = 0; pair < (int) juce::numElementsInArray(dualPairs); ++pair)
+                {
+                    const float direct = std::pow(oldA - dualPairs[pair][0], 2.0f)
+                                       + std::pow(oldB - dualPairs[pair][1], 2.0f);
+                    const float swapped = std::pow(oldA - dualPairs[pair][1], 2.0f)
+                                        + std::pow(oldB - dualPairs[pair][0], 2.0f);
+                    const float error = juce::jmin(direct, swapped);
+                    if (error < closestError)
+                    {
+                        closestError = error;
+                        closest = pair;
+                    }
+                }
+                setSlider(pedalUi->knob1, 0.50);
+                setSlider(pedalUi->knob2, (double) pedal.getProperty("knob3", 0.40));
+                setSlider(pedalUi->knob3, 0.0);
+                setSlider(pedalUi->knob4, (double) closest);
+                setSlider(pedalUi->knob5, 2.0);
+                setSlider(pedalUi->knob6, 0.0);
+            }
+        }
+        if (pedalIndex == 7)
+        {
+            bool od2Selected = false;
+            int bassBoost = 0;
+            if (pedal.hasProperty("voxCooltronVersion"))
+            {
+                od2Selected = (bool) pedal.getProperty("voxOd2Selected", false);
+                bassBoost = (int) pedal.getProperty("voxBassBoost", 0);
+            }
+            else if (pedal.hasProperty("sunsetVersion"))
+            {
+                // Explicit Sunset -> Cooltron migration. Sunset allowed both
+                // engines at once; the physical VOX selects exactly one. OD2
+                // wins when it was active, and either active engine enables
+                // the global EFFECT switch. The old three-state control maps
+                // directly to OFF / OD2 / BOTH.
+                const bool sunsetOd2WasOn = (bool) pedal.getProperty("sunsetBOn", false);
+                od2Selected = sunsetOd2WasOn;
+                pedalOn = pedalOn || sunsetOd2WasOn;
+                bassBoost = (int) pedal.getProperty("sunsetBright", 1);
+            }
+            else
+            {
+                // Pre-Sunset Mirror Drive sessions used knob1=drive,
+                // knob2=tone and knob3=level. Translate them into OD1.
+                setSlider(pedalUi->knob1, (double) pedal.getProperty("knob3", 0.52));
+                setSlider(pedalUi->knob2, (double) pedal.getProperty("knob1", 0.42));
+                setSlider(pedalUi->knob3, (double) pedal.getProperty("knob2", 0.55));
+                setSlider(pedalUi->knob4, 0.52);
+                setSlider(pedalUi->knob5, 0.36);
+                setSlider(pedalUi->knob6, 0.55);
+            }
+            pedalUi->setCooltronBassBoost(bassBoost);
+            pedalUi->setTertiaryFootswitchLatched(od2Selected);
+            effectsChain.setCooltronOd2Selected(od2Selected);
+        }
+        if (pedalIndex == 12)
+        {
+            setSlider(pedalUi->eqVolumeSlider,
+                      (double)pedal.getProperty("eqVolume", pedalUi->eqVolumeSlider.getValue()));
+            setSlider(pedalUi->eqGainSlider,
+                      (double)pedal.getProperty("eqGain", pedalUi->eqGainSlider.getValue()));
+            for (int band = 0; band < 10; ++band)
+                setSlider(pedalUi->eqBandSliders[(size_t)band],
+                          (double)pedal.getProperty("eqBand" + juce::String(band + 1),
+                                                    pedalUi->eqBandSliders[(size_t)band].getValue()));
+        }
+        const auto presetName = pedal.getProperty("presetName", "").toString();
+        restorePresetName(pedalPresetSelectors[(size_t) pedalIndex], presetName);
+        setToggle(pedalUi->onBtn, pedalOn);
     }
 
-    setCombo(rhythmStyleSelector, (int) fx.getProperty("rhythmStyle", 0) + 1);
-    setCombo(rhythmPatternSelector, (int) fx.getProperty("rhythmPattern", 0) + 1);
-    setCombo(rhythmModeSelector, (int) fx.getProperty("rhythmMode", 0) + 1);
-    setCombo(rhythmVerseBarsSelector, (int) fx.getProperty("rhythmVerseBars", 3));
-    setCombo(rhythmChorusBarsSelector, (int) fx.getProperty("rhythmChorusBars", 4));
-    setCombo(rhythmCountInBarsSelector, (int) fx.getProperty("rhythmCountInBars", 2));
-    setCombo(rhythmCountInSoundSelector, (int) fx.getProperty("rhythmCountInSound", 1));
-    setToggle(btnRhythmCountInToggle, (bool) fx.getProperty("rhythmCountInToggle", true));
-
     closeExternalVst3Editor();
-    EffectsChain::PreparedExternalPlugin retired;
+    std::array<EffectsChain::PreparedExternalPlugin, kMaxVst3Pedals> retired;
 
     {
         const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
@@ -1561,43 +3900,32 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
             return false;
         }
 
-        if (pluginPath.isNotEmpty())
+        for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
         {
-            retired = effectsChain.commitExternalPlugin(std::move(candidate));
-            effectsChain.setExternalPluginEnabled(pluginEnabled);
-        }
-        else
-        {
-            retired = effectsChain.detachExternalPlugin();
+            if (pluginPaths[(size_t) slot].isNotEmpty())
+            {
+                retired[(size_t) slot] = effectsChain.commitExternalPlugin(
+                    std::move(candidates[(size_t) slot]), slot);
+                effectsChain.setExternalPluginEnabled(pluginEnabled[(size_t) slot], slot);
+            }
+            else
+                retired[(size_t) slot] = effectsChain.detachExternalPlugin(slot);
+
+            LoopernicoMidi::DrumMidiPattern pattern;
+            if (deserializeDrumPattern(patternData[(size_t) slot], patternBars[(size_t) slot], pattern))
+            {
+                effectsChain.setExternalPluginDrumPattern(slot, pattern);
+            }
         }
 
     }
 
     updateExternalVstUi();
+    for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
+        restorePresetName(vstPresetSelectors[(size_t) slot], presetNames[(size_t) slot]);
 
-    for (int i = 0; i < MidiController::kNumActions; ++i)
-    {
-        const auto mappingNode = midi.getChild(i);
-        MidiController::MappingData mapping;
-        mapping.isMapped = (bool) mappingNode.getProperty("isMapped", false);
-        mapping.isProgramChange = (bool) mappingNode.getProperty("isProgramChange", false);
-        mapping.isNote = (bool) mappingNode.getProperty("isNote", false);
-        mapping.number = (int) mappingNode.getProperty("number", -1);
-        midiController.setMapping(i, mapping);
-    }
-    updateMidiMappingLabel();
-    updateMidiManualControls();
-
-    const bool listenAllInputs = (bool) global.getProperty("midiListenAllInputs", true);
-    const auto midiIdentifier = global.getProperty("midiInputIdentifier").toString();
-    const int midiDeviceIndex = midiIdentifier.isNotEmpty()
-        ? findMidiDeviceIndexByIdentifier(midiIdentifier)
-        : (int) global.getProperty("midiInputIndex", -1);
-    const int midiSelectorIndex = listenAllInputs ? 0 : (midiDeviceIndex >= 0 ? midiDeviceIndex + 1 : 0);
-    midiDeviceSelector.setSelectedItemIndex(midiSelectorIndex, juce::dontSendNotification);
-    changeMidiInput(midiSelectorIndex);
-    saveMidiConfiguration();
-
+    for (auto& track : visualTracks)
+        track->setDisplayName({});
     refreshTrackUiFromLooper();
     for (int i = 0; i < looperNode.getNumChildren() && i < (int) visualTracks.size(); ++i)
     {
@@ -1606,7 +3934,6 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
     }
     updateMuteSoloMatrix();
     refreshAllThumbnails();
-    updateRhythmBoxReadouts();
     updateLoopEditButtons();
     repaint();
     return true;
@@ -1614,6 +3941,8 @@ bool MainComponent::applySessionTree(const juce::ValueTree& sessionTree,
 
 void MainComponent::refreshTrackUiFromLooper()
 {
+    btnRecConfirm.setEnabled(!looper.isGlobalPaused());
+
     const int totalTracks = looper.getTotalTracks();
     for (int i = 0; i < (int) visualTracks.size(); ++i)
     {
@@ -1625,6 +3954,7 @@ void MainComponent::refreshTrackUiFromLooper()
     }
 
     sldSilenceThreshold.setValue(looper.getSilenceThresholdDb(), juce::dontSendNotification);
+    sldLooperTempo.setValue(looper.getBpm(), juce::dontSendNotification);
 }
 
 void MainComponent::refreshFxUiOrder()
@@ -1674,11 +4004,44 @@ void MainComponent::updateMidiMappingLabel()
 
 void MainComponent::updateMidiManualControls()
 {
-    const auto mapping = midiController.getMapping(midiActionSelector.getSelectedId() - 1);
-    const int type = mapping.isProgramChange ? 3 : (mapping.isNote ? 2 : 1);
+    const int action = midiActionSelector.getSelectedId() - 1;
+    const auto mapping = midiController.getMapping(action);
+    const int type = !mapping.isMapped ? 3 : (mapping.isProgramChange ? 3 : (mapping.isNote ? 2 : 1));
+    const int number = !mapping.isMapped ? 0 : mapping.number;
     midiMessageTypeSelector.setSelectedId(type, juce::dontSendNotification);
-    midiNumberSelector.setValue(juce::jlimit(0, 127, mapping.number < 0 ? 0 : mapping.number),
+    midiNumberSelector.setValue(juce::jlimit(0, 127, number < 0 ? 0 : number),
                                 juce::dontSendNotification);
+}
+
+void MainComponent::toggleFxPedalFromMidi(int pedalIndex)
+{
+    if (pedalIndex < 0 || pedalIndex >= kNumFxPedals || fxPedals[pedalIndex] == nullptr)
+        return;
+
+    if (pedalIndex == EffectsChain::RhythmPedal)
+        return;
+
+    static constexpr const char* pedalNames[kNumFxPedals] = {
+        "NOISE GATE", "REMOVED", "COMPRESSOR", "HARMONIZER",
+        "REMOVED", "SUSTAIN CHORDS", "FUZZ", "VOX COOLTRON DUEL OVERDRIVE", "CHORUS",
+        "TREMOLO", "TAPE DELAY", "ROOM REVERB", "OUTPUT EQ"
+    };
+
+    auto& pedal = *fxPedals[pedalIndex];
+    const bool nextState = !pedal.onBtn.getToggleState();
+
+    // Replica el camino del footswitch con mouse: la notificacion sincronica
+    // ejecuta onClick y actualiza el DSP; el repaint del padre actualiza LED y
+    // carcasa porque el ToggleButton real permanece oculto.
+    pedal.onBtn.setToggleState(nextState, juce::sendNotificationSync);
+    pedal.repaint();
+    fxContainer.repaint();
+
+    lblMidiStatus.setText("MIDI " + juce::String(pedalNames[pedalIndex]) + ": "
+                              + (nextState ? "ON" : "OFF"),
+                          juce::dontSendNotification);
+    lblMidiStatus.setColour(juce::Label::textColourId,
+                            nextState ? LnfC::PlayGreen : LnfC::TextDim);
 }
 
 void MainComponent::applyMidiManualMapping()
@@ -1694,7 +4057,7 @@ void MainComponent::applyMidiManualMapping()
     mapping.isProgramChange = midiMessageTypeSelector.getSelectedId() == 3;
     midiController.setMapping(action, mapping);
     updateMidiMappingLabel();
-    saveMidiConfiguration();
+    markMidiConfigurationDirty();
 }
 
 juce::File MainComponent::getMidiConfigurationFile() const
@@ -1703,15 +4066,14 @@ juce::File MainComponent::getMidiConfigurationFile() const
         .getChildFile("Loopernico").getChildFile("midi-config.xml");
 }
 
-void MainComponent::saveMidiConfiguration() const
+bool MainComponent::saveMidiConfiguration() const
 {
     juce::ValueTree root("LOOPERNICO_MIDI_CONFIG");
+    root.setProperty("version", 3, nullptr);
     root.setProperty("listenAllInputs", midiListenAllInputs, nullptr);
-    root.setProperty("uiFxSectionHeight", fxSectionHeight, nullptr);
-    root.setProperty("uiControlSectionHeight", controlSectionHeight, nullptr);
-    root.setProperty("inputIdentifier", (!midiListenAllInputs && lastMidiInputIndex >= 0
-        && lastMidiInputIndex < juce::MidiInput::getAvailableDevices().size())
-        ? juce::MidiInput::getAvailableDevices().getReference(lastMidiInputIndex).identifier : juce::String(), nullptr);
+    root.setProperty("inputIdentifier",
+                     midiListenAllInputs ? juce::String() : selectedMidiInputIdentifier,
+                     nullptr);
     root.setProperty("selectedAction", midiActionSelector.getSelectedId(), nullptr);
 
     for (int i = 0; i < MidiController::kNumActions; ++i)
@@ -1727,38 +4089,69 @@ void MainComponent::saveMidiConfiguration() const
     }
 
     const auto file = getMidiConfigurationFile();
-    file.getParentDirectory().createDirectory();
-    if (auto stream = file.createOutputStream())
-        root.writeToStream(*stream);
+    if (!file.getParentDirectory().createDirectory())
+        return false;
+
+    // El lector usa XmlDocument, por lo tanto este archivo debe ser XML real.
+    // Antes se usaba ValueTree::writeToStream (binario), y el mapping nunca
+    // podia recuperarse en el siguiente arranque.
+    if (const auto xml = root.createXml())
+        return xml->writeTo(file);
+
+    return false;
 }
 
 void MainComponent::loadMidiConfiguration()
 {
     const auto file = getMidiConfigurationFile();
     if (!file.existsAsFile())
-        return; // MidiController conserva los CC predeterminados 0 a 3.
-
-    std::unique_ptr<juce::XmlElement> xml(juce::XmlDocument::parse(file));
-    if (xml == nullptr)
+    {
+        lblMidiStatus.setText("Perfil MIDI nuevo: sin asignaciones.", juce::dontSendNotification);
         return;
+    }
 
-    const auto root = juce::ValueTree::fromXml(*xml);
+    juce::ValueTree root;
+    if (const auto xml = juce::XmlDocument::parse(file))
+    {
+        root = juce::ValueTree::fromXml(*xml);
+    }
+    else if (const auto stream = file.createInputStream())
+    {
+        // Compatibilidad con las versiones que escribian ValueTree binario en
+        // el archivo .xml. Al siguiente guardado se migra automaticamente.
+        root = juce::ValueTree::readFromStream(*stream);
+    }
+
     if (!root.isValid() || !root.hasType("LOOPERNICO_MIDI_CONFIG"))
         return;
 
-    fxSectionHeight = juce::jlimit(180, 720, (int) root.getProperty("uiFxSectionHeight", 332));
-    controlSectionHeight = juce::jlimit(96, 420, (int) root.getProperty("uiControlSectionHeight", 110));
+    // Version 3 inaugura el perfil explicito. Las configuraciones anteriores
+    // se ignoran para comenzar sin asignaciones y evitar mappings conflictivos.
+    if ((int) root.getProperty("version", 0) != 3)
+    {
+        lblMidiStatus.setText("Perfil MIDI nuevo: sin asignaciones.", juce::dontSendNotification);
+        return;
+    }
 
     for (int i = 0; i < root.getNumChildren(); ++i)
     {
         const auto node = root.getChild(i);
         if (!node.hasType("MAPPING")) continue;
         const int action = (int) node.getProperty("action", -1);
+        const int number = (int) node.getProperty("number", -1);
+        const bool isMapped = (bool) node.getProperty("isMapped", false);
+        const bool isProgramChange = (bool) node.getProperty("isProgramChange", false);
+        const bool isNote = (bool) node.getProperty("isNote", false);
+        if (action < 0 || action >= MidiController::kNumActions
+            || (isMapped && (number < 0 || number > 127))
+            || (isProgramChange && isNote))
+            continue;
+
         MidiController::MappingData mapping;
-        mapping.isMapped = (bool) node.getProperty("isMapped", false);
-        mapping.isProgramChange = (bool) node.getProperty("isProgramChange", false);
-        mapping.isNote = (bool) node.getProperty("isNote", false);
-        mapping.number = (int) node.getProperty("number", -1);
+        mapping.isMapped = isMapped;
+        mapping.isProgramChange = isProgramChange;
+        mapping.isNote = isNote;
+        mapping.number = isMapped ? number : -1;
         midiController.setMapping(action, mapping);
     }
 
@@ -1766,7 +4159,287 @@ void MainComponent::loadMidiConfiguration()
     const auto identifier = root.getProperty("inputIdentifier").toString();
     const bool listenAll = (bool) root.getProperty("listenAllInputs", true);
     const int device = identifier.isNotEmpty() ? findMidiDeviceIndexByIdentifier(identifier) : -1;
-    changeMidiInput(listenAll || device < 0 ? 0 : device + 1);
+    if (listenAll || identifier.isEmpty())
+    {
+        changeMidiInput(0);
+        lblMidiStatus.setText("Configuracion MIDI cargada.", juce::dontSendNotification);
+        lblMidiStatus.setColour(juce::Label::textColourId, LnfC::PlayGreen);
+    }
+    else if (device >= 0)
+    {
+        changeMidiInput(device + 1);
+        lblMidiStatus.setText("Configuracion MIDI cargada.", juce::dontSendNotification);
+        lblMidiStatus.setColour(juce::Label::textColourId, LnfC::PlayGreen);
+    }
+    else
+    {
+        lastMidiInputIndex = -1;
+        midiListenAllInputs = false;
+        selectedMidiInputIdentifier = identifier;
+        midiDeviceSelector.setSelectedItemIndex(-1, juce::dontSendNotification);
+        lblMidiStatus.setText("Esperando el dispositivo MIDI guardado...", juce::dontSendNotification);
+        lblMidiStatus.setColour(juce::Label::textColourId, LnfC::OvdAmber);
+    }
+}
+
+void MainComponent::markMidiConfigurationDirty()
+{
+    lblMidiStatus.setText("Cambios MIDI sin guardar.", juce::dontSendNotification);
+    lblMidiStatus.setColour(juce::Label::textColourId, LnfC::OvdAmber);
+}
+
+void MainComponent::runStemSeparationDiagnostic(
+    const juce::File& outputDirectory,
+    std::function<void(bool, juce::String)> completion)
+{
+    struct DiagnosticState
+    {
+        juce::Component::SafePointer<MainComponent> main;
+        juce::File directory;
+        juce::File inputFile;
+        juce::StringArray report;
+        std::function<void(bool, juce::String)> completion;
+        bool finished = false;
+    };
+
+    auto state = std::make_shared<DiagnosticState>();
+    state->main = this;
+    state->directory = outputDirectory;
+    state->inputFile = outputDirectory.getChildFile("stem-test-input.wav");
+    state->completion = std::move(completion);
+    auto finish = [state](bool passed, const juce::String& detail)
+    {
+        if (state->finished)
+            return;
+        state->finished = true;
+        state->report.add((passed ? "OK: " : "ERROR: ") + detail);
+        if (state->completion != nullptr)
+            state->completion(passed, state->report.joinIntoString("\n"));
+    };
+
+    if (!outputDirectory.createDirectory())
+    {
+        finish(false, "No se pudo crear el directorio de prueba.");
+        return;
+    }
+
+    constexpr double testRate = 48000.0;
+    constexpr int testSamples = 3 * 48000;
+    juce::AudioBuffer<float> source(2, testSamples);
+    for (int sample = 0; sample < testSamples; ++sample)
+    {
+        const float value = (float) (0.5 * std::sin(juce::MathConstants<double>::twoPi
+                                                   * 440.0 * (double) sample / testRate));
+        source.setSample(0, sample, value);
+        source.setSample(1, sample, value * 0.8f);
+    }
+
+    state->inputFile.deleteFile();
+    auto stream = state->inputFile.createOutputStream();
+    if (stream == nullptr)
+    {
+        finish(false, "No se pudo crear el WAV de entrada.");
+        return;
+    }
+    juce::WavAudioFormat wav;
+    JUCE_BEGIN_IGNORE_DEPRECATION_WARNINGS
+    auto* rawStream = stream.get();
+    std::unique_ptr<juce::AudioFormatWriter> writer(
+        wav.createWriterFor(rawStream, testRate, 2, 24, {}, 0));
+    JUCE_END_IGNORE_DEPRECATION_WARNINGS
+    if (writer == nullptr)
+    {
+        finish(false, "No se pudo inicializar el WAV de entrada.");
+        return;
+    }
+    stream.release();
+    if (!writer->writeFromAudioSampleBuffer(source, 0, source.getNumSamples()))
+    {
+        finish(false, "No se pudo escribir el WAV de entrada.");
+        return;
+    }
+    writer.reset();
+    source.setSize(0, 0);
+    state->report.add("OK: WAV de prueba creado (48 kHz, estereo, 3 s).");
+
+    LoopernicoStems::StemSeparationOptions options;
+    options.inputFile = state->inputFile;
+    options.requestedStems = LoopernicoStems::standardSixStems();
+    options.mode = LoopernicoStems::StemSeparationMode::mock;
+    options.importAutomatically = true;
+
+    stemSeparationEngine.startSeparation(options, {},
+        [state, finish](LoopernicoStems::StemSeparationResult separation) mutable
+        {
+            auto* main = state->main.getComponent();
+            if (main == nullptr)
+                return;
+            if (!separation.success || separation.stems.size() != 6)
+            {
+                finish(false, "El mock no genero seis stems: " + separation.errorMessage);
+                return;
+            }
+
+            juce::AudioFormatManager manager;
+            manager.registerBasicFormats();
+            float previousPeak = 2.0f;
+            for (const auto& stem : separation.stems)
+            {
+                std::unique_ptr<juce::AudioFormatReader> reader(
+                    manager.createReaderFor(stem.outputFile));
+                if (reader == nullptr || reader->numChannels != 2
+                    || reader->lengthInSamples != 3 * 48000)
+                {
+                    finish(false, "Formato o longitud incorrectos en " + stem.outputFile.getFileName());
+                    return;
+                }
+                juce::AudioBuffer<float> block(2, 4096);
+                reader->read(&block, 0, block.getNumSamples(), 0, true, true);
+                const float peak = block.getMagnitude(0, block.getNumSamples());
+                if (peak <= 0.0f || peak >= previousPeak)
+                {
+                    finish(false, "Las ganancias mock no son distinguibles y decrecientes.");
+                    return;
+                }
+                previousPeak = peak;
+            }
+            state->report.add("OK: seis WAV estereo sincronizados y con ganancias distintas.");
+
+            if (main->stemImportController == nullptr)
+            {
+                finish(false, "El controlador de importacion no esta disponible.");
+                return;
+            }
+            main->stemImportController->importAsync(separation.stems, {},
+                [state, finish](LoopernicoStems::StemImportController::ImportResult imported) mutable
+                {
+                    auto* currentMain = state->main.getComponent();
+                    if (currentMain == nullptr)
+                        return;
+                    if (!imported.success || imported.imported.size() != 6
+                        || currentMain->looper.getTotalTracks() != 6)
+                    {
+                        finish(false, "Fallo la importacion de seis pistas: " + imported.errorMessage);
+                        return;
+                    }
+                    state->report.add("OK: seis stems importados en seis pistas libres.");
+
+                    LoopernicoStems::StemSeparationOptions cancelOptions;
+                    cancelOptions.inputFile = state->inputFile;
+                    cancelOptions.requestedStems = LoopernicoStems::standardSixStems();
+                    cancelOptions.mode = LoopernicoStems::StemSeparationMode::mock;
+                    if (!currentMain->stemSeparationEngine.startSeparation(cancelOptions, {},
+                        [state, finish](LoopernicoStems::StemSeparationResult cancelled) mutable
+                        {
+                            if (!cancelled.cancelled)
+                            {
+                                finish(false, "El segundo trabajo no informo cancelacion.");
+                                return;
+                            }
+                            if (cancelled.jobDirectory.exists())
+                            {
+                                finish(false, "La carpeta incompleta no fue limpiada al cancelar.");
+                                return;
+                            }
+                            state->report.add("OK: cancelacion y limpieza de temporales incompletos.");
+                            finish(true, "Diagnostico de separacion mock completado.");
+                        }))
+                    {
+                        finish(false, "No se pudo iniciar el trabajo de cancelacion.");
+                        return;
+                    }
+                    juce::Timer::callAfterDelay(12,
+                        [safeMain = state->main]
+                        {
+                            if (auto* component = safeMain.getComponent())
+                                component->stemSeparationEngine.cancel();
+                        });
+                });
+        });
+}
+
+void MainComponent::runDemucsAdapterDiagnostic(
+    const juce::File& outputDirectory, const juce::File& executable,
+    const juce::File& model, const juce::File& input,
+    std::function<void(bool, juce::String)> completion)
+{
+    if (!outputDirectory.createDirectory())
+    {
+        completion(false, "ERROR: no se pudo crear el directorio del diagnostico Demucs.");
+        return;
+    }
+
+    LoopernicoStems::StemSeparationOptions options;
+    options.inputFile = input;
+    options.requestedStems = LoopernicoStems::standardSixStems();
+    options.mode = LoopernicoStems::StemSeparationMode::demucsCppSixStem;
+    options.demucsCppExecutable = executable;
+    options.demucsCppModel = model;
+    options.importAutomatically = false;
+    const bool usingTestHelper = executable.getFileName().containsIgnoreCase("helper");
+
+    auto safeThis = juce::Component::SafePointer<MainComponent>(this);
+    stemSeparationEngine.startSeparation(
+        options, {},
+        [safeThis, options, usingTestHelper, completion = std::move(completion)](
+            LoopernicoStems::StemSeparationResult result) mutable
+        {
+            const bool passed = result.success && result.stems.size() == 6;
+            if (!passed)
+            {
+                completion(false, "ERROR: diagnostico del adaptador Demucs: "
+                                  + result.errorMessage);
+                return;
+            }
+
+            auto* main = safeThis.getComponent();
+            if (main == nullptr || main->stemImportController == nullptr)
+                return;
+
+            main->stemImportController->importAsync(
+                result.stems, {},
+                [safeThis, options, usingTestHelper,
+                 completion = std::move(completion)](
+                    LoopernicoStems::StemImportController::ImportResult imported) mutable
+                {
+                    auto* current = safeThis.getComponent();
+                    if (current == nullptr)
+                        return;
+                    if (!imported.success || imported.imported.size() != 6
+                        || current->looper.getTotalTracks() != 6)
+                    {
+                        completion(false, "ERROR: los stems Demucs no se importaron en seis pistas: "
+                                          + imported.errorMessage);
+                        return;
+                    }
+
+                    current->stemSeparationEngine.startSeparation(
+                        options, {},
+                        [usingTestHelper, completion = std::move(completion)](
+                            LoopernicoStems::StemSeparationResult cancelled) mutable
+                        {
+                            if (!cancelled.cancelled || cancelled.jobDirectory.exists())
+                            {
+                                completion(false, "ERROR: el proceso Demucs externo no cancelo "
+                                                  "o no limpio temporales.");
+                                return;
+                            }
+                            completion(true,
+                                "OK: adaptador Demucs inicio el proceso externo y valido seis WAV "
+                                "estereo sincronizados a 44.1 kHz.\n"
+                                "OK: seis stems se importaron en seis pistas libres.\n"
+                                "OK: cancelacion termino el proceso y limpio el trabajo incompleto.\n"
+                                + juce::String(usingTestHelper
+                                    ? "OK: contrato comprobado con helper; no evalua calidad."
+                                    : "OK: inferencia neuronal real CPU completada."));
+                        });
+                    juce::Timer::callAfterDelay(80, [safeThis]
+                    {
+                        if (auto* component = safeThis.getComponent())
+                            component->stemSeparationEngine.cancel();
+                    });
+                });
+        });
 }
 
 // ============================================================================
@@ -1774,13 +4447,26 @@ void MainComponent::loadMidiConfiguration()
 // ============================================================================
 MainComponent::~MainComponent()
 {
-    saveMidiConfiguration();
     stopTimer();
+    if (stemSeparationWindow != nullptr)
+        stemSeparationWindow->setVisible(false);
+    stemSeparationWindow.reset();
+    stemSeparationPanel.reset();
+    if (stemImportController != nullptr)
+        stemImportController->cancel();
+    stemImportController.reset();
+    stemSeparationEngine.cancel();
+    systemAudioCapture.stop();
+    deviceManager.removeChangeListener(this);
+    midiDeviceListConnection.reset();
     closeExternalVst3Editor();
     setLookAndFeel(nullptr);
     auto devices = juce::MidiInput::getAvailableDevices();
     for (auto& d : devices) deviceManager.removeMidiInputDeviceCallback(d.identifier, this);
-    shutdownAudio();
+    deviceManager.removeAudioCallback(&audioSourcePlayer);
+    audioSourcePlayer.setSource(nullptr);
+    deviceManager.closeAudioDevice();
+    audioDeviceController.flushPendingSettings();
 }
 
 // ============================================================================
@@ -1789,7 +4475,13 @@ MainComponent::~MainComponent()
 void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
 {
     looper.prepare(sampleRate, samplesPerBlockExpected, formatManager);
-        effectsChain.prepare(sampleRate, samplesPerBlockExpected);
+    effectsChain.prepare(sampleRate, samplesPerBlockExpected);
+    processedInputBuffer.setSize(2, juce::jmax(16, samplesPerBlockExpected), false, true, false);
+    systemInputDryBuffer.setSize(2, juce::jmax(16, samplesPerBlockExpected), false, true, false);
+    rhythmMonitorBuffer.setSize(2, juce::jmax(16, samplesPerBlockExpected), false, true, false);
+    processedInputBuffer.clear();
+    systemInputDryBuffer.clear();
+    rhythmMonitorBuffer.clear();
     for (int i = 0; i < (int)visualTracks.size(); ++i)
         visualTracks[i]->setThumbnailPointer(looper.getTrackThumbnail(i));
 }
@@ -1798,22 +4490,126 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buf)
 {
     if (!buf.buffer) return;
     const bool monoOutput = outputMono.load(std::memory_order_relaxed);
-    for (int ch = 2; ch < buf.buffer->getNumChannels(); ++ch)
-        buf.buffer->clear(ch, buf.startSample, buf.numSamples);
+    const int outputChannels = juce::jmin(2, buf.buffer->getNumChannels());
+    if (buf.numSamples <= 0 || outputChannels <= 0
+        || processedInputBuffer.getNumChannels() < 2
+        || systemInputDryBuffer.getNumChannels() < 2
+        || rhythmMonitorBuffer.getNumChannels() < 2
+        || processedInputBuffer.getNumSamples() < buf.numSamples
+        || systemInputDryBuffer.getNumSamples() < buf.numSamples
+        || rhythmMonitorBuffer.getNumSamples() < buf.numSamples)
+    {
+        buf.clearActiveBufferRegion();
+        return;
+    }
+
+    const bool systemInput = useSystemAudioInput.load(std::memory_order_acquire);
+    if (systemInput)
+    {
+        systemAudioCapture.read(processedInputBuffer, 0, buf.numSamples, looper.getSampleRate());
+        for (int ch = 0; ch < 2; ++ch)
+            systemInputDryBuffer.copyFrom(ch, 0, processedInputBuffer, ch, 0, buf.numSamples);
+    }
+    else
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            if (ch < buf.buffer->getNumChannels())
+                processedInputBuffer.copyFrom(ch, 0, *buf.buffer, ch, buf.startSample, buf.numSamples);
+            else
+                processedInputBuffer.clear(ch, 0, buf.numSamples);
+        }
+
+    // La entrada de instrumento puede estar conectada a cualquiera de los dos
+    // canales fisicos. Algunos VST3 procesan ambos, pero sus afinadores solo
+    // inspeccionan la entrada 1. Conservamos el nivel del canal claramente
+    // dominante (el caso habitual de una guitarra mono) y, si hay una fuente
+    // realmente estereo, hacemos un downmix convencional. Desde aqui la misma
+    // senal alimenta ambos canales, antes de los efectos y del looper.
+    if (!systemInput)
+    {
+        const float leftMagnitude = processedInputBuffer.getMagnitude(0, 0, buf.numSamples);
+        const float rightMagnitude = processedInputBuffer.getMagnitude(1, 0, buf.numSamples);
+        const bool useLeftOnly = leftMagnitude > rightMagnitude * 2.0f;
+        const bool useRightOnly = rightMagnitude > leftMagnitude * 2.0f;
+        auto* rawInputLeft = processedInputBuffer.getWritePointer(0);
+        auto* rawInputRight = processedInputBuffer.getWritePointer(1);
+        for (int i = 0; i < buf.numSamples; ++i)
+        {
+            const float monoInput = useLeftOnly ? rawInputLeft[i]
+                                  : useRightOnly ? rawInputRight[i]
+                                                 : 0.5f * (rawInputLeft[i] + rawInputRight[i]);
+            rawInputLeft[i] = rawInputRight[i] = monoInput;
+        }
+    }
+
+    rhythmMonitorBuffer.clear(0, buf.numSamples);
 
     {
         float peak = 0.0f;
-        for (int ch = 0; ch < juce::jmin(2, buf.buffer->getNumChannels()); ++ch) {
-            auto* d = buf.buffer->getReadPointer(ch, buf.startSample);
+        for (int ch = 0; ch < outputChannels; ++ch) {
+            auto* d = processedInputBuffer.getReadPointer(ch);
             for (int i = 0; i < buf.numSamples; ++i) peak = std::max(peak, std::abs(d[i]));
         }
         float prev = inputVU.load(std::memory_order_relaxed);
         if (peak > prev) inputVU.store(peak, std::memory_order_relaxed);
     }
 
-    effectsChain.processBlock(*buf.buffer, buf.startSample, buf.numSamples);
+    const auto looperTransportState = looper.getState();
+    const bool looperIsRecording = looperTransportState == LooperEngine::State::RecordingBase
+                                || looperTransportState == LooperEngine::State::RecordingLayer;
+    const bool looperIsPlaying = looperIsRecording
+                              || looperTransportState == LooperEngine::State::Playing;
+    effectsChain.setExternalPluginTransport(looper.getBpm(), looper.getBeatsPerBar(),
+                                            looperIsPlaying
+                                                || effectsChain.isAnyExternalPluginPatternPlaying(),
+                                            looperIsRecording, looperIsPlaying);
+    effectsChain.processBlock(processedInputBuffer, rhythmMonitorBuffer, 0, buf.numSamples);
 
-    if (monoOutput && buf.buffer->getNumChannels() > 1)
+    // El audio del navegador se usa como backing track limpio: la cadena de
+    // pedales/VST sigue procesandose para mantener sus transportes y el bus de
+    // ritmo, pero restauramos la captura original antes de grabarla.
+    if (systemInput)
+        for (int ch = 0; ch < 2; ++ch)
+            processedInputBuffer.copyFrom(ch, 0, systemInputDryBuffer, ch, 0, buf.numSamples);
+
+    if (monoOutput)
+    {
+        auto* inputLeft = processedInputBuffer.getWritePointer(0);
+        auto* inputRight = processedInputBuffer.getWritePointer(1);
+        auto* rhythmLeft = rhythmMonitorBuffer.getWritePointer(0);
+        auto* rhythmRight = rhythmMonitorBuffer.getWritePointer(1);
+        for (int i = 0; i < buf.numSamples; ++i)
+        {
+            if (!systemInput)
+            {
+                const float monoInput = 0.5f * (inputLeft[i] + inputRight[i]);
+                inputLeft[i] = inputRight[i] = monoInput;
+            }
+            const float monoRhythm = 0.5f * (rhythmLeft[i] + rhythmRight[i]);
+            rhythmLeft[i] = rhythmRight[i] = monoRhythm;
+        }
+    }
+
+    buf.clearActiveBufferRegion();
+    const bool monitorInput = !systemInput
+                           && audioDeviceController.isSoftwareInputMonitoringEnabled()
+                           && !effectsChain.isRhythmSoloMode();
+    looper.processBlock(processedInputBuffer, 0, *buf.buffer, buf.startSample,
+                        buf.numSamples, monitorInput, monoOutput && !systemInput);
+
+    const float master = masterVolume.load(std::memory_order_relaxed);
+    for (int ch = 0; ch < outputChannels; ++ch)
+    {
+        auto* output = buf.buffer->getWritePointer(ch, buf.startSample);
+        const auto* rhythm = rhythmMonitorBuffer.getReadPointer(ch);
+        for (int i = 0; i < buf.numSamples; ++i)
+            output[i] = LoopernicoLatency::mixOutputSample(
+                output[i],
+                LoopernicoLatency::separateRhythmMonitorSample(rhythm[i], monitorInput),
+                master);
+    }
+
+    if (monoOutput && outputChannels > 1)
     {
         auto* left  = buf.buffer->getWritePointer(0, buf.startSample);
         auto* right = buf.buffer->getWritePointer(1, buf.startSample);
@@ -1825,20 +4621,11 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buf)
         }
     }
 
-    looper.processBlock(*buf.buffer, buf.startSample, buf.numSamples,
-                        masterVolume.load(std::memory_order_relaxed), monoOutput);
-
-    if (monoOutput && buf.buffer->getNumChannels() > 1)
-    {
-        auto* left  = buf.buffer->getWritePointer(0, buf.startSample);
-        auto* right = buf.buffer->getWritePointer(1, buf.startSample);
-        for (int i = 0; i < buf.numSamples; ++i)
-        {
-            const float mono = 0.5f * (left[i] + right[i]);
-            left[i] = mono;
-            right[i] = mono;
-        }
-    }
+    // MUTE ALL silencia la salida completa: entrada monitorizada, looper,
+    // efectos/VST3 y ritmo. La grabacion y el procesamiento continuan para
+    // que activar el boton no interrumpa el estado del looper.
+    if (looper.isGlobalMuted())
+        buf.buffer->clear(buf.startSample, buf.numSamples);
 
     {
         float peakL = 0.0f, peakR = 0.0f;
@@ -1861,56 +4648,206 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buf)
 
 void MainComponent::releaseResources() { looper.releaseResources(); effectsChain.reset(); }
 
-void MainComponent::optimiseAudioDeviceForLowLatency()
+void MainComponent::changeListenerCallback(juce::ChangeBroadcaster* source)
 {
-    auto* device = deviceManager.getCurrentAudioDevice();
-    if (device == nullptr)
+    if (source != &deviceManager)
         return;
 
-    auto availableBufferSizes = device->getAvailableBufferSizes();
-    if (availableBufferSizes.isEmpty())
+    audioDeviceController.handleDeviceManagerChange();
+    updateRecordingLatencyCompensation();
+    updateAudioStatusUi();
+}
+
+void MainComponent::showAudioSettings()
+{
+    if (audioSettingsPanel == nullptr)
         return;
 
-    int preferredBufferSize = availableBufferSizes.getLast();
-    for (int candidate : { 64, 128, 256 })
+    closeFxPedalFocus();
+    audioSettingsPanel->setBounds(getLocalBounds());
+    audioSettingsPanel->refresh(effectsChain.getActiveEffectsLatencySamples());
+    audioSettingsPanel->setVisible(true);
+    audioSettingsPanel->toFront(true);
+    audioSettingsPanel->grabKeyboardFocus();
+}
+
+void MainComponent::showStemSeparationWindow()
+{
+    if (stemSeparationWindow == nullptr)
+        return;
+    stemSeparationWindow->centreWithSize(620, 610);
+    stemSeparationWindow->setVisible(true);
+    stemSeparationWindow->toFront(true);
+}
+
+void MainComponent::showStemSeparationForSnapshot()
+{
+    showStemSeparationWindow();
+    if (stemSeparationPanel != nullptr)
+        stemSeparationPanel->showDemucsModeForSnapshot();
+}
+
+juce::Image MainComponent::createStemSeparationSnapshot() const
+{
+    if (stemSeparationPanel == nullptr)
+        return {};
+    return stemSeparationPanel->createComponentSnapshot(stemSeparationPanel->getLocalBounds());
+}
+
+void MainComponent::showAudioSettingsForSnapshot()
+{
+    showAudioSettings();
+}
+
+void MainComponent::showPluginSettingsForSnapshot()
+{
+    showAudioSettings();
+    if (audioSettingsPanel != nullptr)
+        audioSettingsPanel->showPluginSettings();
+    vst3PluginCatalog.startScan();
+}
+
+bool MainComponent::setAudioBufferForSnapshot(int bufferSamples)
+{
+    if (bufferSamples <= 0 || deviceManager.getCurrentAudioDevice() == nullptr)
+        return false;
+
+    auto setup = deviceManager.getAudioDeviceSetup();
+    setup.bufferSize = bufferSamples;
+    const auto error = deviceManager.setAudioDeviceSetup(setup, true);
+    audioDeviceController.handleDeviceManagerChange();
+    updateRecordingLatencyCompensation();
+    updateAudioStatusUi();
+    if (error.isNotEmpty())
     {
-        if (availableBufferSizes.contains(candidate))
-        {
-            preferredBufferSize = candidate;
-            break;
-        }
+        audioDeviceController.log("Diagnostico de buffer " + juce::String(bufferSamples)
+                                  + " fallo: " + error);
+        return false;
     }
 
-    juce::AudioDeviceManager::AudioDeviceSetup setup;
-    deviceManager.getAudioDeviceSetup(setup);
-
-    if (setup.bufferSize == preferredBufferSize)
-        return;
-
-    setup.bufferSize = preferredBufferSize;
-    deviceManager.setAudioDeviceSetup(setup, true);
+    deviceManager.sendSynchronousChangeMessage();
+    audioDeviceController.log("Diagnostico de buffer solicitado: " + juce::String(bufferSamples));
+    return true;
 }
 
-void MainComponent::updateRhythmBoxReadouts()
+void MainComponent::setSoftwareInputMonitoringForSnapshot(bool enabled)
 {
-    const int bpm = juce::roundToInt((float) fxPedals[1]->knob1.getValue());
-    lblRhythmBpmValue.setText(juce::String(bpm) + " BPM", juce::dontSendNotification);
-    lblRhythmBpmValue.setJustificationType(juce::Justification::centred);
-    lblRhythmBpmValue.setColour(juce::Label::textColourId, juce::Colour(0xfffff4cf));
-    lblRhythmBpmValue.setFont(juce::Font(juce::FontOptions(9.5f).withStyle("Bold")));
-
-    const float tone = (float) fxPedals[1]->knob3.getValue();
-    juce::String toneText = "Natural";
-    if (tone < 0.34f) toneText = "Calido";
-    else if (tone > 0.66f) toneText = "Brillante";
-
-    lblRhythmColorValue.setText(toneText, juce::dontSendNotification);
-    lblRhythmColorValue.setJustificationType(juce::Justification::centred);
-    lblRhythmColorValue.setColour(juce::Label::textColourId, juce::Colour(0xffffd77a).withAlpha(0.92f));
-    lblRhythmColorValue.setFont(juce::Font(juce::FontOptions(8.5f).withStyle("Bold")));
+    audioDeviceController.setSoftwareInputMonitoringEnabled(enabled);
+    updateAudioStatusUi();
 }
 
-// ============================================================================
+void MainComponent::setSystemAudioInputForSnapshot(bool enabled)
+{
+    inputSourceSelector.setSelectedId(enabled ? 2 : 1, juce::sendNotificationSync);
+}
+
+bool MainComponent::loadExternalVst3ForSnapshot(const juce::File& pluginFile, bool enabled)
+{
+    EffectsChain::PreparedExternalPlugin candidate;
+    juce::String error;
+    if (!effectsChain.prepareExternalVst3(pluginFile, candidate, error))
+    {
+        lblVst3Status[0].setDisplayText(error);
+        audioDeviceController.log("Diagnostico VST3 fallo: " + error);
+        return false;
+    }
+
+    EffectsChain::PreparedExternalPlugin retired;
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        retired = effectsChain.commitExternalPlugin(std::move(candidate));
+        effectsChain.setExternalPluginEnabled(enabled);
+    }
+    updateExternalVstUi();
+    audioDeviceController.log("Diagnostico VST3 activo: " + effectsChain.getExternalPluginName()
+                              + ", latencia="
+                              + juce::String(effectsChain.getActiveExternalPluginLatencySamples()));
+    return true;
+}
+
+void MainComponent::closeAudioSettings()
+{
+    if (audioSettingsPanel != nullptr)
+        audioSettingsPanel->setVisible(false);
+}
+
+void MainComponent::updateRecordingLatencyCompensation()
+{
+    const auto status = audioDeviceController.getStatus();
+    LoopernicoLatency::Breakdown latency;
+    latency.inputSamples = status.inputLatencySamples;
+    latency.outputSamples = status.outputLatencySamples;
+    latency.pluginSamples = effectsChain.getActiveEffectsLatencySamples();
+    latency.calibrationSamples = status.manualCalibrationSamples;
+    looper.setRecordingCompensationSamples(latency.effectiveSamples());
+}
+
+void MainComponent::updateAudioStatusUi()
+{
+    const auto status = audioDeviceController.getStatus();
+    if (!status.audioAvailable)
+    {
+        lblAudioStatus.setText("AUDIO NO DISPONIBLE - ABRIR AUDIO", juce::dontSendNotification);
+        lblAudioStatus.setColour(juce::Label::textColourId, LnfC::RecRed);
+        btnAudioSettings.setButtonText("CONFIGURACION !");
+        return;
+    }
+
+    LoopernicoLatency::Breakdown latency;
+    latency.inputSamples = status.inputLatencySamples;
+    latency.outputSamples = status.outputLatencySamples;
+    latency.pluginSamples = effectsChain.getActiveEffectsLatencySamples();
+    latency.calibrationSamples = status.manualCalibrationSamples;
+    const double totalMs = status.sampleRate > 0.0
+        ? 1000.0 * latency.driverRoundTripSamples() / status.sampleRate : 0.0;
+
+    juce::String deviceName = status.inputDevice == status.outputDevice
+        ? status.inputDevice : status.inputDevice + " / " + status.outputDevice;
+    juce::String text;
+    text << status.driverType << "  |  " << deviceName
+         << "  |  " << juce::String(status.sampleRate / 1000.0, 1) << " kHz"
+         << "  |  " << status.bufferSize << " smp"
+         << "  |  IN " << status.inputLatencySamples
+         << " + OUT " << status.outputLatencySamples
+         << " = " << juce::String(totalMs, 3) << " ms"
+         << "  |  FX " << latency.pluginSamples
+         << "  |  COMP " << latency.effectiveSamples()
+         << "  |  MON " << (status.softwareInputMonitoringEnabled ? "SW" : "DIRECT")
+         << "  |  XRUN "
+         << (status.xRunsAvailable ? juce::String(status.xRuns) : "N/D");
+
+    if (useSystemAudioInput.load(std::memory_order_acquire))
+    {
+        const auto capture = systemAudioCapture.getStatus();
+        if (capture.active)
+        {
+            const float peak = systemAudioCapture.getPeakSinceStart();
+            const auto level = peak > 0.000001f
+                ? juce::String(juce::Decibels::gainToDecibels(peak), 1) + " dB"
+                : juce::String("SIN SENAL");
+            text = "WINDOWS: " + capture.deviceName + "  |  "
+                 + juce::String(capture.sampleRate / 1000.0, 1) + " kHz  |  " + level
+                 + "  |  SIN MONITOREO DOBLE";
+        }
+        else if (capture.starting)
+            text = "CONECTANDO: " + capture.deviceName;
+        else
+            text = "AUDIO DE WINDOWS NO DISPONIBLE: " + capture.error;
+    }
+    lblAudioStatus.setText(text, juce::dontSendNotification);
+
+    const auto capture = systemAudioCapture.getStatus();
+    const bool warning = status.usingFallback || status.aggressiveBuffer
+                      || (useSystemAudioInput.load(std::memory_order_acquire)
+                          && !capture.starting && !capture.active)
+                      || (status.xRunsAvailable && status.xRuns > 0);
+    lblAudioStatus.setColour(juce::Label::textColourId, warning ? LnfC::OvdAmber : LnfC::PlayGreen);
+    btnAudioSettings.setButtonText(warning ? "CONFIGURACION !" : "CONFIGURACION");
+
+    if (audioSettingsPanel != nullptr && audioSettingsPanel->isVisible())
+        audioSettingsPanel->refresh(latency.pluginSamples);
+}
+
 // MIDI
 // ============================================================================
 void MainComponent::changeMidiInput(int index)
@@ -1922,6 +4859,7 @@ void MainComponent::changeMidiInput(int index)
     {
         lastMidiInputIndex = -1;
         midiListenAllInputs = true;
+        selectedMidiInputIdentifier.clear();
 
         for (const auto& dev : devices)
         {
@@ -1943,14 +4881,52 @@ void MainComponent::changeMidiInput(int index)
         deviceManager.addMidiInputDeviceCallback(dev.identifier, this);
         lastMidiInputIndex = deviceIndex;
         midiListenAllInputs = false;
+        selectedMidiInputIdentifier = dev.identifier;
         midiDeviceSelector.setSelectedItemIndex(index, juce::dontSendNotification);
     }
     else
     {
         lastMidiInputIndex = -1;
         midiListenAllInputs = true;
+        selectedMidiInputIdentifier.clear();
         midiDeviceSelector.setSelectedItemIndex(devices.isEmpty() ? -1 : 0, juce::dontSendNotification);
     }
+}
+
+void MainComponent::handleMidiDeviceListChanged()
+{
+    const auto wantedIdentifier = selectedMidiInputIdentifier;
+    const bool wasListeningToAllInputs = midiListenAllInputs;
+
+    refreshMidiInputSelector();
+
+    if (wasListeningToAllInputs)
+    {
+        changeMidiInput(0);
+        return;
+    }
+
+    const int deviceIndex = findMidiDeviceIndexByIdentifier(wantedIdentifier);
+    if (deviceIndex >= 0)
+    {
+        changeMidiInput(deviceIndex + 1);
+        lblMidiStatus.setText("MIDI conectado: "
+                                  + juce::MidiInput::getAvailableDevices().getReference(deviceIndex).name,
+                              juce::dontSendNotification);
+        lblMidiStatus.setColour(juce::Label::textColourId, LnfC::PlayGreen);
+        return;
+    }
+
+    const auto devices = juce::MidiInput::getAvailableDevices();
+    for (const auto& device : devices)
+        deviceManager.removeMidiInputDeviceCallback(device.identifier, this);
+
+    lastMidiInputIndex = -1;
+    midiListenAllInputs = false;
+    selectedMidiInputIdentifier = wantedIdentifier;
+    midiDeviceSelector.setSelectedItemIndex(-1, juce::dontSendNotification);
+    lblMidiStatus.setText("Esperando el dispositivo MIDI guardado...", juce::dontSendNotification);
+    lblMidiStatus.setColour(juce::Label::textColourId, LnfC::OvdAmber);
 }
 
 void MainComponent::handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage& msg)
@@ -1964,28 +4940,30 @@ void MainComponent::handleIncomingMidiMessage(juce::MidiInput*, const juce::Midi
 // ============================================================================
 void MainComponent::timerCallback()
 {
-    updateLoopEditButtons();
-    static const char* kSectionNames[] = { "SECCION: VERSO", "SECCION: REMATE", "SECCION: ESTRIBILLO" };
-    const int currentRhythmSection = juce::jlimit(0, 2, effectsChain.getRhythmCurrentSection());
-    const int pendingRhythmSection = effectsChain.getRhythmPendingSection();
-    const int countInBeatsRemaining = effectsChain.getRhythmCountInBeatsRemaining();
-    juce::String sectionText;
-    if (countInBeatsRemaining >= 0)
-    {
-        const int currentBeat = 4 - (countInBeatsRemaining % 4);
-        const int displayBeat = currentBeat <= 0 ? 4 : currentBeat;
-        sectionText = "PRECONTEO: " + juce::String(displayBeat);
-    }
-    else
-    {
-        sectionText = kSectionNames[currentRhythmSection];
-        if (pendingRhythmSection >= 0 && pendingRhythmSection <= 2)
-            sectionText << "  >  SIGUE: " << juce::String(kSectionNames[pendingRhythmSection]).fromFirstOccurrenceOf(": ", false, false);
-    }
-    lblRhythmSectionState.setText(sectionText, juce::dontSendNotification);
-    if (countInBeatsRemaining < 0)
-        rhythmPatternSelector.setSelectedId(currentRhythmSection + 1, juce::dontSendNotification);
+    audioDeviceController.poll();
 
+    if (effectsChain.consumeExternalPluginLatencyRefreshRequest())
+    {
+        {
+            const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+            effectsChain.refreshExternalPluginLatency();
+        }
+        updateRecordingLatencyCompensation();
+        updateExternalVstUi();
+    }
+
+    if (looper.consumeFixedLoopCompletionNotification() && looper.onFixedLoopComplete)
+        looper.onFixedLoopComplete();
+
+    static int audioStatusRefreshDivider = 0;
+    if (++audioStatusRefreshDivider >= 6)
+    {
+        audioStatusRefreshDivider = 0;
+        updateRecordingLatencyCompensation();
+        updateAudioStatusUi();
+    }
+
+    updateLoopEditButtons();
     auto  state      = looper.getState();
     int   baseSmp    = looper.getBaseLoopSamples();
     int   readPos    = looper.getReadPosition();
@@ -2005,6 +4983,11 @@ void MainComponent::timerCallback()
     bool gRec  = (state == LooperEngine::State::RecordingBase);
     bool gOvd  = (state == LooperEngine::State::RecordingLayer);
     bool gPlay = (state == LooperEngine::State::Playing);
+
+    btnRecConfirm.setToggleState(gArm || gRec || gOvd, juce::dontSendNotification);
+    btnMuteAll.setToggleState(looper.isGlobalMuted(), juce::dontSendNotification);
+    btnPauseAll.setToggleState(looper.isGlobalPaused(), juce::dontSendNotification);
+    btnRecConfirm.setEnabled(!looper.isGlobalPaused());
 
     if (gRec)
     {
@@ -2083,15 +5066,10 @@ void MainComponent::timerCallback()
         lblMidiStatus.setColour(juce::Label::textColourId, LnfC::OvdAmber);
     } else {
         if (btnMidiLearn.getToggleState()) {
-            btnMidiLearn.setToggleState(false, juce::sendNotification);
-            lblMidiStatus.setText("MIDI Map Saved!", juce::dontSendNotification);
-            lblMidiStatus.setColour(juce::Label::textColourId, LnfC::PlayGreen);
+            btnMidiLearn.setToggleState(false, juce::dontSendNotification);
             updateMidiMappingLabel();
             updateMidiManualControls();
-            saveMidiConfiguration();
-        } else if (lblMidiStatus.getText() != "MIDI Input Ready.") {
-            lblMidiStatus.setText("MIDI Input Ready.", juce::dontSendNotification);
-            lblMidiStatus.setColour(juce::Label::textColourId, LnfC::TextDim);
+            markMidiConfigurationDirty();
         }
     }
 }
@@ -2105,6 +5083,19 @@ void MainComponent::updateOutputModeButton()
         track->setMonoDisplay(mono);
 }
 
+void MainComponent::setMidiMenuExpanded(bool expanded)
+{
+    midiMenuExpanded = expanded;
+    midiMenuSurface.setVisible(expanded);
+    btnMidiMenu.setButtonText(expanded ? "MIDI -" : "MIDI +");
+    btnMidiMenu.setToggleState(expanded, juce::dontSendNotification);
+
+    if (expanded)
+        midiMenuSurface.grabKeyboardFocus();
+
+    resized();
+}
+
 void MainComponent::updateLoopEditButtons()
 {
     const auto state = looper.getState();
@@ -2113,10 +5104,23 @@ void MainComponent::updateLoopEditButtons()
         && state != LooperEngine::State::RecordingBase
         && state != LooperEngine::State::RecordingLayer;
 
-    btnLoopInEarlier.setEnabled(canEditLoop);
-    btnLoopInLater.setEnabled(canEditLoop);
-    btnLoopOutShorter.setEnabled(canEditLoop);
-    btnLoopOutLonger.setEnabled(canEditLoop && looper.getBaseLoopSamples() < looper.getEditableLoopSourceSamples());
+    const int sourceSamples = looper.getEditableLoopSourceSamples();
+    const int baseSamples = looper.getBaseLoopSamples();
+    if (sourceSamples <= 1 || baseSamples <= 1)
+    {
+        loopMarkerInitialised = false;
+        loopMarkerStart = 0.0f;
+        loopMarkerEnd = 1.0f;
+        loopRangeMarker.setRange(loopMarkerStart, loopMarkerEnd);
+    }
+    else if (!loopMarkerInitialised)
+    {
+        loopMarkerStart = 0.0f;
+        loopMarkerEnd = juce::jlimit(0.01f, 1.0f, (float) baseSamples / (float) sourceSamples);
+        loopRangeMarker.setRange(loopMarkerStart, loopMarkerEnd);
+        loopMarkerInitialised = true;
+    }
+    loopRangeMarker.setVisible(canEditLoop);
 }
 
 void MainComponent::updateMuteSoloMatrix()
@@ -2135,12 +5139,13 @@ void MainComponent::paint(juce::Graphics& g)
 {
     const int W = getWidth();
     const int H = getHeight();
-    const int outer = 10;
-    const int gap = 12;
-    const int hH = 78;
-    const int sH = 118;
-    const int fxH = fxSectionHeight;
-    const int controlH = controlSectionHeight;
+    const int outer = kUiOuterInset;
+    const int gap = kUiSectionGap;
+    const int hH = kUiHeaderHeight;
+    const int sH = kUiFooterHeight;
+    const int fxH = kUiFxSectionHeight;
+    const int controlH = kUiControlSectionHeight;
+    const int bottomPanelH = controlH + sH;
     const int fullX = outer;
     const int fullW = W - outer * 2;
     const int mY = hH + outer;
@@ -2149,17 +5154,30 @@ void MainComponent::paint(juce::Graphics& g)
     const int fxY = mY + trackH + gap;
     const int controlY = fxY + fxH + gap;
 
+    const auto drawTolexLayer = [this, &g](juce::Rectangle<float> area,
+                                           float opacity,
+                                           float cornerRadius = 0.0f)
+    {
+        if (!rackSurfaceTexture.isValid() || area.isEmpty())
+            return;
+
+        juce::Graphics::ScopedSaveState state(g);
+        g.setTiledImageFill(rackSurfaceTexture, 0, 0, opacity);
+        if (cornerRadius > 0.0f)
+            g.fillRoundedRectangle(area, cornerRadius);
+        else
+            g.fillRect(area);
+    };
+
     juce::ColourGradient bgGrad(
         juce::Colour(0xff13161a), 0.0f, 0.0f,
         LnfC::BG.darker(0.12f),   0.0f, (float)getHeight(), false);
     g.setGradientFill(bgGrad);
     g.fillRect(0, 0, W, getHeight());
     if (rackSurfaceTexture.isValid())
-    {
-        g.setTiledImageFill(rackSurfaceTexture, 0, 0, 0.22f);
-        g.fillRect(0, 0, W, getHeight());
-    }
-    drawFineRackTexture(g, juce::Rectangle<float>(0.0f, 0.0f, (float)W, (float)getHeight()), 0.45f);
+        drawTolexLayer({ 0.0f, 0.0f, (float)W, (float)getHeight() }, 0.40f);
+    else
+        drawFineRackTexture(g, { 0.0f, 0.0f, (float)W, (float)getHeight() }, 0.45f);
 
     g.setColour(juce::Colours::black.withAlpha(0.62f));
     g.drawRoundedRectangle(7.0f, 7.0f, (float)W - 14.0f, (float)getHeight() - 14.0f, 18.0f, 3.0f);
@@ -2171,7 +5189,13 @@ void MainComponent::paint(juce::Graphics& g)
         juce::Colour(0xff060708), 0.0f, (float)hH, false);
     g.setGradientFill(hGrad);
     g.fillRect(0, 0, W, hH);
-    drawBrushedMetalHeader(g, juce::Rectangle<float>(0.0f, 0.0f, (float)W, (float)hH));
+    if (rackSurfaceTexture.isValid())
+        drawTolexLayer({ 0.0f, 0.0f, (float)W, (float)hH }, 0.16f);
+    else
+        drawBrushedMetalHeader(g, { 0.0f, 0.0f, (float)W, (float)hH });
+
+    constexpr int brandWidth = 252;
+    const int brandX = (W - brandWidth) / 2;
 
     g.setColour(juce::Colours::black.withAlpha(0.82f));
     g.drawHorizontalLine(hH + 1, 0.0f, (float)W);
@@ -2183,77 +5207,42 @@ void MainComponent::paint(juce::Graphics& g)
     drawScrew(g, 22.0f, (float)hH * 0.5f, 6.0f);
     drawScrew(g, (float)W - 22.0f, (float)hH * 0.5f, 6.0f);
 
-    constexpr int titleAreaLeft = 28;
-    constexpr int titleAreaRight = 244;
-    const int titleAreaWidth = titleAreaRight - titleAreaLeft;
-    g.setFont(juce::Font(juce::FontOptions(20.0f).withStyle("Bold")));
-    g.setColour(juce::Colours::black.withAlpha(0.75f));
-    g.drawText("LOOPERNICO", titleAreaLeft + 1, 12, 145, 26, juce::Justification::centredLeft);
-    g.setColour(LnfC::TextHi);
-    g.drawText("LOOPERNICO", titleAreaLeft, 11, 145, 26, juce::Justification::centredLeft);
-    g.setColour(LnfC::RecRed);
-    g.drawText("PRO", titleAreaLeft + 142, 11, 48, 26, juce::Justification::centredLeft);
-    g.setColour(LnfC::TextDim.withAlpha(0.72f));
-    g.setFont(juce::Font(juce::FontOptions(9.5f).withStyle("Bold")));
-    g.drawText("MULTI-TRACK LOOPER", titleAreaLeft, 37, titleAreaWidth, 16,
-               juce::Justification::centredLeft);
-
-    LoopernicoUi::drawPanel(g, { fullX, mY,       fullW, trackH },   "LOOPER",            LnfC::Accent);
-    LoopernicoUi::drawPanel(g, { fullX, fxY,      fullW, fxH },      "CADENA DE EFECTOS", LnfC::OvdAmber);
-    LoopernicoUi::drawPanel(g, { fullX, controlY, fullW, controlH }, "CONTROL GLOBAL",    LnfC::Accent);
-
-    const float rulerLeft = (float) fullX + 190.0f;
-    const float rulerRight = (float) fullX + (float) fullW - 16.0f;
-    const float rulerY = (float) mY + 37.0f;
-    g.setColour(juce::Colours::black.withAlpha(0.78f));
-    g.fillRect(rulerLeft, (float) mY + 27.0f, rulerRight - rulerLeft, 20.0f);
-    g.setColour(juce::Colours::white.withAlpha(0.14f));
-    g.drawHorizontalLine((int) rulerY, rulerLeft, rulerRight);
-    for (int beat = 0; beat <= 32; ++beat)
+    if (brandWordmark.isValid())
     {
-        const float x = rulerLeft + (rulerRight - rulerLeft) * (float) beat / 32.0f;
-        const bool bar = beat % 8 == 0;
-        const bool half = beat % 4 == 0;
-        g.setColour(juce::Colours::white.withAlpha(bar ? 0.55f : half ? 0.25f : 0.12f));
-        g.drawVerticalLine((int) x, rulerY - (bar ? 8.0f : half ? 5.0f : 3.0f), rulerY + 1.0f);
-        if (bar && beat < 32)
-        {
-            g.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
-            g.setColour(LnfC::TextHi.withAlpha(0.85f));
-            g.drawText(juce::String(beat / 8 + 1), (int) x + 3, mY + 26, 24, 11,
-                       juce::Justification::centredLeft);
-        }
+        constexpr int brandHeight = 55;
+        juce::Graphics::ScopedSaveState logoState(g);
+        g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+        g.setColour(juce::Colours::white);
+        g.setOpacity(1.0f);
+        g.drawImage(brandWordmark,
+                    brandX, (hH - brandHeight) / 2, brandWidth, brandHeight,
+                    0, 0, brandWordmark.getWidth(), brandWordmark.getHeight());
+    }
+    else
+    {
+        g.setFont(juce::Font(juce::FontOptions(19.0f).withStyle("Bold Italic")));
+        g.setColour(LnfC::TextHi);
+        g.drawText("LOOPERNICO", brandX, 20, brandWidth, 30, juce::Justification::centred);
     }
 
-    const int loopGroupW = 270;
-    const int loopGroupX = fullX + fullW - 18 - loopGroupW;
-    g.setColour(LnfC::TextDim);
-    g.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
-    g.drawText("ARREMANGAR", loopGroupX, controlY + 30, 120, 12, juce::Justification::centredLeft);
+    LoopernicoUi::drawPanel(g, { fullX, mY,       fullW, trackH },   {},                  LnfC::Accent);
+    LoopernicoUi::drawPanel(g, { fullX, fxY,      fullW, fxH },      {},                  LnfC::OvdAmber, false);
+    LoopernicoUi::drawPanel(g, { fullX, controlY, fullW, bottomPanelH }, {},               LnfC::Accent, false);
+    drawTolexLayer(juce::Rectangle<float>((float)fullX + 2.0f, (float)mY + 2.0f,
+                                          (float)fullW - 4.0f, (float)trackH - 4.0f),
+                   0.07f, 6.0f);
+    drawTolexLayer(juce::Rectangle<float>((float)fullX + 2.0f, (float)fxY + 2.0f,
+                                          (float)fullW - 4.0f, (float)fxH - 4.0f),
+                   0.11f, 6.0f);
+    drawTolexLayer(juce::Rectangle<float>((float)fullX + 2.0f, (float)controlY + 2.0f,
+                                          (float)fullW - 4.0f, (float)bottomPanelH - 4.0f),
+                   0.08f, 6.0f);
 
-    int stripY = H - sH;
-    juce::ColourGradient sGrad(
-        LnfC::BG.darker(0.15f), 0.0f, (float)stripY,
-        LnfC::BG.darker(0.05f), 0.0f, (float)(stripY + sH), false);
-    g.setGradientFill(sGrad);
-    g.fillRect(0, stripY, W, sH);
-    drawFineRackTexture(g, juce::Rectangle<float>(0.0f, (float)stripY, (float)W, (float)sH), 0.25f);
-    g.setColour(LnfC::Border.withAlpha(0.50f));
-    g.drawHorizontalLine(stripY, 0.0f, (float)W);
+    const int footerY = H - outer - sH;
+    const int outputZoneX = W - kFooterInset - kFooterOutputZoneWidth;
 
-    const int footerInset = 18;
-    const int midiZoneW = 470;
-    const int outputZoneW = 430;
-    const int midiZoneX = footerInset;
-    const int outputZoneX = W - footerInset - outputZoneW;
-
-    g.setColour(LnfC::TextDim.withAlpha(0.88f));
-    g.setFont(juce::Font(juce::FontOptions(10.0f)));
-    g.drawText("ENTRADA MIDI", midiZoneX, stripY + 8, midiZoneW, 14, juce::Justification::centredLeft);
-    g.drawText("DISPOSITIVO", midiZoneX, stripY + 26, 205, 14, juce::Justification::centredLeft);
-    g.drawText("ACCION", midiZoneX + 215, stripY + 26, 145, 14, juce::Justification::centredLeft);
-
-    auto outputCluster = juce::Rectangle<float>((float) outputZoneX + 146.0f, (float) stripY + 22.0f, 256.0f, 82.0f);
+    auto outputCluster = juce::Rectangle<float>((float) outputZoneX + 210.0f,
+                                                 (float) footerY + 4.0f, 192.0f, (float) sH - 8.0f);
     g.setColour(juce::Colours::black.withAlpha(0.28f));
     g.fillRoundedRectangle(outputCluster.translated(0.0f, 3.0f), 12.0f);
     juce::ColourGradient outputClusterGrad(
@@ -2263,56 +5252,71 @@ void MainComponent::paint(juce::Graphics& g)
     g.fillRoundedRectangle(outputCluster, 12.0f);
     g.setColour(LnfC::OvdAmber.withAlpha(0.12f));
     g.drawRoundedRectangle(outputCluster.reduced(0.8f), 12.0f, 1.0f);
-
-    g.drawText("SALIDA", outputZoneX, stripY + 8, outputZoneW, 14, juce::Justification::centredLeft);
-    g.drawText("VOLUMEN", outputZoneX + 172, stripY + 26, 88, 14, juce::Justification::centred);
-    g.drawText("MEDIDOR", outputZoneX + 328, stripY + 26, 72, 14, juce::Justification::centred);
 }
 
 void MainComponent::resized()
 {
     const int W = getWidth();
     const int H = getHeight();
-    const int outer = 10;
-    const int gap = 12;
-    const int hH = 78;
-    const int sH = 118;
-    const int maxCombined = juce::jmax(276, H - hH - sH - outer * 2 - 180 - gap * 2);
-    if (fxSectionHeight + controlSectionHeight > maxCombined)
-        fxSectionHeight = juce::jmax(180, maxCombined - controlSectionHeight);
-    const int fxH = fxSectionHeight;
-    const int controlH = controlSectionHeight;
+    const int outer = kUiOuterInset;
+    const int gap = kUiSectionGap;
+    const int hH = kUiHeaderHeight;
+    const int sH = kUiFooterHeight;
+    const int fxH = kUiFxSectionHeight;
+    const int controlH = kUiControlSectionHeight;
     const int fullX = outer;
     const int fullW = W - outer * 2;
     const int mY = hH + outer;
     const int mH = H - hH - sH - outer * 2;
     const int trackH = mH - fxH - controlH - gap * 2;
     const int fxY = mY + trackH + gap;
-    const int controlY = fxY + fxH + gap;
 
-    looperFxDivider.setBounds(fullX + 8, mY + trackH, fullW - 16, gap);
-    fxControlDivider.setBounds(fullX + 8, fxY + fxH, fullW - 16, gap);
-    looperFxDivider.toFront(false);
-    fxControlDivider.toFront(false);
+    loadingOverlay.setBounds(getLocalBounds());
 
-    struct BtnLayout { juce::TextButton* btn; int w; };
-    BtnLayout btns[] = {
-        { &btnRecConfirm, 150 },
-        { &btnStopPlay,   122 },
-        { &btnPauseAll,    92 },
-        { &btnCancel,      92 },
-        { &btnUndo,        82 },
-        { &btnRedo,        82 },
-        { &btnReset,      108 },
+    constexpr int brandWidth = 252;
+    constexpr int headerSideGap = 30;
+    constexpr int headerOuterInset = 52;
+    constexpr int headerButtonGap = 16;
+    constexpr int headerButtonHeight = 24;
+    const int brandX = (W - brandWidth) / 2;
+    const auto leftHeaderZone = juce::Rectangle<int>(headerOuterInset, 0,
+                                                      juce::jmax(0, brandX - headerSideGap - headerOuterInset), hH);
+    const auto rightHeaderZone = juce::Rectangle<int>(brandX + brandWidth + headerSideGap, 0,
+                                                       juce::jmax(0, W - headerOuterInset - brandX - brandWidth - headerSideGap), hH);
+
+    auto layoutHeaderRow = [headerButtonGap, headerButtonHeight]
+                           (juce::Rectangle<int> zone, int y, int maxButtonWidth,
+                            std::initializer_list<juce::TextButton*> buttons)
+    {
+        const int count = (int) buttons.size();
+        if (count == 0 || zone.isEmpty())
+            return;
+
+        const int gap = headerButtonGap;
+        const int height = headerButtonHeight;
+        const int availablePerButton = juce::jmax(40, (zone.getWidth() - gap * (count - 1)) / count);
+        const int buttonWidth = juce::jmin(maxButtonWidth, availablePerButton);
+        const int rowWidth = buttonWidth * count + gap * (count - 1);
+        int x = zone.getCentreX() - rowWidth / 2;
+
+        for (auto* button : buttons)
+        {
+            button->setBounds(x, y, buttonWidth, height);
+            x += buttonWidth + gap;
+        }
     };
-    int bx = 252, by = 16, bh = 40;
-    for (auto& bl : btns) { bl.btn->setBounds(bx, by, bl.w, bh); bx += bl.w + 8; }
-    btnSaveSession.setBounds(W - 498, 16, 112, 24);
-    btnLoadSession.setBounds(W - 378, 16, 112, 24);
-    btnExportMix.setBounds(W - 258, 16, 112, 24);
-    btnExportTracks.setBounds(W - 138, 16, 112, 24);
 
-    auto vpRect = juce::Rectangle<int>(fullX + 4, mY + 48, fullW - 8, trackH - 52);
+    layoutHeaderRow(leftHeaderZone, 13, 106,
+                    { &btnRecConfirm, &btnStopPlay, &btnPauseAll, &btnCancel });
+    layoutHeaderRow(leftHeaderZone, 49, 106,
+                    { &btnUndo, &btnRedo, &btnReset });
+    layoutHeaderRow(rightHeaderZone, 13, 144,
+                    { &btnSaveSession, &btnLoadSession, &btnAudioSettings });
+    layoutHeaderRow(rightHeaderZone, 49, 144,
+                    { &btnExportMix, &btnExportTracks, &btnStemSeparation });
+
+    auto vpRect = juce::Rectangle<int>(fullX + 4, mY + kTrackViewportTopInset, fullW - 8,
+                                       trackH - kTrackViewportTopInset - kTrackViewportBottomInset);
     trackViewport.setBounds(vpRect);
 
     const int kTH = 116;
@@ -2325,103 +5329,132 @@ void MainComponent::resized()
         ty += kTH;
     }
 
-    int fxPanY = fxY + 34;
-    int fxPanH = fxH - 50;
+    int fxPanY = fxY + kFxViewportTopInset;
     int fxPanW = fullW - 12;
-    const int vstHeaderY = fxY + 6;
-    const int vstButtonsRight = fullX + fullW - 18;
-    btnBypassVst3.setBounds(vstButtonsRight - 84, vstHeaderY, 84, 22);
-    btnEditVst3.setBounds(vstButtonsRight - 152, vstHeaderY, 62, 22);
-    btnUnloadVst3.setBounds(vstButtonsRight - 224, vstHeaderY, 66, 22);
-    btnLoadVst3.setBounds(vstButtonsRight - 344, vstHeaderY, 114, 22);
-    lblVst3Status.setBounds(fullX + 190, vstHeaderY + 2, fullW - 550, 18);
-    fxViewport.setBounds(fullX + 8, fxPanY, fxPanW - 4, fxPanH - 16);
+    fxViewport.setBounds(fullX + 8, fxPanY, fxPanW - 4,
+                         juce::jmax(0, fxH - kFxViewportTopInset - kFxViewportBottomInset));
 
     int totalPedalWidth = 10;
-    for (int slot = 0; slot < kNumFxPedals; ++slot)
+    for (int slot = 0; slot < kChainItemCount; ++slot)
         totalPedalWidth += fxPedalPitch(fxOrder[(size_t) slot]);
+    constexpr int presetBarHeight = 30;
     fxContainer.setSize(totalPedalWidth, fxViewport.getHeight());
-    for (int slot = 0; slot < kNumFxPedals; ++slot)
-    {
-        const int pedalIndex = fxOrder[(size_t) slot];
-        if (pedalIndex == draggingFxPedal)
-            continue;
 
-        fxPedals[pedalIndex]->setBounds(fxSlotStartX(slot) + 14, 4,
-                                        fxPedalBodyWidth(pedalIndex), fxContainer.getHeight() - 8);
+    fxPedalFocusOverlay.setBounds(getLocalBounds());
+    if (focusedFxPedalIndex != -2)
+        fxPedalFocusOverlay.resized();
+
+    for (int slot = 0; slot < kMaxVst3Pedals; ++slot)
+    {
+        const int chainItem = kNumFxPedals + slot;
+        auto* pedal = vst3Pedals[(size_t) slot].get();
+        const auto found = std::find(fxOrder.begin(), fxOrder.end(), chainItem);
+        if (pedal != nullptr && found != fxOrder.end())
+        {
+            const int orderSlot = (int) std::distance(fxOrder.begin(), found);
+            if (focusedFxPedalIndex != chainItem && draggingFxPedal != chainItem)
+                pedal->setBounds(fxSlotStartX(orderSlot) + 14, 4, kVst3PedalBodyWidth,
+                                 fxViewport.getHeight() - presetBarHeight - 8);
+            layoutVst3PedalControls(*pedal);
+            const int bodyHeight = fxViewport.getHeight() - presetBarHeight - 8;
+            vstPresetSelectors[(size_t) slot].setBounds(fxSlotStartX(orderSlot) + 14,
+                                                          bodyHeight + 7,
+                                                          kVst3PedalBodyWidth - 60, 20);
+            vstPresetSaveButtons[(size_t) slot].setBounds(
+                fxSlotStartX(orderSlot) + 14 + kVst3PedalBodyWidth - 52,
+                bodyHeight + 7, 24, 20);
+            vstPresetDeleteButtons[(size_t) slot].setBounds(
+                fxSlotStartX(orderSlot) + 14 + kVst3PedalBodyWidth - 28,
+                bodyHeight + 7, 24, 20);
+        }
     }
 
-    auto pedalArea = fxPedals[1].get();
-    auto k1 = pedalArea->knob1.getBounds();
-    auto k3 = pedalArea->knob3.getBounds();
-    auto styleBox = pedalArea->knob4.getBounds();
-    auto patternBox = pedalArea->knob5.getBounds();
-    auto modeBox = pedalArea->knob6.getBounds();
+    for (int slot = 0; slot < kChainItemCount; ++slot)
+    {
+        const int pedalIndex = fxOrder[(size_t) slot];
+        if (pedalIndex >= kNumFxPedals)
+            continue;
+        if (pedalIndex == draggingFxPedal || pedalIndex == focusedFxPedalIndex)
+            continue;
 
-    lblRhythmBpmValue.setBounds(k1.getX(), k1.getBottom() - 1, k1.getWidth(), 14);
-    lblRhythmColorValue.setBounds(k3.getX(), k3.getBottom() - 1, k3.getWidth(), 14);
-    lblRhythmStyle.setBounds(0, 0, 0, 0);
-    lblRhythmPattern.setBounds(0, 0, 0, 0);
-    lblRhythmMode.setBounds(0, 0, 0, 0);
-    rhythmStyleSelector.setBounds(styleBox);
-    rhythmPatternSelector.setBounds(patternBox);
-    rhythmModeSelector.setBounds(modeBox);
+        const int bodyHeight = fxViewport.getHeight() - presetBarHeight - 8;
+        fxPedals[pedalIndex]->setBounds(fxSlotStartX(slot) + 14, 4,
+                                        fxPedalBodyWidth(pedalIndex), bodyHeight);
+        pedalPresetSelectors[(size_t) pedalIndex].setBounds(fxSlotStartX(slot) + 14,
+                                                              bodyHeight + 7,
+                                                              juce::jmax(1, fxPedalBodyWidth(pedalIndex) - 60),
+                                                              20);
+        pedalPresetSaveButtons[(size_t) pedalIndex].setBounds(
+            fxSlotStartX(slot) + 14 + fxPedalBodyWidth(pedalIndex) - 52,
+            bodyHeight + 7, 24, 20);
+        pedalPresetDeleteButtons[(size_t) pedalIndex].setBounds(
+            fxSlotStartX(slot) + 14 + fxPedalBodyWidth(pedalIndex) - 28,
+            bodyHeight + 7, 24, 20);
+    }
 
-    lblRhythmVerseBars.setBounds(fullX + 490, controlY + 40, 66, 14);
-    rhythmVerseBarsSelector.setBounds(fullX + 490, controlY + 58, 92, 24);
-    lblRhythmChorusBars.setBounds(fullX + 594, controlY + 40, 88, 14);
-    rhythmChorusBarsSelector.setBounds(fullX + 594, controlY + 58, 108, 24);
-    lblRhythmCountIn.setBounds(fullX + 716, controlY + 40, 88, 14);
-    rhythmCountInBarsSelector.setBounds(fullX + 716, controlY + 58, 104, 24);
-    lblRhythmCountSound.setBounds(fullX + 832, controlY + 40, 78, 14);
-    rhythmCountInSoundSelector.setBounds(fullX + 832, controlY + 58, 108, 24);
-    btnRhythmCountInToggle.setBounds(fullX + 952, controlY + 56, 118, 28);
-    btnRhythmNextSection.setBounds(fullX + 1082, controlY + 56, 180, 28);
-    lblRhythmSectionState.setBounds(fullX + 952, controlY + 38, 310, 16);
+    if (focusedFxPedalIndex != -2)
+        fxPedalFocusOverlay.toFront(false);
 
-    const int loopGroupW = 270;
-    const int loopGroupX = fullX + fullW - 18 - loopGroupW;
-    lblLoopEdit.setBounds(loopGroupX, controlY + 40, 110, 14);
-    btnLoopInEarlier.setBounds(loopGroupX, controlY + 58, 58, 24);
-    btnLoopInLater.setBounds(loopGroupX + 64, controlY + 58, 58, 24);
-    btnLoopOutShorter.setBounds(loopGroupX + 132, controlY + 58, 66, 24);
-    btnLoopOutLonger.setBounds(loopGroupX + 204, controlY + 58, 66, 24);
+    lblSilenceThreshold.setBounds(fullX + 24, mY + 5, 100, 18);
+    sldSilenceThreshold.setBounds(fullX + 126, mY + 5, 300, 18);
+    lblLooperTempo.setBounds(fullX + 438, mY + 5, 58, 18);
+    sldLooperTempo.setBounds(fullX + 502, mY + 5, 126, 18);
+    btnLooperTap.setBounds(fullX + 638, mY + 5, 50, 18);
+    lblInputSource.setBounds(fullX + 696, mY + 5, 62, 18);
+    inputSourceSelector.setBounds(fullX + 764, mY + 3, 194, 22);
+    lblAudioStatus.setBounds(fullX + 970, mY + 5, fullW - 990, 18);
 
-    lblSilenceThreshold.setBounds(fullX + 18, controlY + 86, 110, 14);
-    sldSilenceThreshold.setBounds(fullX + 132, controlY + 84, fullW - 150, 18);
+    if (audioSettingsPanel != nullptr)
+    {
+        audioSettingsPanel->setBounds(getLocalBounds());
+        if (audioSettingsPanel->isVisible())
+            audioSettingsPanel->toFront(false);
+    }
 
-    int stripY = H - sH;
-    const int footerInset = 18;
-    const int midiZoneX = footerInset;
-    const int midiStatusY = stripY + 76;
-    const int midiMappingY = stripY + 92;
-    const int midiControlsY = stripY + 48;
-    const int midiDeviceWidth = 205;
-    const int midiActionWidth = 145;
-    const int midiLearnWidth = 108;
-    const int midiTypeWidth = 90;
-    const int midiNumberWidth = 74;
-    const int midiClearWidth = 70;
-    const int midiGap = 10;
-    const int midiBlockWidth = midiDeviceWidth + midiGap + midiActionWidth + midiGap + midiLearnWidth
-                             + midiGap + midiTypeWidth + midiGap + midiNumberWidth + midiGap + midiClearWidth;
-    const int outputZoneW = 430;
-    const int outputZoneX = W - footerInset - outputZoneW;
+    const int footerY = H - outer - sH;
+    const int midiControlsY = footerY + (sH - 24) / 2;
+    const int outputZoneX = W - kFooterInset - kFooterOutputZoneWidth;
 
-    btnOutputMode.setBounds(outputZoneX, stripY + 28, 118, 28);
-    btnMuteAll.setBounds(outputZoneX, stripY + 60, 118, 28);
-    masterKnob.setBounds(outputZoneX + 186, stripY + 44, 34, 52);
-    masterVUMeter.setBounds(outputZoneX + 356, stripY + 38, 30, 58);
+    btnOutputMode.setBounds(outputZoneX, midiControlsY, 96, 24);
+    btnMuteAll.setBounds(outputZoneX + 104, midiControlsY, 96, 24);
+    masterKnob.setBounds(outputZoneX + 225, footerY + 3, 34, 34);
+    masterVUMeter.setBounds(outputZoneX + 282, midiControlsY, 116, 24);
 
-    lblMidiStatus.setBounds(midiZoneX, midiStatusY, midiBlockWidth, 16);
-    lblMidiStatus.setJustificationType(juce::Justification::centredLeft);
-    lblMidiMapping.setBounds(midiZoneX, midiMappingY, midiBlockWidth + 40, 16);
-    lblMidiMapping.setJustificationType(juce::Justification::centredLeft);
-    midiDeviceSelector.setBounds(midiZoneX, midiControlsY, midiDeviceWidth, 24);
-    midiActionSelector.setBounds(midiZoneX + midiDeviceWidth + midiGap, midiControlsY, midiActionWidth, 24);
-    btnMidiLearn.setBounds(midiZoneX + midiDeviceWidth + midiGap + midiActionWidth + midiGap, midiControlsY, midiLearnWidth, 24);
-    const int midiManualX = midiZoneX + midiDeviceWidth + midiGap + midiActionWidth + midiGap + midiLearnWidth + midiGap;
-    midiMessageTypeSelector.setBounds(midiManualX, midiControlsY, midiTypeWidth, 24);
-    midiNumberSelector.setBounds(midiManualX + midiTypeWidth + midiGap, midiControlsY, midiNumberWidth, 24);
-    btnMidiClear.setBounds(midiManualX + midiTypeWidth + midiGap + midiNumberWidth + midiGap, midiControlsY, midiClearWidth, 24);
+    const int footerButtonWidth = 96;
+    btnMidiMenu.setBounds(kFooterInset, midiControlsY, footerButtonWidth, 24);
+
+    const int midiMenuW = juce::jmin(kMidiMenuWidth, juce::jmax(620, W - kFooterInset * 2));
+    const int midiMenuH = kMidiMenuHeight;
+    midiMenuSurface.setBounds(kFooterInset, juce::jmax(outer, footerY - midiMenuH - 6),
+                              midiMenuW, midiMenuH);
+    if (midiMenuExpanded)
+    {
+        midiDeviceSelector.setBounds(14, 28, kMidiDeviceWidth, 24);
+        midiActionSelector.setBounds(14 + kMidiDeviceWidth + kMidiControlGap, 28,
+                                     kMidiActionWidth, 24);
+        btnMidiLearn.setBounds(14 + kMidiDeviceWidth + kMidiControlGap
+                                   + kMidiActionWidth + kMidiControlGap,
+                               28, kMidiLearnWidth, 24);
+
+        const int mappingX = 14 + kMidiDeviceWidth + kMidiControlGap
+                           + kMidiActionWidth + kMidiControlGap + kMidiLearnWidth + kMidiControlGap;
+        lblMidiMapping.setBounds(mappingX, 29, juce::jmax(120, midiMenuW - mappingX - 14), 22);
+
+        midiMessageTypeSelector.setBounds(14, 60, kMidiTypeWidth, 24);
+        midiNumberSelector.setBounds(14 + kMidiTypeWidth + kMidiControlGap, 60,
+                                     kMidiNumberWidth, 24);
+        const int midiClearX = 14 + kMidiTypeWidth + kMidiControlGap
+                             + kMidiNumberWidth + kMidiControlGap;
+        const int midiSaveX = midiClearX + kMidiClearWidth + kMidiControlGap;
+        btnMidiClear.setBounds(midiClearX, 60, kMidiClearWidth, 24);
+        btnMidiSave.setBounds(midiSaveX, 60, kMidiSaveWidth, 24);
+        lblMidiStatus.setBounds(midiSaveX + kMidiSaveWidth + kMidiControlGap, 63,
+                                juce::jmax(100, midiMenuW - midiSaveX - kMidiSaveWidth - 28), 18);
+    }
+
+    // El marcador es una pista maestra visual: vive sobre la forma de onda de
+    // la primera pista y no ocupa la hilera superior de controles.
+    const int firstTrackWaveX = fullX + 4 + 180;
+    loopRangeMarker.setBounds(firstTrackWaveX, mY + kTrackViewportTopInset + 5,
+                              juce::jmax(40, fullW - 8 - 180), 30);
 }

@@ -7,19 +7,17 @@ void MasterVUMeter::drawBar(juce::Graphics& g, juce::Rectangle<float> bar, float
     g.setColour(LnfC::BG.darker(0.3f));
     g.fillRoundedRectangle(bar, 2.0f);
 
-    float db = (level > 0.00001f) ? 20.0f * std::log10(level) : -96.0f;
-    float mapped = juce::jlimit(0.0f, 1.0f, (db + 48.0f) / 54.0f);
+    const float db = (level > 0.00001f) ? 20.0f * std::log10(level) : -96.0f;
+    const float mapped = juce::jlimit(0.0f, 1.0f, (db + 48.0f) / 54.0f);
 
     const int N = 18;
-    float segH = bar.getHeight() / (float)N;
-    int topSeg = (int)(mapped * N);
+    const float segW = bar.getWidth() / (float)N;
+    const int litSegments = juce::jlimit(0, N, juce::roundToInt(mapped * (float)N));
 
     for (int i = 0; i < N; ++i)
     {
-        float bot = bar.getBottom() - (float)i * segH;
-        float top = bot - segH + 1.5f;
-        float thr = (float)i / (float)N;
-        bool lit = (1.0f - thr) <= mapped;
+        const float left = bar.getX() + (float)i * segW;
+        const bool lit = i < litSegments;
 
         juce::Colour col = (i < 10) ? LnfC::PlayGreen
                          : (i < 14) ? juce::Colour(0xffbbcc00)
@@ -28,68 +26,54 @@ void MasterVUMeter::drawBar(juce::Graphics& g, juce::Rectangle<float> bar, float
 
         if (lit)
         {
-            bool isTop = (i == topSeg);
-            g.setColour(col.withAlpha(isTop ? 0.22f : 0.07f));
-            g.fillRoundedRectangle(bar.getX() - 1.0f, top - 0.8f,
-                                   bar.getWidth() + 2.0f, segH + 0.5f, 2.0f);
-            g.setColour(isTop ? col.brighter(0.5f) : col);
-            g.fillRoundedRectangle(bar.getX() + 1.5f, top,
-                                   bar.getWidth() - 3.0f, segH - 1.5f, 1.2f);
+            const bool isHead = i == litSegments - 1;
+            g.setColour(col.withAlpha(isHead ? 0.22f : 0.07f));
+            g.fillRoundedRectangle(left - 0.6f, bar.getY() - 0.6f,
+                                   segW + 0.5f, bar.getHeight() + 1.2f, 1.8f);
+            g.setColour(isHead ? col.brighter(0.5f) : col);
+            g.fillRoundedRectangle(left + 0.7f, bar.getY() + 1.0f,
+                                   juce::jmax(1.0f, segW - 1.5f), bar.getHeight() - 2.0f, 1.0f);
 
-            if (isTop)
+            if (isHead)
             {
                 g.setColour(col.withAlpha(0.30f));
-                g.fillRoundedRectangle(bar.getX() - 1.0f, top - 1.0f,
-                                       bar.getWidth() + 2.0f, segH + 1.0f, 2.0f);
+                g.fillRoundedRectangle(left - 0.7f, bar.getY() - 0.8f,
+                                       segW + 0.7f, bar.getHeight() + 1.6f, 1.8f);
             }
         }
         else
         {
             g.setColour(col.withAlpha(0.08f));
-            g.fillRoundedRectangle(bar.getX() + 1.5f, top,
-                                   bar.getWidth() - 3.0f, segH - 1.5f, 1.2f);
+            g.fillRoundedRectangle(left + 0.7f, bar.getY() + 1.0f,
+                                   juce::jmax(1.0f, segW - 1.5f), bar.getHeight() - 2.0f, 1.0f);
         }
     }
+
+    const float zeroDbX = bar.getX() + bar.getWidth() * (48.0f / 54.0f);
+    g.setColour(juce::Colours::white.withAlpha(0.22f));
+    g.drawVerticalLine(juce::roundToInt(zeroDbX), bar.getY(), bar.getBottom());
 }
 
 void MasterVUMeter::paint(juce::Graphics& g)
 {
-    auto b = getLocalBounds();
-    const bool compact = b.getWidth() < 52;
-    const int scaleW = compact ? 0 : 26;
-    const int barGap = compact ? 2 : 3;
-    const int barW = juce::jmax(8, (b.getWidth() - scaleW - barGap - (compact ? 0 : 4)) / 2);
-    const int barH = juce::jmax(18, b.getHeight() - 16);
-    int barY = 0;
+    auto b = getLocalBounds().toFloat().reduced(1.0f);
+    constexpr float labelW = 12.0f;
+    constexpr float rowGap = 3.0f;
+    const float rowH = juce::jmax(6.0f, (b.getHeight() - rowGap) * 0.5f);
+    const auto barL = juce::Rectangle<float>(b.getX() + labelW, b.getY(),
+                                             b.getWidth() - labelW, rowH);
+    const auto barR = juce::Rectangle<float>(b.getX() + labelW, b.getY() + rowH + rowGap,
+                                             b.getWidth() - labelW, rowH);
 
-    juce::Rectangle<float> barL((float)(0), (float)barY, (float)barW, (float)barH);
-    juce::Rectangle<float> barR((float)(barW + barGap), (float)barY, (float)barW, (float)barH);
     drawBar(g, barL, levelL);
     drawBar(g, barR, levelR);
-
     g.setColour(LnfC::TextDim);
-    g.setFont(juce::Font(juce::FontOptions(8.5f).withStyle("Bold")));
-    g.drawText("L", 0, barH + 2, barW, 12, juce::Justification::centred);
-    g.drawText("R", barW + barGap, barH + 2, barW, 12, juce::Justification::centred);
-
-    if (compact)
-        return;
-
-    int scaleX = barW * 2 + barGap + 3;
-    struct { const char* lbl; float db; } marks[] = {
-        { "+6", 6.0f }, { "0", 0.0f }, { "-6", -6.0f },
-        { "-12", -12.0f }, { "-24", -24.0f }, { "-48", -48.0f },
-    };
-    g.setFont(juce::Font(juce::FontOptions(7.5f)));
-    for (auto& m : marks)
-    {
-        float frac = 1.0f - (m.db + 48.0f) / 54.0f;
-        int y = barY + (int)(frac * (float)barH);
-        g.setColour(LnfC::Border.withAlpha(0.6f));
-        g.drawHorizontalLine(y, (float)scaleX, (float)(scaleX + 4));
-        g.setColour(m.db >= 0 ? LnfC::RecRed.withAlpha(0.8f) : LnfC::TextDim.withAlpha(0.7f));
-        g.drawText(m.lbl, scaleX + 5, y - 4, scaleW - 6, 9, juce::Justification::centredLeft);
-    }
+    g.setFont(juce::Font(juce::FontOptions(7.5f).withStyle("Bold")));
+    g.drawText("L", juce::Rectangle<float>(b.getX(), b.getY(), labelW - 2.0f, rowH).toNearestInt(),
+               juce::Justification::centred);
+    g.drawText("R", juce::Rectangle<float>(b.getX(), b.getY() + rowH + rowGap,
+                                            labelW - 2.0f, rowH).toNearestInt(),
+               juce::Justification::centred);
 }
 
 void VUMeter::paint(juce::Graphics& g)
@@ -347,11 +331,6 @@ void TrackComponent::paint(juce::Graphics& g)
                           : (lenSecs > 0.0f) ? "STOP"
                                              : "EMPTY";
 
-    juce::Colour tint = isRec ? LnfC::RecRed.withAlpha(0.05f)
-                      : isOvd ? LnfC::OvdAmber.withAlpha(0.04f)
-                      : isPlay ? tColor.withAlpha(0.035f)
-                               : juce::Colours::transparentBlack;
-
     const bool hasWaveform = thumbnail != nullptr
         && thumbnail->getNumChannels() > 0
         && thumbnail->getTotalLength() > 0.0;
@@ -366,26 +345,8 @@ void TrackComponent::paint(juce::Graphics& g)
     g.drawRoundedRectangle(leftArea.reduced(3.5f, 4.5f), 5.0f, 1.0f);
 
     auto wavePanel = waveArea.reduced(3.0f, 5.0f);
-    juce::ColourGradient waveWell(juce::Colour(0xff080a0b), wavePanel.getX(), wavePanel.getY(),
-                                  juce::Colour(0xff020304), wavePanel.getX(), wavePanel.getBottom(), false);
-    g.setGradientFill(waveWell);
+    g.setColour(juce::Colour(0xff020304));
     g.fillRoundedRectangle(wavePanel, 4.0f);
-    g.setColour(tColor.withAlpha(hasWaveform ? 0.22f : 0.11f));
-    g.drawRoundedRectangle(wavePanel.reduced(0.5f), 4.0f, 1.0f);
-    g.setColour(juce::Colours::white.withAlpha(0.035f));
-    g.drawHorizontalLine((int) wavePanel.getCentreY(), wavePanel.getX() + 6.0f, wavePanel.getRight() - 6.0f);
-    for (int tick = 1; tick < 8; ++tick)
-    {
-        const float x = wavePanel.getX() + wavePanel.getWidth() * (float) tick / 8.0f;
-        g.setColour(juce::Colours::white.withAlpha(tick % 2 == 0 ? 0.055f : 0.028f));
-        g.drawVerticalLine((int) x, wavePanel.getY() + 5.0f, wavePanel.getBottom() - 5.0f);
-    }
-    if (hasWaveform)
-    {
-        g.setColour(tint);
-        g.fillRoundedRectangle(wavePanel, 4.0f);
-        drawFineRackTexture(g, wavePanel, 0.16f);
-    }
 
     juce::Colour stripC = isRec ? LnfC::RecRed : isOvd ? LnfC::OvdAmber : tColor;
     float stripAlpha = (isRec || isOvd || isPlay || lenSecs > 0.0f) ? 0.90f : 0.25f;
@@ -420,8 +381,16 @@ void TrackComponent::paint(juce::Graphics& g)
     float tSec = timeSecs - tMin * 60;
     g.setColour(LnfC::TextHi.withAlpha(0.82f));
     g.setFont(juce::Font(juce::FontOptions(10.5f)));
-    g.drawText(juce::String::formatted("%02d:%04.1f", tMin, tSec),
-               42, 34, 88, 14, juce::Justification::centredLeft);
+    if (displayName.isNotEmpty())
+    {
+        g.setColour(tColor.brighter(0.20f));
+        g.setFont(juce::Font(juce::FontOptions(9.5f).withStyle("Bold")));
+        g.drawText(displayName.toUpperCase(), 42, 34, 96, 14,
+                   juce::Justification::centredLeft, true);
+    }
+    else
+        g.drawText(juce::String::formatted("%02d:%04.1f", tMin, tSec),
+                   42, 34, 88, 14, juce::Justification::centredLeft);
 
     if (lenSecs > 0.0f)
     {
@@ -507,7 +476,7 @@ void TrackComponent::resized()
 FXPedalComponent::FXPedalComponent(const juce::String& name, juce::Colour col,
                                    const juce::String& l1, const juce::String& l2,
                                    const juce::String& l3)
-    : pedalName(name), k1(l1), k2(l2), k3(l3), pedalCol(col)
+    : pedalName(name), displayName(name), k1(l1), k2(l2), k3(l3), pedalCol(col)
 {
     auto setupKnob = [](juce::Slider& s) {
         s.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
@@ -525,8 +494,26 @@ FXPedalComponent::FXPedalComponent(const juce::String& name, juce::Colour col,
     setupKnob(knob8); addAndMakeVisible(knob8); knob8.setVisible(false);
     setupKnob(knob9); addAndMakeVisible(knob9); knob9.setVisible(false);
 
+    auto setupEqSlider = [this](juce::Slider& slider)
+    {
+        slider.setSliderStyle(juce::Slider::LinearVertical);
+        slider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+        slider.setRange(-12.0, 12.0, 0.1);
+        slider.setValue(0.0);
+        slider.setDoubleClickReturnValue(true, 0.0);
+        slider.setComponentID("mxrTenBandSlider");
+        slider.setColour(juce::Slider::trackColourId, juce::Colour(0xff18506b));
+        addAndMakeVisible(slider);
+        slider.setVisible(false);
+    };
+    setupEqSlider(eqVolumeSlider);
+    for (auto& slider : eqBandSliders)
+        setupEqSlider(slider);
+    setupEqSlider(eqGainSlider);
+
     onBtn.setClickingTogglesState(true);
     addAndMakeVisible(onBtn);
+
 }
 
 void FXPedalComponent::configureExtendedKnobs(const juce::String& l1, const juce::String& l2, const juce::String& l3,
@@ -561,6 +548,22 @@ void FXPedalComponent::configureNineKnobs(const juce::String& l1, const juce::St
     knob7.setVisible(true);
     knob8.setVisible(true);
     knob9.setVisible(true);
+    resized();
+    repaint();
+}
+
+void FXPedalComponent::configureTenBandGraphicEq()
+{
+    extendedKnobs = false;
+    nineKnobs = false;
+    tenBandGraphicEq = true;
+    knob1.setVisible(false); knob2.setVisible(false); knob3.setVisible(false);
+    knob4.setVisible(false); knob5.setVisible(false); knob6.setVisible(false);
+    knob7.setVisible(false); knob8.setVisible(false); knob9.setVisible(false);
+    eqVolumeSlider.setVisible(true);
+    for (auto& slider : eqBandSliders)
+        slider.setVisible(true);
+    eqGainSlider.setVisible(true);
     resized();
     repaint();
 }
@@ -601,6 +604,48 @@ juce::Point<float> FXPedalComponent::getJackCentre(JackSide side) const noexcept
 
 namespace
 {
+constexpr float kCompactPedalHeight = 236.0f;
+// The supplied artwork includes a wide black/transparent presentation border.
+// Render the actual pedal larger inside its compact lane while keeping the
+// source PNG untouched.
+constexpr float kGamechangerPlusFaceAspect = 0.45f;
+constexpr float kBigSkyFaceAspect = 1536.0f / 1024.0f;
+// Source crop and measured OLED bounds inside strymon-bigsky-mx-face-v3.png.
+// The screen coordinates must be relative to the crop drawn into the pedal,
+// rather than to the complete 1536x1024 photograph.
+constexpr float kBigSkyCropX = 103.0f;
+constexpr float kBigSkyCropY = 56.0f;
+constexpr float kBigSkyCropW = 1330.0f;
+constexpr float kBigSkyCropH = 916.0f;
+constexpr float kBigSkyScreenX = (659.0f - kBigSkyCropX) / kBigSkyCropW;
+constexpr float kBigSkyScreenY = (175.0f - kBigSkyCropY) / kBigSkyCropH;
+constexpr float kBigSkyScreenW = 422.0f / kBigSkyCropW;
+constexpr float kBigSkyScreenH = 117.0f / kBigSkyCropH;
+constexpr float kTimelineFaceAspect = 1536.0f / 1024.0f;
+// getPedalTextureCrop() draws this exact rounded 1 % inset from
+// strymon-timeline-mx-face-v2.png. All measured hardware coordinates below
+// are expressed in full-PNG pixels and converted to the crop's coordinate
+// space here, so paint() and resized() cannot mix the two systems.
+constexpr float kTimelineCropX = 15.0f;
+constexpr float kTimelineCropY = 10.0f;
+constexpr float kTimelineCropW = 1505.0f;
+constexpr float kTimelineCropH = 1004.0f;
+constexpr float timelineX(float pngX) noexcept { return (pngX - kTimelineCropX) / kTimelineCropW; }
+constexpr float timelineY(float pngY) noexcept { return (pngY - kTimelineCropY) / kTimelineCropH; }
+constexpr float kTimelineScreenX = timelineX(649.0f);
+constexpr float kTimelineScreenY = timelineY(133.0f);
+constexpr float kTimelineScreenW = 479.0f / kTimelineCropW;
+constexpr float kTimelineScreenH = 126.0f / kTimelineCropH;
+constexpr float kBeatBuddyScreenX = 0.090f;
+constexpr float kBeatBuddyScreenY = 0.285f;
+constexpr float kBeatBuddyScreenW = 0.820f;
+constexpr float kBeatBuddyScreenH = 0.212f;
+
+float getPedalHardwareScale(const juce::Component& pedal)
+{
+    return juce::jmax(0.1f, (float) pedal.getHeight() / kCompactPedalHeight);
+}
+
 juce::Image loadPedalTexture(const juce::String& fileName)
 {
     const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
@@ -617,12 +662,87 @@ juce::Image loadPedalTexture(const juce::String& fileName)
     return {};
 }
 
+const juce::Image& getMetalFootswitchImage()
+{
+    static const auto footswitch = loadPedalTexture("Hardware/footswitch-metal-v3.png");
+    return footswitch;
+}
+
+void drawMetalFootswitch(juce::Graphics& g, float cx, float cy, float size, bool pressed)
+{
+    const auto& footswitch = getMetalFootswitchImage();
+    if (!footswitch.isValid())
+        return;
+
+    const float pressOffset = pressed ? size * 0.0375f : 0.0f;
+    const float renderedSize = pressed ? size * 0.97f : size;
+    const auto target = juce::Rectangle<float>(renderedSize, renderedSize)
+                            .withCentre({ cx, cy + pressOffset });
+
+    juce::Graphics::ScopedSaveState state(g);
+    const float height = pressed ? 0.35f : 1.0f;
+    const auto shadowCentre = juce::Point<float>(cx + size * 0.045f * height,
+                                                  cy + size * 0.075f * height);
+    const float shadowRadius = size * (pressed ? 0.36f : 0.43f);
+    juce::ColourGradient shadow(juce::Colours::black.withAlpha(pressed ? 0.20f : 0.42f),
+                                shadowCentre.x, shadowCentre.y,
+                                juce::Colours::transparentBlack,
+                                shadowCentre.x + shadowRadius, shadowCentre.y, true);
+    shadow.addColour(0.62, juce::Colours::black.withAlpha(pressed ? 0.12f : 0.27f));
+    g.setGradientFill(shadow);
+    g.fillEllipse(shadowCentre.x - shadowRadius, shadowCentre.y - shadowRadius,
+                  shadowRadius * 2.0f, shadowRadius * 2.0f);
+
+    g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+    g.setOpacity(pressed ? 0.92f : 1.0f);
+    g.drawImage(footswitch, target);
+}
+
+void drawCooltronLedLens(juce::Graphics& g, float cx, float cy, float r, bool on)
+{
+    // The real Cooltron uses a small, deep-red lens. Keep the light contained
+    // inside its bezel: no synthetic exterior halo or saturated scarlet disc.
+    g.setColour(juce::Colours::black.withAlpha(0.52f));
+    g.fillEllipse(cx - r - 1.6f, cy - r - 0.8f, r * 2.0f + 3.2f, r * 2.0f + 3.2f);
+
+    juce::ColourGradient bezel(juce::Colour(0xff887c76), cx - r * 0.72f, cy - r * 0.78f,
+                                juce::Colour(0xff211b1a), cx + r * 0.72f, cy + r * 0.78f, true);
+    bezel.addColour(0.55, juce::Colour(0xff514744));
+    g.setGradientFill(bezel);
+    g.fillEllipse(cx - r - 0.9f, cy - r - 0.9f, r * 2.0f + 1.8f, r * 2.0f + 1.8f);
+
+    const auto lensTop = on ? juce::Colour(0xffd05a50) : juce::Colour(0xff50181a);
+    const auto lensMid = on ? juce::Colour(0xffa51f24) : juce::Colour(0xff321012);
+    const auto lensBottom = on ? juce::Colour(0xff5b080d) : juce::Colour(0xff160506);
+    juce::ColourGradient lens(lensTop, cx - r * 0.38f, cy - r * 0.62f,
+                              lensBottom, cx + r * 0.42f, cy + r * 0.58f, true);
+    lens.addColour(0.48, lensMid);
+    g.setGradientFill(lens);
+    g.fillEllipse(cx - r, cy - r, r * 2.0f, r * 2.0f);
+
+    g.setColour(juce::Colour(0xff160507).withAlpha(0.72f));
+    g.drawEllipse(cx - r, cy - r, r * 2.0f, r * 2.0f, 0.72f);
+    g.setColour(juce::Colour(0xffffe1d4).withAlpha(on ? 0.34f : 0.13f));
+    g.fillEllipse(cx - r * 0.48f, cy - r * 0.62f, r * 0.56f, r * 0.28f);
+    g.setColour(juce::Colour(0xffffb2a4).withAlpha(on ? 0.12f : 0.03f));
+    g.fillEllipse(cx - r * 0.64f, cy - r * 0.70f, r * 1.28f, r * 0.64f);
+}
+
 const juce::Image& getPedalEnamelTexture(const juce::String& name)
 {
-    static const auto noiseGate = loadPedalTexture("Pedals/noise-gate-face-v1.png");
-    static const auto pampaFuzz = loadPedalTexture("Pedals/pampa-fuzz-face-v3.png");
-    static const auto mirrorDrive = loadPedalTexture("Pedals/mirror-drive-face-v1.png");
-    static const auto dedaloJet = loadPedalTexture("Pedals/dedalo-jet-compressor-face-v3.png");
+    static const auto noiseGate = loadPedalTexture("Pedals/boss-ns2-noise-suppressor-face-v8.png");
+    static const auto pampaFuzz = loadPedalTexture("Pedals/pampa-fuzz-face-v8.png");
+    static const auto voxCooltron = loadPedalTexture("Pedals/vox-cooltron-duel-overdrive-face-v1.png");
+    static const auto dedaloJet = loadPedalTexture("Pedals/dedalo-jet-compressor-face-v4.png");
+    static const auto dedaloTres = loadPedalTexture("Pedals/dedalo-tres-tremolo-face-v1.png");
+    static const auto harmonizer = loadPedalTexture("Pedals/ehx-pico-pitch-fork-face-v4.png");
+    static const auto gamechangerPlus = loadPedalTexture("Pedals/gamechanger-plus-pedal-ii-face-v1.png");
+    static const auto modelHost = loadPedalTexture("Pedals/model-host-face-v3.png");
+    static const auto tenBandEq = loadPedalTexture("Pedals/ten-band-eq-aluminum-face-v1.png");
+    static const auto beatBuddy = loadPedalTexture("Pedals/singular-sound-beatbuddy-face-v4.png");
+    static const auto smallClone = loadPedalTexture("Pedals/electro-harmonix-small-clone-face-v3.png");
+    static const auto bigSky = loadPedalTexture("Pedals/strymon-bigsky-mx-face-v3.png");
+    static const auto timeLine = loadPedalTexture("Pedals/strymon-timeline-mx-face-v2.png");
     static const auto neutral = loadPedalTexture("Textures/pedal-enamel-neutral-v1.png");
     static const auto silver  = loadPedalTexture("Textures/pedal-brushed-silver-v1.png");
     static const auto black   = loadPedalTexture("Textures/pedal-black-powder-v1.png");
@@ -631,13 +751,29 @@ const juce::Image& getPedalEnamelTexture(const juce::String& name)
     if (name.containsIgnoreCase("NOISE GATE"))
         return noiseGate;
     if (name == "RHYTHM BOX")
-        return black;
+        return beatBuddy;
     if (name == "FUZZ")
         return pampaFuzz;
-    if (name == "OVERDRIVE")
-        return mirrorDrive;
+    if (name == "SUNSET")
+        return voxCooltron;
     if (name == "COMPRESSOR")
         return dedaloJet;
+    if (name == "TREMOLO")
+        return dedaloTres;
+    if (name == "HARMONIZER")
+        return harmonizer;
+    if (name == "SUSTAIN CHORDS")
+        return gamechangerPlus;
+    if (name == "VST3 HOST")
+        return modelHost;
+    if (name == "OUTPUT EQ")
+        return tenBandEq;
+    if (name == "CHORUS")
+        return smallClone;
+    if (name == "ROOM REVERB")
+        return bigSky;
+    if (name == "TAPE DELAY")
+        return timeLine;
     if (name.containsIgnoreCase("COMPRESSOR") || name.containsIgnoreCase("OUTPUT EQ"))
         return silver;
     if (name.containsIgnoreCase("FUZZ") || name.containsIgnoreCase("DELAY"))
@@ -653,20 +789,39 @@ juce::Rectangle<int> getPedalTextureCrop(const juce::String& name, const juce::I
     const int w = image.getWidth();
     const int h = image.getHeight();
     if (name.containsIgnoreCase("NOISE GATE"))
-        return { juce::roundToInt(w * 0.25f), juce::roundToInt(h * 0.075f),
-                 juce::roundToInt(w * 0.50f), juce::roundToInt(h * 0.85f) };
+        return image.getBounds();
     if (name == "RHYTHM BOX")
-        return { juce::roundToInt(w * 0.08f), juce::roundToInt(h * 0.04f),
-                 juce::roundToInt(w * 0.84f), juce::roundToInt(h * 0.92f) };
+        return { juce::roundToInt(w * 0.068f), juce::roundToInt(h * 0.052f),
+                 juce::roundToInt(w * 0.864f), juce::roundToInt(h * 0.856f) };
     if (name == "FUZZ")
-        return { juce::roundToInt(w * 0.065f), juce::roundToInt(h * 0.195f),
-                 juce::roundToInt(w * 0.87f), juce::roundToInt(h * 0.665f) };
-    if (name == "OVERDRIVE")
-        return { juce::roundToInt(w * 0.035f), juce::roundToInt(h * 0.02f),
-                 juce::roundToInt(w * 0.93f), juce::roundToInt(h * 0.95f) };
+        return image.getBounds();
+    if (name == "SUNSET")
+        return image.getBounds();
     if (name == "COMPRESSOR")
         return { juce::roundToInt(w * 0.015f), juce::roundToInt(h * 0.015f),
                  juce::roundToInt(w * 0.97f), juce::roundToInt(h * 0.97f) };
+    if (name == "TREMOLO")
+        return { juce::roundToInt(w * 0.012f), juce::roundToInt(h * 0.012f),
+                 juce::roundToInt(w * 0.976f), juce::roundToInt(h * 0.976f) };
+    if (name == "HARMONIZER")
+        return image.getBounds();
+    if (name == "SUSTAIN CHORDS")
+        return { juce::roundToInt(w * 0.205f), juce::roundToInt(h * 0.045f),
+                 juce::roundToInt(w * 0.610f), juce::roundToInt(h * 0.905f) };
+    if (name == "VST3 HOST")
+        return { juce::roundToInt(w * 0.035f), juce::roundToInt(h * 0.118f),
+                 juce::roundToInt(w * 0.93f), juce::roundToInt(h * 0.74f) };
+    if (name == "OUTPUT EQ")
+        return image.getBounds();
+    if (name == "CHORUS")
+        return { juce::roundToInt(w * 0.035f), juce::roundToInt(h * 0.008f),
+                 juce::roundToInt(w * 0.930f), juce::roundToInt(h * 0.970f) };
+    if (name == "ROOM REVERB")
+        return { juce::roundToInt(kBigSkyCropX), juce::roundToInt(kBigSkyCropY),
+                 juce::roundToInt(kBigSkyCropW), juce::roundToInt(kBigSkyCropH) };
+    if (name == "TAPE DELAY")
+        return { juce::roundToInt(kTimelineCropX), juce::roundToInt(kTimelineCropY),
+                 juce::roundToInt(kTimelineCropW), juce::roundToInt(kTimelineCropH) };
     if (name.containsIgnoreCase("COMPRESSOR") || name.containsIgnoreCase("OUTPUT EQ"))
         return { juce::roundToInt(w * 0.22f), juce::roundToInt(h * 0.045f),
                  juce::roundToInt(w * 0.56f), juce::roundToInt(h * 0.91f) };
@@ -684,13 +839,29 @@ float getPedalTextureOpacity(const juce::String& name)
 {
     if (name == "FUZZ")
         return 0.96f;
-    if (name == "OVERDRIVE")
-        return 0.97f;
+    if (name == "SUNSET")
+        return 1.0f;
     if (name == "COMPRESSOR")
         return 0.98f;
+    if (name == "TREMOLO")
+        return 0.99f;
+    if (name == "HARMONIZER")
+        return 0.99f;
+    if (name == "SUSTAIN CHORDS")
+        return 1.0f;
+    if (name == "VST3 HOST")
+        return 0.99f;
+    if (name == "OUTPUT EQ")
+        return 0.96f;
+    if (name == "ROOM REVERB")
+        return 0.99f;
+    if (name == "TAPE DELAY")
+        return 1.0f;
+    if (name == "CHORUS")
+        return 1.0f;
     if (name == "RHYTHM BOX")
-        return 0.82f;
-    return name.containsIgnoreCase("NOISE GATE") ? 0.82f : 0.24f;
+        return 1.0f;
+    return name.containsIgnoreCase("NOISE GATE") ? 1.0f : 0.24f;
 }
 
 void drawCablePlug(juce::Graphics& g, juce::Point<float> p, float direction)
@@ -745,37 +916,80 @@ void FXPedalboardWiring::drawChain(juce::Graphics& g, const juce::Component& coo
 // The pedal rendering remains intentionally detailed because it defines the hardware-like identity of the UI.
 void FXPedalComponent::paint(juce::Graphics& g)
 {
+    const float hardwareScale = getPedalHardwareScale(*this);
     auto b = getLocalBounds().toFloat().reduced(3.0f);
     const bool wideFuzzArtwork = pedalName == "FUZZ";
-    const bool mirrorDriveArtwork = pedalName == "OVERDRIVE";
+    const bool voxCooltronArtwork = pedalName == "SUNSET"; // Historical session ID.
     const bool dedaloJetArtwork = pedalName == "COMPRESSOR";
+    const bool dedaloTresArtwork = pedalName == "TREMOLO";
+    const bool harmonizerArtwork = pedalName == "HARMONIZER";
+    const bool sustainChordsArtwork = pedalName == "SUSTAIN CHORDS";
+    const bool plusPedalArtwork = sustainChordsArtwork;
     const bool beatBuddyArtwork = pedalName == "RHYTHM BOX";
-    const bool customArtwork = wideFuzzArtwork || mirrorDriveArtwork || dedaloJetArtwork || beatBuddyArtwork;
+    const bool modelHostArtwork = pedalName == "VST3 HOST";
+    const bool tenBandEqArtwork = pedalName == "OUTPUT EQ";
+    const bool bigSkyArtwork = pedalName == "ROOM REVERB";
+    const bool timeLineArtwork = pedalName == "TAPE DELAY";
+    const bool smallCloneArtwork = pedalName == "CHORUS";
+    const bool bossNoiseArtwork = pedalName.containsIgnoreCase("NOISE GATE");
+    const bool customArtwork = wideFuzzArtwork || voxCooltronArtwork || dedaloJetArtwork || dedaloTresArtwork || harmonizerArtwork
+                            || sustainChordsArtwork || bossNoiseArtwork
+                            || beatBuddyArtwork || modelHostArtwork || tenBandEqArtwork || bigSkyArtwork || timeLineArtwork
+                            || smallCloneArtwork;
     if (customArtwork)
     {
-        const float aspect = wideFuzzArtwork ? 1.30f : (dedaloJetArtwork ? 1.23f : (beatBuddyArtwork ? 0.88f : 1.08f));
+        const float aspect = voxCooltronArtwork ? (2000.0f / 1874.0f)
+                           : (smallCloneArtwork ? (3.38f / 5.25f)
+                           : (wideFuzzArtwork ? (977.0f / 1610.0f)
+                           : (timeLineArtwork ? kTimelineFaceAspect
+                           : (bigSkyArtwork ? kBigSkyFaceAspect
+                           : (dedaloJetArtwork ? 1.23f
+                           : (dedaloTresArtwork ? (4.0f / 3.0f)
+                           : (harmonizerArtwork ? (976.0f / 1781.0f)
+                            : (plusPedalArtwork ? kGamechangerPlusFaceAspect
+                            : (beatBuddyArtwork ? 0.72f
+                           : (bossNoiseArtwork ? (976.0f / 1612.0f)
+                           : (modelHostArtwork ? 1.20f : (tenBandEqArtwork ? (124.0f / 92.0f) : 1.08f))))))))))));
         const float bodyHeight = juce::jmin(b.getHeight(), b.getWidth() / aspect);
-        b = juce::Rectangle<float>(b.getX(), b.getCentreY() - bodyHeight * 0.5f,
-                                   b.getWidth(), bodyHeight);
+        const float bodyWidth = (beatBuddyArtwork || bossNoiseArtwork || wideFuzzArtwork
+                                 || harmonizerArtwork || smallCloneArtwork
+                                 || plusPedalArtwork || bigSkyArtwork || timeLineArtwork)
+                                    ? juce::jmin(b.getWidth(), bodyHeight * aspect)
+                                    : b.getWidth();
+        b = juce::Rectangle<float>(b.getCentreX() - bodyWidth * 0.5f,
+                                   b.getCentreY() - bodyHeight * 0.5f,
+                                   bodyWidth, bodyHeight);
     }
     auto originalBody = b;
 
-    g.setColour(juce::Colours::black.withAlpha(0.20f));
-    g.fillRoundedRectangle(b.translated(0.0f, 7.0f).expanded(4.0f, 2.0f), 12.0f);
-    g.setColour(juce::Colours::black.withAlpha(0.62f));
-    g.fillRoundedRectangle(b.translated(0.0f, 3.0f).expanded(1.5f), 10.0f);
-
     const auto enamel = pedalCol.withMultipliedSaturation(0.68f).darker(0.08f);
-    juce::ColourGradient bodyGrad(
-        enamel.brighter(0.10f), b.getX(), b.getY(),
-        enamel.darker(0.58f),   b.getX(), b.getBottom(), false);
-    g.setGradientFill(bodyGrad);
-    g.fillRoundedRectangle(b, 9.0f);
+    if (!bossNoiseArtwork && !beatBuddyArtwork && !plusPedalArtwork)
+    {
+        g.setColour(juce::Colours::black.withAlpha(0.20f));
+        g.fillRoundedRectangle(b.translated(0.0f, 7.0f).expanded(4.0f, 2.0f), 12.0f);
+        g.setColour(juce::Colours::black.withAlpha(0.62f));
+        g.fillRoundedRectangle(b.translated(0.0f, 3.0f).expanded(1.5f), 10.0f);
+
+        juce::ColourGradient bodyGrad(
+            enamel.brighter(0.10f), b.getX(), b.getY(),
+            enamel.darker(0.58f),   b.getX(), b.getBottom(), false);
+        g.setGradientFill(bodyGrad);
+        g.fillRoundedRectangle(b, 9.0f);
+    }
 
     if (const auto& enamelTexture = getPedalEnamelTexture(pedalName); enamelTexture.isValid())
     {
         juce::Graphics::ScopedSaveState state(g);
-        g.reduceClipRegion(b.toNearestInt());
+        if (pedalName == "OUTPUT EQ")
+        {
+            juce::Path roundedClip;
+            roundedClip.addRoundedRectangle(b, 10.0f);
+            g.reduceClipRegion(roundedClip);
+        }
+        else
+        {
+            g.reduceClipRegion(b.toNearestInt());
+        }
         g.setOpacity(getPedalTextureOpacity(pedalName));
         const auto crop = getPedalTextureCrop(pedalName, enamelTexture);
         const auto target = b.toNearestInt();
@@ -784,13 +998,15 @@ void FXPedalComponent::paint(juce::Graphics& g)
                     crop.getX(), crop.getY(), crop.getWidth(), crop.getHeight());
     }
 
-    // A cast aluminium enclosure: rolled top lip, darker side walls and a subtle centre sheen.
-    g.setColour(enamel.brighter(0.42f).withAlpha(0.18f));
-    g.fillRoundedRectangle(b.reduced(2.0f).withHeight(7.0f), 5.0f);
-    juce::ColourGradient centreSheen(juce::Colours::white.withAlpha(0.10f), b.getCentreX(), b.getY(),
-                                     juce::Colours::transparentWhite, b.getRight(), b.getY(), false);
-    g.setGradientFill(centreSheen);
-    g.fillRoundedRectangle(b.reduced(6.0f, 3.0f), 6.0f);
+    if (!bossNoiseArtwork && !beatBuddyArtwork && !plusPedalArtwork)
+    {
+        // A cast aluminium enclosure: rolled top lip, darker side walls and a subtle centre sheen.
+        g.setColour(enamel.brighter(0.42f).withAlpha(0.18f));
+        g.fillRoundedRectangle(b.reduced(2.0f).withHeight(7.0f), 5.0f);
+        juce::ColourGradient centreSheen(juce::Colours::white.withAlpha(0.10f), b.getCentreX(), b.getY(),
+                                         juce::Colours::transparentWhite, b.getRight(), b.getY(), false);
+        g.setGradientFill(centreSheen);
+        g.fillRoundedRectangle(b.reduced(6.0f, 3.0f), 6.0f);
 
     juce::ColourGradient directionalLight(juce::Colours::white.withAlpha(0.12f), b.getX(), b.getY(),
                                            juce::Colours::transparentWhite, b.getCentreX(), b.getCentreY(), true);
@@ -826,8 +1042,9 @@ void FXPedalComponent::paint(juce::Graphics& g)
     g.drawRoundedRectangle(b.reduced(0.5f), 9.0f, 1.4f);
     g.setColour(juce::Colours::black.withAlpha(0.55f));
     g.drawRoundedRectangle(b.reduced(2.5f), 7.0f, 1.0f);
-    g.setColour(juce::Colours::black.withAlpha(0.20f));
-    g.drawRoundedRectangle(b.reduced(1.5f), 8.0f, 1.5f);
+        g.setColour(juce::Colours::black.withAlpha(0.20f));
+        g.drawRoundedRectangle(b.reduced(1.5f), 8.0f, 1.5f);
+    }
 
     juce::Rectangle<float> plate;
     if (!customArtwork)
@@ -850,111 +1067,364 @@ void FXPedalComponent::paint(juce::Graphics& g)
         g.setColour(juce::Colours::white.withAlpha(0.95f));
         g.drawText(pedalName, namePlate.toNearestInt(), juce::Justification::centred);
     }
-    if (dragHintVisible)
+    if (modelHostArtwork)
     {
-        const auto dragPlate = customArtwork ? b.reduced(8.0f).withHeight(18.0f) : plate;
-        g.setColour(juce::Colours::white.withAlpha(0.22f));
-        g.drawRoundedRectangle(dragPlate.expanded(1.0f), 5.0f, 1.6f);
-        g.setFont(juce::Font(juce::FontOptions(8.0f).withStyle("Bold")));
-        g.drawText("DRAG", dragPlate.toNearestInt(), juce::Justification::centredRight);
+        const auto cyan = juce::Colour(0xff55dce5);
+        const auto amber = juce::Colour(0xffe3a24a);
+
+        const float railY = b.getY() + b.getHeight() * 0.505f;
+        juce::ColourGradient rail(cyan.withAlpha(0.82f), b.getX() + 28.0f, railY,
+                                  amber.withAlpha(0.78f), b.getRight() - 28.0f, railY, false);
+        g.setGradientFill(rail);
+        g.fillRoundedRectangle(b.getX() + 30.0f, railY, b.getWidth() - 60.0f, 1.2f, 0.6f);
+
     }
 
-    float sb = customArtwork ? b.getY() : getLocalBounds().toFloat().reduced(3.0f).getY();
-    const float screwBottom = customArtwork ? b.getBottom() : (float) getHeight();
-    float scrR = 4.2f;
-    drawScrew(g, b.getX() + scrR + 2.0f, sb + scrR + 2.5f, scrR);
-    drawScrew(g, b.getRight() - scrR - 2.0f, sb + scrR + 2.5f, scrR);
-    drawScrew(g, b.getX() + scrR + 2.0f, screwBottom - scrR - 5.5f, scrR);
-    drawScrew(g, b.getRight() - scrR - 2.0f, screwBottom - scrR - 5.5f, scrR);
+    if (bossNoiseArtwork)
+    {
+        const auto red = juce::Colour(0xffd9202a);
+        const bool active = onBtn.getToggleState();
+        if (active)
+        {
+            drawLedLens(g, b.getX() + b.getWidth() * 0.510f,
+                        b.getY() + b.getHeight() * 0.065f, 2.8f * hardwareScale, red, true);
+            drawLedLens(g, b.getX() + b.getWidth() * 0.188f,
+                        b.getY() + b.getHeight() * 0.170f, 2.5f * hardwareScale, red, true);
+        }
+    }
+
+    if (voxCooltronArtwork)
+    {
+        const bool aOn = onBtn.getToggleState();
+        const bool bOn = tertiaryFootswitchLatched;
+        drawCooltronLedLens(g, b.getX() + b.getWidth() * 0.248f,
+                            b.getY() + b.getHeight() * 0.682f, 3.5f * hardwareScale, aOn);
+        drawCooltronLedLens(g, b.getX() + b.getWidth() * 0.742f,
+                            b.getY() + b.getHeight() * 0.682f, 3.5f * hardwareScale, bOn);
+
+    }
 
     if (beatBuddyArtwork)
     {
-        const auto gold = juce::Colour(0xffd8a84a);
-        const auto warmGold = juce::Colour(0xfff1c66d);
-
-        juce::ColourGradient topRail(gold.brighter(0.30f), b.getX(), b.getY(),
-                                     gold.darker(0.58f), b.getRight(), b.getY(), false);
-        g.setGradientFill(topRail);
-        g.fillRoundedRectangle(b.getX() + 11.0f, b.getY() + 4.0f, b.getWidth() - 22.0f, 3.0f, 1.5f);
-        g.setColour(juce::Colours::black.withAlpha(0.66f));
-        g.drawLine(b.getX() + 12.0f, b.getY() + 8.0f, b.getRight() - 12.0f, b.getY() + 8.0f, 1.0f);
-
         const bool rhythmOn = onBtn.getToggleState();
-        const auto magenta = juce::Colour(0xffff2bd6);
-        const auto beatsArea = juce::Rectangle<float>(b.getX() + 13.0f, b.getY() + 7.0f,
-                                                       b.getWidth() - 26.0f, 20.0f);
-        g.setFont(juce::Font(juce::FontOptions(14.0f).withStyle("Bold")));
-        if (rhythmOn)
-        {
-            for (int dy = -2; dy <= 2; ++dy)
-                for (int dx = -2; dx <= 2; ++dx)
-                    if (dx != 0 || dy != 0)
-                    {
-                        g.setColour(magenta.withAlpha((std::abs(dx) + std::abs(dy) <= 2) ? 0.12f : 0.045f));
-                        g.drawText("BEATS", beatsArea.translated((float) dx, (float) dy),
-                                   juce::Justification::centred);
-                    }
-        }
-        g.setColour(rhythmOn ? magenta : magenta.darker(0.72f).withAlpha(0.72f));
-        g.drawText("BEATS", beatsArea, juce::Justification::centred);
-
-        const float screenY = b.getY() + b.getHeight() * 0.370f;
-        const float screenH = b.getHeight() * 0.270f;
-        auto screenOuter = juce::Rectangle<float>(b.getX() + b.getWidth() * 0.095f, screenY,
-                                                   b.getWidth() * 0.81f, screenH);
+        const float screenY = b.getY() + b.getHeight() * kBeatBuddyScreenY;
+        const float screenH = b.getHeight() * kBeatBuddyScreenH;
+        auto screenOuter = juce::Rectangle<float>(b.getX() + b.getWidth() * kBeatBuddyScreenX, screenY,
+                                                   b.getWidth() * kBeatBuddyScreenW, screenH);
+        const float screenScale = hardwareScale;
         g.setColour(juce::Colours::black.withAlpha(0.72f));
-        g.fillRoundedRectangle(screenOuter.translated(0.0f, 2.5f).expanded(2.0f), 7.0f);
-        juce::ColourGradient bezel(juce::Colour(0xffd6a64d), screenOuter.getX(), screenOuter.getY(),
-                                   juce::Colour(0xff5b3a0b), screenOuter.getRight(), screenOuter.getBottom(), true);
-        g.setGradientFill(bezel);
-        g.fillRoundedRectangle(screenOuter.expanded(2.0f), 6.0f);
+        g.fillRoundedRectangle(screenOuter.translated(0.0f, 1.5f * screenScale).expanded(1.2f * screenScale),
+                               3.5f * screenScale);
         g.setColour(juce::Colour(0xff050708));
-        g.fillRoundedRectangle(screenOuter, 4.5f);
-        juce::ColourGradient glass(juce::Colour(0xff17353a), screenOuter.getX(), screenOuter.getY(),
-                                   juce::Colour(0xff071416), screenOuter.getX(), screenOuter.getBottom(), false);
+        g.fillRoundedRectangle(screenOuter, 2.5f * screenScale);
+        juce::ColourGradient glass(rhythmOn ? juce::Colour(0xff24482d) : juce::Colour(0xff17221b),
+                                   screenOuter.getX(), screenOuter.getY(),
+                                   juce::Colour(0xff07110a), screenOuter.getX(), screenOuter.getBottom(), false);
         g.setGradientFill(glass);
-        g.fillRoundedRectangle(screenOuter.reduced(3.0f), 3.0f);
+        g.fillRoundedRectangle(screenOuter.reduced(1.5f * screenScale), 1.8f * screenScale);
         g.setColour(juce::Colours::white.withAlpha(0.11f));
-        g.fillRoundedRectangle(screenOuter.reduced(4.0f).withHeight(screenH * 0.18f), 2.5f);
-        g.setColour(juce::Colour(0xff8eeaf0).withAlpha(0.35f));
-        g.drawRoundedRectangle(screenOuter.reduced(3.5f), 3.0f, 0.8f);
-
-        const juce::String topLabels[] = { "", "VOLUME", "" };
-        const float centres[] = { 0.205f, 0.500f, 0.795f };
-        g.setColour(warmGold.withAlpha(0.92f));
-        g.setFont(juce::Font(juce::FontOptions(7.0f).withStyle("Bold")));
-        for (int i = 0; i < 3; ++i)
-        {
-            const float cx = b.getX() + b.getWidth() * centres[i];
-            if (topLabels[i].isNotEmpty())
-                g.drawText(topLabels[i], juce::roundToInt(cx - b.getWidth() * 0.12f),
-                           juce::roundToInt(b.getY() + b.getHeight() * 0.295f),
-                           juce::roundToInt(b.getWidth() * 0.24f), 10, juce::Justification::centred);
-        }
+        g.fillRoundedRectangle(screenOuter.reduced(2.0f * screenScale).withHeight(screenH * 0.16f),
+                               1.5f * screenScale);
+        g.setColour(juce::Colour(0xff88d785).withAlpha(0.38f));
+        g.drawRoundedRectangle(screenOuter.reduced(1.5f * screenScale), 2.0f * screenScale,
+                               0.7f * screenScale);
 
     }
 
     if (dedaloJetArtwork)
     {
-        const float centres[] = { 0.218f, 0.502f, 0.786f };
-        const juce::String topLabels[] = { "BLEND", "GAIN", "COMP" };
-        const juce::String bottomLabels[] = { "ATTACK", "RELEASE", "TONE" };
+        const float topCentres[] = { 0.143f, 0.497f, 0.851f };
+        const juce::String topLabels[] = { "BLEND", "COMP", "ATTACK" };
+        const float lowerCentres[] = { 0.323f, 0.675f };
+        const juce::String lowerLabels[] = { "GAIN", "TONE" };
         const float labelWidth = b.getWidth() * 0.245f;
-        const float topY = b.getY() + b.getHeight() * 0.300f;
-        const float bottomY = b.getY() + b.getHeight() * 0.592f;
+        const float topY = b.getY() + b.getHeight() * 0.325f;
+        const float lowerY = b.getY() + b.getHeight() * 0.575f;
 
         g.setColour(juce::Colour(0xff171411).withAlpha(0.94f));
-        g.setFont(juce::Font(juce::FontOptions(7.2f).withStyle("Bold")));
+        g.setFont(juce::Font(juce::FontOptions(juce::jmax(7.2f, b.getHeight() * 0.019f)).withStyle("Bold")));
         for (int i = 0; i < 3; ++i)
         {
-            const float cx = b.getX() + b.getWidth() * centres[i];
+            const float cx = b.getX() + b.getWidth() * topCentres[i];
             g.drawFittedText(topLabels[i],
-                             juce::Rectangle<float>(cx - labelWidth * 0.5f, topY, labelWidth, 11.0f).toNearestInt(),
-                             juce::Justification::centred, 1, 0.80f);
-            g.drawFittedText(bottomLabels[i],
-                             juce::Rectangle<float>(cx - labelWidth * 0.5f, bottomY, labelWidth, 11.0f).toNearestInt(),
+                             juce::Rectangle<float>(cx - labelWidth * 0.5f, topY, labelWidth, 15.0f).toNearestInt(),
                              juce::Justification::centred, 1, 0.80f);
         }
+        for (int i = 0; i < 2; ++i)
+        {
+            const float cx = b.getX() + b.getWidth() * lowerCentres[i];
+            g.drawFittedText(lowerLabels[i],
+                             juce::Rectangle<float>(cx - labelWidth * 0.5f, lowerY, labelWidth, 15.0f).toNearestInt(),
+                             juce::Justification::centred, 1, 0.80f);
+        }
+    }
+
+    if (harmonizerArtwork)
+    {
+        const auto ink = juce::Colour(0xff111111);
+        const float labelFont = juce::jlimit(7.0f, 29.0f, b.getWidth() * 0.060f);
+        auto drawPicoLabel = [&](const juce::String& text, float nx, float ny, float width)
+        {
+            const auto area = juce::Rectangle<float>(b.getWidth() * width,
+                                                      b.getHeight() * 0.042f)
+                                  .withCentre({ b.getX() + b.getWidth() * nx,
+                                                b.getY() + b.getHeight() * ny });
+            g.setColour(ink);
+            g.setFont(juce::Font(juce::FontOptions(labelFont).withStyle("Bold")));
+            g.drawFittedText(text, area.toNearestInt(), juce::Justification::centred, 1, 0.86f);
+        };
+
+        drawPicoLabel("MODE",  0.500f, 0.105f, 0.280f);
+        drawPicoLabel("VOL",   0.211f, 0.258f, 0.245f);
+        drawPicoLabel("BLEND", 0.767f, 0.258f, 0.285f);
+        drawPicoLabel("SWEEP", 0.211f, 0.463f, 0.285f);
+        drawPicoLabel("SHIFT", 0.767f, 0.463f, 0.265f);
+
+        const float modeX = b.getCentreX();
+        const float modeY = b.getY() + b.getHeight() * 0.053f;
+        const float modeDiameter = b.getWidth() * 0.140f;
+        const float modeRadius = modeDiameter * 0.5f;
+        g.setColour(juce::Colours::black.withAlpha(0.44f));
+        g.fillEllipse(modeX - modeRadius + modeDiameter * 0.045f,
+                      modeY - modeRadius + modeDiameter * 0.075f,
+                      modeDiameter, modeDiameter);
+        juce::ColourGradient modeBezel(juce::Colour(0xff686865),
+                                       modeX - modeRadius, modeY - modeRadius,
+                                       juce::Colour(0xff101010),
+                                       modeX + modeRadius, modeY + modeRadius, true);
+        g.setGradientFill(modeBezel);
+        g.fillEllipse(modeX - modeRadius, modeY - modeRadius,
+                      modeDiameter, modeDiameter);
+        const float capRadius = modeRadius * 0.78f;
+        juce::ColourGradient modeCap(juce::Colour(0xff3d3d3a),
+                                     modeX - capRadius * 0.55f, modeY - capRadius * 0.70f,
+                                     juce::Colour(0xff090909),
+                                     modeX + capRadius * 0.55f, modeY + capRadius * 0.65f, true);
+        g.setGradientFill(modeCap);
+        g.fillEllipse(modeX - capRadius, modeY - capRadius,
+                      capRadius * 2.0f, capRadius * 2.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.12f));
+        g.fillEllipse(modeX - capRadius * 0.45f, modeY - capRadius * 0.58f,
+                      capRadius * 0.82f, capRadius * 0.34f);
+
+        const int mode = juce::jlimit(0, 2, juce::roundToInt(knob5.getValue()));
+        const auto modeColour = mode == 0 ? juce::Colour(0xffff322f)
+                              : (mode == 1 ? juce::Colour(0xff37dc62)
+                                           : juce::Colour(0xffff9f24));
+        drawLedLens(g, b.getCentreX(), b.getY() + b.getHeight() * 0.262f,
+                    juce::jmax(2.2f, b.getWidth() * 0.039f), modeColour,
+                    onBtn.getToggleState());
+
+        if (picoModeButtonPressed)
+        {
+            g.setColour(juce::Colours::white.withAlpha(0.13f));
+            const float radius = b.getWidth() * 0.070f;
+            g.fillEllipse(b.getCentreX() - radius,
+                          b.getY() + b.getHeight() * 0.053f - radius,
+                          radius * 2.0f, radius * 2.0f);
+        }
+    }
+
+    if (bigSkyArtwork)
+    {
+        static const juce::StringArray typeNames {
+            "IMPULSE", "CLOUD", "SHIMMER", "BLOOM", "CHORALE", "MAGNETO",
+            "NONLINEAR", "ROOM", "HALL", "CHAMBER", "PLATE", "SPRING"
+        };
+        const int type = juce::jlimit(0, typeNames.size() - 1, juce::roundToInt(knob8.getValue()));
+        auto screen = juce::Rectangle<float>(b.getX() + b.getWidth() * kBigSkyScreenX,
+                                              b.getY() + b.getHeight() * kBigSkyScreenY,
+                                              b.getWidth() * kBigSkyScreenW,
+                                              b.getHeight() * kBigSkyScreenH);
+        const float screenPixelScale = juce::jmin(b.getWidth() / kBigSkyCropW,
+                                                   b.getHeight() / kBigSkyCropH);
+        const float cornerRadius = juce::jmax(1.0f, 5.0f * screenPixelScale);
+        const float borderWidth = juce::jlimit(0.55f, 1.1f, screenPixelScale);
+        g.setColour(juce::Colour(0xff02090d));
+        g.fillRoundedRectangle(screen, cornerRadius);
+        g.setColour(juce::Colour(0xff244321));
+        g.drawRoundedRectangle(screen.reduced(borderWidth * 0.5f),
+                               juce::jmax(0.6f, cornerRadius - borderWidth * 0.5f),
+                               borderWidth);
+        g.setColour(juce::Colour(0xff70f147));
+        const float fontHeight = juce::jlimit(7.0f, 22.0f, screen.getHeight() * 0.34f);
+        const float textInsetX = juce::jmax(2.0f, screen.getWidth() * 0.025f);
+        const float textInsetY = juce::jmax(1.0f, screen.getHeight() * 0.08f);
+        g.setFont(juce::Font(juce::FontOptions(fontHeight).withStyle("Bold")));
+        g.drawFittedText(typeNames[type], screen.reduced(textInsetX, textInsetY).toNearestInt(),
+                         juce::Justification::centred, 1, 0.72f);
+
+        const float ledY = b.getY() + b.getHeight() * 0.704f;
+        const float footY = b.getY() + b.getHeight() * 0.830f;
+        const float xs[] = { 0.118f, 0.500f, 0.878f };
+        for (int i = 0; i < 3; ++i)
+        {
+            const bool active = (i == 0 && onBtn.getToggleState())
+                             || (i == 2 && tertiaryFootswitchLatched);
+            drawLedLens(g, b.getX() + b.getWidth() * xs[i], ledY, 3.0f,
+                        juce::Colour(0xff7be1ff), active);
+            if (active)
+            {
+                g.setColour(juce::Colour(0xff6bd6ff).withAlpha(0.15f));
+                g.drawEllipse(b.getX() + b.getWidth() * xs[i] - 20.0f, footY - 20.0f,
+                              40.0f, 40.0f, 2.0f);
+            }
+        }
+    }
+
+    if (smallCloneArtwork)
+    {
+        const bool active = onBtn.getToggleState();
+        drawLedLens(g, b.getX() + b.getWidth() * 0.758f,
+                    b.getY() + b.getHeight() * 0.220f, 4.3f,
+                    juce::Colour(0xffff296d), active);
+    }
+
+    if (timeLineArtwork)
+    {
+        static const juce::StringArray typeNames {
+            "MULTITAP", "SPECTRAL", "OIL CAN", "REVERSE", "DRUM", "ICE",
+            "DIGITAL", "LO FI", "dBUCKET", "FILTER", "dTAPE", "REVERB"
+        };
+        const int type = juce::jlimit(0, typeNames.size() - 1, juce::roundToInt(knob8.getValue()));
+        auto screen = juce::Rectangle<float>(b.getX() + b.getWidth() * kTimelineScreenX,
+                                              b.getY() + b.getHeight() * kTimelineScreenY,
+                                              b.getWidth() * kTimelineScreenW,
+                                              b.getHeight() * kTimelineScreenH);
+        const float screenPixelScale = juce::jmin(b.getWidth() / kTimelineCropW,
+                                                   b.getHeight() / kTimelineCropH);
+        const float cornerRadius = juce::jmax(0.75f, 2.0f * screenPixelScale);
+        const float borderWidth = juce::jlimit(0.50f, 1.20f, screenPixelScale);
+        g.setColour(juce::Colour(0xff010604));
+        g.fillRoundedRectangle(screen, cornerRadius);
+        g.setColour(juce::Colour(0xff1f4218));
+        g.drawRoundedRectangle(screen.reduced(borderWidth * 0.5f),
+                               juce::jmax(0.45f, cornerRadius - borderWidth * 0.5f),
+                               borderWidth);
+
+        const float insetX = juce::jmax(1.5f, screen.getWidth() * 0.025f);
+        const float insetY = juce::jmax(0.75f, screen.getHeight() * 0.055f);
+        const auto textArea = screen.reduced(insetX, insetY);
+        const float lineGap = juce::jmax(0.0f, screen.getHeight() * 0.025f);
+        const float lineHeight = (textArea.getHeight() - lineGap) * 0.5f;
+        const auto topLine = textArea.withHeight(lineHeight);
+        const auto bottomLine = textArea.withTrimmedTop(lineHeight + lineGap);
+
+        g.setColour(juce::Colour(0xff4ee82a));
+        const float fontHeight = juce::jlimit(5.0f, 18.0f, screen.getHeight() * 0.245f);
+        g.setFont(juce::Font(juce::FontOptions(fontHeight).withStyle("Bold")));
+        g.drawFittedText("100A  TIMELINE MX", topLine.toNearestInt(),
+                         juce::Justification::centred, 1, 0.72f);
+        const int bpm = juce::roundToInt(60000.0 / juce::jmax(50.0, knob1.getValue()));
+        const juce::String bottom = "1  SER  2  " + typeNames[type].substring(0, 7)
+                                  + "  " + juce::String(bpm) + "BPM";
+        g.drawFittedText(bottom, bottomLine.toNearestInt(),
+                         juce::Justification::centred, 1, 0.66f);
+
+        static constexpr float typeLedX[] = { 0.131f, 0.169f, 0.098f, 0.205f, 0.078f, 0.222f,
+                                               0.066f, 0.212f, 0.099f, 0.205f, 0.131f, 0.169f };
+        static constexpr float typeLedY[] = { 0.075f, 0.075f, 0.120f, 0.120f, 0.169f, 0.169f,
+                                               0.220f, 0.220f, 0.270f, 0.270f, 0.300f, 0.300f };
+        for (int i = 0; i < 12; ++i)
+            drawLedLens(g, b.getX() + b.getWidth() * typeLedX[i],
+                        b.getY() + b.getHeight() * typeLedY[i], 2.0f,
+                        juce::Colour(0xff6cff25), i == type);
+
+        const float ledY = b.getY() + b.getHeight() * 0.706f;
+        const float xs[] = { 0.115f, 0.500f, 0.880f };
+        drawLedLens(g, b.getX() + b.getWidth() * xs[0], ledY, 3.0f,
+                    juce::Colour(0xff73ff21), onBtn.getToggleState());
+        drawLedLens(g, b.getX() + b.getWidth() * xs[1], ledY, 3.0f,
+                    juce::Colour(0xff73ff21), secondaryFootswitchDown);
+        drawLedLens(g, b.getX() + b.getWidth() * xs[2], ledY, 3.0f,
+                    juce::Colour(0xff73ff21), true);
+    }
+
+    if (tenBandEqArtwork)
+    {
+        // The compact pedal is already rendered at roughly 197 px of artwork
+        // height. Use that real miniaturised size as the baseline; using the
+        // 92 px design grid here would enlarge the thumbnail a second time.
+        // HD typography grows only up to a deliberate ceiling.
+        constexpr float compactEqArtworkHeight = 197.0f;
+        const float eqScale = juce::jmin(2.0f, b.getHeight() / compactEqArtworkHeight);
+        const auto actualEqBounds = b;
+        b = { b.getX(), b.getY(), b.getWidth() / eqScale, b.getHeight() / eqScale };
+        juce::Graphics::ScopedSaveState eqArtworkState(g);
+        g.addTransform(juce::AffineTransform::scale(eqScale, eqScale, b.getX(), b.getY()));
+
+        const auto ink = juce::Colour(0xff17191c);
+        const auto blue = juce::Colour(0xff29b7ff);
+        const bool active = onBtn.getToggleState();
+        const float left = b.getX() + b.getWidth() * 0.055f;
+        const float right = b.getRight() - b.getWidth() * 0.055f;
+        const float sliderTop = b.getY() + b.getHeight() * 0.285f;
+        const float sliderBottom = b.getY() + b.getHeight() * 0.650f;
+
+        g.setColour(ink.withAlpha(0.92f));
+        g.setFont(juce::Font(juce::FontOptions(6.6f).withStyle("Bold")));
+        g.drawFittedText("OUT 1", juce::Rectangle<float>(b.getX() + b.getWidth() * 0.14f, b.getY() + 5.0f, 35.0f, 10.0f).toNearestInt(), juce::Justification::centred, 1, 0.72f);
+        g.drawFittedText("OUT 2", juce::Rectangle<float>(b.getX() + b.getWidth() * 0.32f, b.getY() + 5.0f, 35.0f, 10.0f).toNearestInt(), juce::Justification::centred, 1, 0.72f);
+        g.drawFittedText("POWER", juce::Rectangle<float>(b.getX() + b.getWidth() * 0.455f, b.getY() + 5.0f, 42.0f, 10.0f).toNearestInt(), juce::Justification::centred, 1, 0.72f);
+        g.drawFittedText("IN", juce::Rectangle<float>(b.getX() + b.getWidth() * 0.75f, b.getY() + 5.0f, 30.0f, 10.0f).toNearestInt(), juce::Justification::centred, 1, 0.72f);
+
+        const juce::String labels[] = { "VOL", "31.25", "62.5", "125", "250", "500", "1K", "2K", "4K", "8K", "16K", "GAIN" };
+        juce::Slider* sliders[] = { &eqVolumeSlider,
+                                    &eqBandSliders[0], &eqBandSliders[1], &eqBandSliders[2], &eqBandSliders[3], &eqBandSliders[4],
+                                    &eqBandSliders[5], &eqBandSliders[6], &eqBandSliders[7], &eqBandSliders[8], &eqBandSliders[9],
+                                    &eqGainSlider };
+        const float cellW = (right - left) / 12.0f;
+        g.setFont(juce::Font(juce::FontOptions(5.9f).withStyle("Bold")));
+        for (int i = 0; i < 12; ++i)
+        {
+            const float cx = left + ((float)i + 0.5f) * cellW;
+            g.setColour(ink.withAlpha(0.72f));
+            for (int tick = 0; tick < 9; ++tick)
+            {
+                const float y = juce::jmap((float)tick, 0.0f, 8.0f, sliderTop, sliderBottom);
+                const float tickW = tick == 4 ? 7.0f : 4.0f;
+                g.drawHorizontalLine(juce::roundToInt(y), cx - tickW, cx + tickW);
+            }
+            g.setColour(ink.withAlpha(0.96f));
+            g.drawFittedText(labels[i], juce::Rectangle<float>(cx - cellW * 0.56f,
+                                                               sliderTop - 15.0f,
+                                                               cellW * 1.12f, 11.0f).toNearestInt(),
+                             juce::Justification::centred, 1, 0.72f);
+
+            if (active)
+            {
+                const float p = juce::jlimit(0.0f, 1.0f, ((float)sliders[i]->getValue() + 12.0f) / 24.0f);
+                const float glowY = sliderTop + (1.0f - p) * (sliderBottom - sliderTop);
+                g.setColour(blue.withAlpha(0.13f));
+                g.fillEllipse(cx - 8.0f, glowY - 8.0f, 16.0f, 16.0f);
+            }
+        }
+
+        const float scaleXs[] = { left + cellW * 1.0f, left + cellW * 6.0f, left + cellW * 11.0f };
+        const juce::String scale[] = { "+12", "+6", "0", "-6", "-12" };
+        g.setFont(juce::Font(juce::FontOptions(5.5f).withStyle("Bold")));
+        for (float scaleX : scaleXs)
+            for (int tick = 0; tick < 5; ++tick)
+            {
+                const float y = juce::jmap((float)tick, 0.0f, 4.0f, sliderTop, sliderBottom);
+                g.drawText(scale[tick], juce::Rectangle<float>(scaleX - 9.0f, y - 5.0f, 18.0f, 10.0f), juce::Justification::centred);
+            }
+
+        auto logo = juce::Rectangle<float>(b.getX() + b.getWidth() * 0.075f,
+                                            b.getY() + b.getHeight() * 0.735f,
+                                            b.getWidth() * 0.285f, b.getHeight() * 0.145f);
+        g.setColour(ink.withAlpha(0.96f));
+        g.drawRoundedRectangle(logo, 7.0f, 2.2f);
+        g.setFont(juce::Font(juce::FontOptions(18.0f).withStyle("Bold")));
+        g.drawText("MXR", logo, juce::Justification::centred);
+        g.setFont(juce::Font(juce::FontOptions(11.5f)));
+        g.drawFittedText("ten band eq",
+                         juce::Rectangle<float>(b.getX() + b.getWidth() * 0.625f,
+                                                b.getY() + b.getHeight() * 0.765f,
+                                                b.getWidth() * 0.32f, 22.0f).toNearestInt(),
+                         juce::Justification::centred, 1, 0.88f);
+
+        b = actualEqBounds;
     }
 
     g.setColour(juce::Colours::white.withAlpha(0.80f));
@@ -981,15 +1451,21 @@ void FXPedalComponent::paint(juce::Graphics& g)
         g.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
         g.setColour(juce::Colours::white.withAlpha(0.80f));
     };
-    drawKnobValue(knob1, knobValueFormatters[0]);
-    drawKnobValue(knob2, knobValueFormatters[1]);
-    drawKnobValue(knob3, knobValueFormatters[2]);
-    drawKnobValue(knob4, knobValueFormatters[3]);
-    drawKnobValue(knob5, knobValueFormatters[4]);
-    drawKnobValue(knob6, knobValueFormatters[5]);
-    drawKnobValue(knob7, knobValueFormatters[6]);
-    drawKnobValue(knob8, knobValueFormatters[7]);
-    drawKnobValue(knob9, knobValueFormatters[8]);
+    // Custom faceplates already carry their own labels; extra values would
+    // obscure the printed hardware artwork in compact view.
+    if (!bossNoiseArtwork && !tenBandEqArtwork && !smallCloneArtwork && !beatBuddyArtwork
+        && !harmonizerArtwork && !plusPedalArtwork)
+    {
+        drawKnobValue(knob1, knobValueFormatters[0]);
+        drawKnobValue(knob2, knobValueFormatters[1]);
+        drawKnobValue(knob3, knobValueFormatters[2]);
+        drawKnobValue(knob4, knobValueFormatters[3]);
+        drawKnobValue(knob5, knobValueFormatters[4]);
+        drawKnobValue(knob6, knobValueFormatters[5]);
+        drawKnobValue(knob7, knobValueFormatters[6]);
+        drawKnobValue(knob8, knobValueFormatters[7]);
+        drawKnobValue(knob9, knobValueFormatters[8]);
+    }
     if (!customArtwork)
     {
         drawKnobLabel(knob1, k1);
@@ -1023,125 +1499,48 @@ void FXPedalComponent::paint(juce::Graphics& g)
     bool on = onBtn.getToggleState();
     if (beatBuddyArtwork)
     {
-        const auto gold = juce::Colour(0xffd5a243);
+        constexpr float switchCentres[] = { 0.205f, 0.500f, 0.795f };
+        constexpr const char* switchLabels[] = { "START", "NEXT", "TAP" };
         const auto brightGold = juce::Colour(0xffffd77a);
-        auto drawGoldSwitch = [&](float cx, float cy, bool active)
-        {
-            const float outerR = 17.0f;
-            const float innerR = 11.8f;
-            g.setColour(juce::Colours::black.withAlpha(0.72f));
-            g.fillEllipse(cx - outerR - 2.0f, cy - outerR + 3.0f,
-                          (outerR + 2.0f) * 2.0f, (outerR + 2.0f) * 2.0f);
-            juce::ColourGradient ring(brightGold, cx - outerR * 0.58f, cy - outerR * 0.72f,
-                                      juce::Colour(0xff6f430b), cx + outerR * 0.62f, cy + outerR * 0.70f, true);
-            g.setGradientFill(ring);
-            g.fillEllipse(cx - outerR, cy - outerR, outerR * 2.0f, outerR * 2.0f);
-            g.setColour(juce::Colours::black.withAlpha(0.76f));
-            g.fillEllipse(cx - innerR - 1.0f, cy - innerR + 1.0f,
-                          (innerR + 1.0f) * 2.0f, (innerR + 1.0f) * 2.0f);
-            juce::ColourGradient cap(juce::Colour(0xfff2ede1), cx - innerR * 0.55f, cy - innerR * 0.70f,
-                                     juce::Colour(0xff5a584f), cx + innerR * 0.50f, cy + innerR * 0.62f, true);
-            g.setGradientFill(cap);
-            g.fillEllipse(cx - innerR, cy - innerR, innerR * 2.0f, innerR * 2.0f);
-            g.setColour(juce::Colours::white.withAlpha(0.30f));
-            g.fillEllipse(cx - innerR * 0.48f, cy - innerR * 0.68f,
-                          innerR * 0.92f, innerR * 0.30f);
-            if (active)
-            {
-                g.setColour(juce::Colour(0xff80ffb0).withAlpha(0.22f));
-                g.drawEllipse(cx - outerR - 3.0f, cy - outerR - 3.0f,
-                              (outerR + 3.0f) * 2.0f, (outerR + 3.0f) * 2.0f, 3.0f);
-            }
-        };
-
-        const float tapCX = b.getCentreX();
-        const float tapCY = b.getY() + b.getHeight() * 0.820f;
-        const float tapR = 15.0f;
-        g.setColour(juce::Colours::black.withAlpha(0.70f));
-        g.fillEllipse(tapCX - tapR - 2.0f, tapCY - tapR + 2.0f,
-                      (tapR + 2.0f) * 2.0f, (tapR + 2.0f) * 2.0f);
-        juce::ColourGradient tapRing(brightGold, tapCX - tapR * 0.65f, tapCY - tapR * 0.65f,
-                                     juce::Colour(0xff65400c), tapCX + tapR * 0.62f, tapCY + tapR * 0.65f, true);
-        g.setGradientFill(tapRing);
-        g.fillEllipse(tapCX - tapR, tapCY - tapR, tapR * 2.0f, tapR * 2.0f);
-        g.setColour(juce::Colour(0xff151719));
-        g.fillEllipse(tapCX - tapR + 4.0f, tapCY - tapR + 4.0f,
-                      (tapR - 4.0f) * 2.0f, (tapR - 4.0f) * 2.0f);
+        const float switchCY = b.getY() + b.getHeight() * 0.805f;
         g.setColour(brightGold.withAlpha(0.95f));
-        g.setFont(juce::Font(juce::FontOptions(7.4f).withStyle("Bold")));
-        g.drawText("TAP", juce::roundToInt(tapCX - tapR), juce::roundToInt(tapCY - 5.0f),
-                   juce::roundToInt(tapR * 2.0f), 10, juce::Justification::centred);
-
-        const float footY = b.getY() + b.getHeight() * 0.885f;
-        drawGoldSwitch(b.getX() + b.getWidth() * 0.255f, footY, on);
-        drawGoldSwitch(b.getX() + b.getWidth() * 0.745f, footY, false);
-
-        drawLedLens(g, b.getCentreX(),
-                    b.getY() + b.getHeight() * 0.700f, 3.2f,
-                    juce::Colour(0xffff2bd6), on);
-    }
-
-    if (!beatBuddyArtwork)
-    {
-    float ledCX = customArtwork ? (dedaloJetArtwork ? b.getX() + b.getWidth() * 0.156f : (float)getWidth() * 0.5f)
-                                : (float)getWidth() * 0.5f - 27.0f;
-    float ledCY = customArtwork ? b.getY() + b.getHeight() * (wideFuzzArtwork ? 0.72f : (dedaloJetArtwork ? 0.672f : 0.74f))
-                                : (float)getHeight() - 16.0f;
-    float ledR = customArtwork ? (dedaloJetArtwork ? 3.4f : 6.5f) : 5.5f;
-    float footCX = customArtwork ? (dedaloJetArtwork ? b.getX() + b.getWidth() * 0.156f : (float)getWidth() * 0.5f)
-                                 : (float)getWidth() * 0.5f + 22.0f;
-    float footCY = customArtwork ? b.getY() + b.getHeight() * (wideFuzzArtwork ? 0.84f : (dedaloJetArtwork ? 0.871f : 0.88f))
-                                 : (float)getHeight() - 17.0f;
-    float footR = customArtwork ? 14.0f : 12.0f;
-
-    if (customArtwork)
-    {
-        const float nutR = footR + 4.5f;
-        juce::Path hexNut;
-        for (int i = 0; i < 6; ++i)
+        g.setFont(juce::Font(juce::FontOptions(6.8f).withStyle("Bold")));
+        for (int i = 0; i < 3; ++i)
         {
-            const float a = juce::MathConstants<float>::twoPi * (float) i / 6.0f - juce::MathConstants<float>::halfPi;
-            const auto p = juce::Point<float>(footCX + std::cos(a) * nutR, footCY + std::sin(a) * nutR);
-            if (i == 0) hexNut.startNewSubPath(p); else hexNut.lineTo(p);
+            const float switchCX = b.getX() + b.getWidth() * switchCentres[i];
+            g.drawText(switchLabels[i], juce::roundToInt(switchCX - b.getWidth() * 0.12f),
+                       juce::roundToInt(switchCY - b.getWidth() * 0.15f),
+                       juce::roundToInt(b.getWidth() * 0.24f), 10, juce::Justification::centred);
         }
-        hexNut.closeSubPath();
-        auto nutShadow = hexNut;
-        nutShadow.applyTransform(juce::AffineTransform::translation(1.8f, 3.0f));
-        g.setColour(juce::Colours::black.withAlpha(0.72f));
-        g.fillPath(nutShadow);
-        juce::ColourGradient nutMetal(juce::Colour(0xffeee8d9), footCX - nutR * 0.5f, footCY - nutR * 0.65f,
-                                      juce::Colour(0xff4a4945), footCX + nutR * 0.5f, footCY + nutR * 0.65f, true);
-        g.setGradientFill(nutMetal);
-        g.fillPath(hexNut);
-        g.setColour(juce::Colours::black.withAlpha(0.48f));
-        g.strokePath(hexNut, juce::PathStrokeType(1.2f));
-
-        g.setColour(juce::Colours::black.withAlpha(0.72f));
-        g.fillEllipse(footCX - footR - 1.2f, footCY - footR + 1.5f, footR * 2.0f + 2.4f, footR * 2.0f + 2.4f);
-        juce::ColourGradient switchMetal(juce::Colour(0xffd9d5c9), footCX - footR * 0.45f, footCY - footR * 0.60f,
-                                         juce::Colour(0xff5a5955), footCX + footR * 0.42f, footCY + footR * 0.55f, true);
-        g.setGradientFill(switchMetal);
-        g.fillEllipse(footCX - footR, footCY - footR, footR * 2.0f, footR * 2.0f);
-        g.setColour(juce::Colours::white.withAlpha(0.34f));
-        g.fillEllipse(footCX - footR * 0.48f, footCY - footR * 0.70f, footR * 0.90f, footR * 0.30f);
-        g.setColour(juce::Colours::black.withAlpha(0.44f));
-        g.drawEllipse(footCX - footR, footCY - footR, footR * 2.0f, footR * 2.0f, 1.0f);
     }
-    else
+
+    if (dedaloTresArtwork)
     {
-        g.setColour(juce::Colours::black.withAlpha(0.62f));
-        g.fillEllipse(footCX - footR - 2.0f, footCY - footR + 1.5f, (footR + 2.0f) * 2.0f, (footR + 2.0f) * 2.0f);
-        juce::ColourGradient footGrad(
-            juce::Colour(0xffd8d8dc), footCX - footR * 0.45f, footCY - footR * 0.55f,
-            juce::Colour(0xff4a4d54), footCX + footR * 0.45f, footCY + footR * 0.55f, true);
-        g.setGradientFill(footGrad);
-        g.fillEllipse(footCX - footR, footCY - footR, footR * 2.0f, footR * 2.0f);
-        g.setColour(juce::Colours::black.withAlpha(0.55f));
-        g.drawEllipse(footCX - footR, footCY - footR, footR * 2.0f, footR * 2.0f, 1.0f);
-        g.setColour(juce::Colours::white.withAlpha(0.28f));
-        g.fillEllipse(footCX - footR * 0.45f, footCY - footR * 0.72f, footR * 0.9f, footR * 0.35f);
+        const float leftX = b.getX() + b.getWidth() * 0.147f;
+        const float rightX = b.getX() + b.getWidth() * 0.843f;
+        const float ledY = b.getY() + b.getHeight() * 0.650f;
+        drawLedLens(g, leftX, ledY, 3.4f, juce::Colour(0xfffff8dd), onBtn.getToggleState());
+        drawLedLens(g, rightX, ledY, 3.4f, juce::Colour(0xfffff8dd), secondaryFootswitchDown);
     }
 
+    if (!beatBuddyArtwork && !bossNoiseArtwork && !dedaloTresArtwork && !bigSkyArtwork && !smallCloneArtwork
+        && !wideFuzzArtwork
+        && !plusPedalArtwork
+        && !harmonizerArtwork && !voxCooltronArtwork && !timeLineArtwork)
+    {
+    float ledCX = customArtwork ? (dedaloJetArtwork ? b.getX() + b.getWidth() * 0.156f
+                                                     : ((harmonizerArtwork || sustainChordsArtwork) ? b.getCentreX() - 31.0f
+                                                     : (modelHostArtwork ? b.getCentreX() + 30.0f
+                                                                         : (tenBandEqArtwork ? b.getCentreX() - 34.0f
+                                                                                             : (float)getWidth() * 0.5f))))
+                                : (float)getWidth() * 0.5f - 27.0f;
+    float ledCY = customArtwork ? b.getY() + b.getHeight() * (wideFuzzArtwork ? 0.72f
+                                                     : (dedaloJetArtwork ? 0.672f
+                                                     : ((harmonizerArtwork || sustainChordsArtwork) ? 0.895f
+                                                     : (modelHostArtwork ? 0.90f : (tenBandEqArtwork ? 0.815f : 0.74f))))
+                                                     )
+                                : (float)getHeight() - 16.0f;
+    float ledR = customArtwork ? (dedaloJetArtwork ? 3.4f : (modelHostArtwork ? 4.2f : (tenBandEqArtwork ? 3.6f : 6.5f))) : 5.5f;
     if (!customArtwork)
     {
         g.setColour(juce::Colours::black.withAlpha(0.45f));
@@ -1150,8 +1549,13 @@ void FXPedalComponent::paint(juce::Graphics& g)
         g.drawRoundedRectangle(ledCX - ledR - 7.0f, ledCY - ledR - 3.0f, 40.0f, 18.0f, 5.0f, 0.8f);
     }
 
-    const auto ledColour = dedaloJetArtwork ? juce::Colour(0xfffff9e8) : LnfC::PlayGreen;
-    drawLedLens(g, ledCX, ledCY, ledR, ledColour, on);
+    const auto ledColour = dedaloJetArtwork ? juce::Colour(0xfffff9e8)
+                         : (harmonizerArtwork ? juce::Colour(0xff51e0dc)
+                         : (sustainChordsArtwork ? juce::Colour(0xff49d5e8)
+                         : (modelHostArtwork ? juce::Colour(0xff55dce5)
+                         : (tenBandEqArtwork ? juce::Colour(0xff29b7ff) : LnfC::PlayGreen))));
+    if (!tenBandEqArtwork)
+        drawLedLens(g, ledCX, ledCY, ledR, ledColour, on);
 
     if (!customArtwork)
     {
@@ -1161,49 +1565,152 @@ void FXPedalComponent::paint(juce::Graphics& g)
     }
     }
 
-    auto drawJack = [&](float jx, float jy)
+    // All round stomp switches, including the Pico Pitch Fork, share the same functional
+    // rasterized steel hardware without changing hit areas, callbacks or MIDI.
+    if (!bossNoiseArtwork && !plusPedalArtwork)
     {
-        g.setColour(juce::Colours::black.withAlpha(0.80f));
-        g.fillEllipse(jx - 8.0f, jy - 8.0f, 16.0f, 16.0f);
-        juce::ColourGradient jGrad(
-            juce::Colour(0xff666677), jx - 5.0f, jy - 5.0f,
-            juce::Colour(0xff2a2a36), jx + 3.0f, jy + 4.0f, true);
-        g.setGradientFill(jGrad);
-        g.drawEllipse(jx - 7.5f, jy - 7.5f, 15.0f, 15.0f, 2.5f);
-        g.setColour(juce::Colour(0xff080810));
-        g.fillEllipse(jx - 3.5f, jy - 3.5f, 7.0f, 7.0f);
-        g.setColour(juce::Colour(0xff444455));
-        g.drawEllipse(jx - 3.5f, jy - 3.5f, 7.0f, 7.0f, 0.8f);
-        g.setColour(juce::Colours::white.withAlpha(0.18f));
-        g.fillEllipse(jx - 5.5f, jy - 7.0f, 4.5f, 2.5f);
-    };
-    auto outJack = getJackCentre(JackSide::output);
-    auto inJack = getJackCentre(JackSide::input);
-    drawJack(outJack.x, outJack.y);
-    drawJack(inJack.x, inJack.y);
+        auto drawAt = [&](float nx, float ny, float size, bool pressed = false)
+        {
+            drawMetalFootswitch(g, b.getX() + b.getWidth() * nx,
+                                b.getY() + b.getHeight() * ny, size, pressed);
+        };
 
-    g.setColour(juce::Colours::white.withAlpha(0.46f));
-    g.setFont(juce::Font(juce::FontOptions(6.5f).withStyle("Bold")));
-    g.drawText("OUT", 7, (int)outJack.y - 15, 22, 9, juce::Justification::centredLeft);
-    g.drawText("IN", getWidth() - 29, (int)inJack.y - 15, 22, 9, juce::Justification::centredRight);
+        if (harmonizerArtwork)
+        {
+            // The raster contains transparent padding. A 0.35 target leaves
+            // the printed curved line visible around the physical switch.
+            const float size = b.getWidth() * 0.35f;
+            drawAt(0.500f, 0.878f, size,
+                   knob6.getValue() >= 0.5 ? picoMomentaryFootswitchDown : on);
+        }
+        else if (beatBuddyArtwork)
+        {
+            const float size = b.getWidth() * 0.18f;
+            drawAt(0.205f, 0.805f, size, on);
+            drawAt(0.500f, 0.805f, size, secondaryFootswitchDown);
+            drawAt(0.795f, 0.805f, size, false);
+        }
+        else if (voxCooltronArtwork)
+        {
+            // The raster has transparent padding: 383 of its 512 pixels contain
+            // the metal housing. A 12.8% target therefore covers the 9.6%-wide
+            // switches printed in the VOX face without covering either label.
+            const float size = b.getWidth() * 0.128f;
+            drawAt(0.248f, 0.778f, size, on);
+            drawAt(0.742f, 0.778f, size, tertiaryFootswitchLatched);
+        }
+        else if (dedaloTresArtwork)
+        {
+            drawAt(0.147f, 0.835f, 39.0f * hardwareScale, on);
+            drawAt(0.843f, 0.835f, 39.0f * hardwareScale, secondaryFootswitchDown);
+        }
+        else if (bigSkyArtwork)
+        {
+            drawAt(0.118f, 0.830f, 38.0f * hardwareScale, on);
+            drawAt(0.500f, 0.830f, 38.0f * hardwareScale, false);
+            drawAt(0.878f, 0.830f, 38.0f * hardwareScale, tertiaryFootswitchLatched);
+        }
+        else if (timeLineArtwork)
+        {
+            drawAt(0.115f, 0.842f, 39.0f * hardwareScale, on);
+            drawAt(0.500f, 0.842f, 39.0f * hardwareScale, secondaryFootswitchDown);
+            drawAt(0.880f, 0.842f, 39.0f * hardwareScale, false);
+        }
+        else if (smallCloneArtwork)
+        {
+            drawAt(0.500f, 0.722f, b.getWidth() * 0.160f, on);
+        }
+        else
+        {
+            const float cx = dedaloJetArtwork ? b.getX() + b.getWidth() * 0.156f
+                                              : (wideFuzzArtwork ? b.getX() + b.getWidth() * 0.500f
+                                                                  : b.getCentreX());
+            const float cy = b.getY() + b.getHeight() * (wideFuzzArtwork ? 0.885f
+                                                      : (dedaloJetArtwork ? 0.871f
+                                                      : (plusPedalArtwork ? 0.90f
+                                                      : (modelHostArtwork ? 0.900f
+                                                      : (tenBandEqArtwork ? 0.815f : 0.880f)))));
+
+            if (wideFuzzArtwork && on)
+            {
+                const auto haloColour = juce::Colour(0xffc9f7ff);
+                const float haloRadius = 30.0f * hardwareScale;
+                juce::ColourGradient halo(haloColour.withAlpha(0.30f), cx, cy,
+                                          juce::Colours::transparentBlack,
+                                          cx + haloRadius, cy, true);
+                g.setGradientFill(halo);
+                g.fillEllipse(cx - haloRadius, cy - haloRadius,
+                              haloRadius * 2.0f, haloRadius * 2.0f);
+                g.setColour(haloColour.withAlpha(0.25f));
+                g.drawEllipse(cx - haloRadius * 0.73f, cy - haloRadius * 0.73f,
+                              haloRadius * 1.46f, haloRadius * 1.46f,
+                              juce::jmax(0.7f, 0.75f * hardwareScale));
+            }
+
+            drawMetalFootswitch(g, cx, cy, 40.0f * hardwareScale, on);
+        }
+    }
 }
 
 void FXPedalComponent::resized()
 {
+    if (onResized)
+        onResized(*this);
+
+    const float hardwareScale = getPedalHardwareScale(*this);
+    const auto scaled = [hardwareScale](int compactPixels)
+    {
+        return juce::jmax(1, juce::roundToInt((float) compactPixels * hardwareScale));
+    };
     auto b = getLocalBounds().reduced(5);
     onBtn.setBounds(b.getX(), getHeight() - 24, b.getWidth(), 20);
     onBtn.setVisible(false);
 
+    if (pedalName == "CHORUS")
+    {
+        const float aspect = 3.38f / 5.25f;
+        const int bodyHeight = juce::jmin(getHeight() - 6,
+                                          juce::roundToInt((float) (getWidth() - 6) / aspect));
+        const int bodyWidth = juce::jmin(getWidth() - 6,
+                                         juce::roundToInt((float) bodyHeight * aspect));
+        const int bodyTop = (getHeight() - bodyHeight) / 2;
+        const int bodyLeft = (getWidth() - bodyWidth) / 2;
+
+        const int rateSize = juce::roundToInt((float) bodyWidth * 0.315f);
+        const int rateX = bodyLeft + juce::roundToInt((float) bodyWidth * 0.500f);
+        const int rateY = bodyTop + juce::roundToInt((float) bodyHeight * 0.220f);
+        knob2.setBounds(rateX - rateSize / 2, rateY - rateSize / 2, rateSize, rateSize);
+
+        const int switchW = juce::roundToInt((float) bodyWidth * 0.20f);
+        const int switchH = juce::roundToInt((float) bodyHeight * 0.13f);
+        const int switchX = bodyLeft + juce::roundToInt((float) bodyWidth * 0.255f);
+        const int switchY = bodyTop + juce::roundToInt((float) bodyHeight * 0.218f);
+        knob3.setBounds(switchX - switchW / 2, switchY - switchH / 2, switchW, switchH);
+
+        // The physical Small Clone has no mix control. Keep the existing DSP control/order
+        // as an invisible drag zone over the logo instead of inventing an extra knob.
+        knob1.setAlpha(0.0f);
+        knob1.setBounds(bodyLeft + juce::roundToInt((float) bodyWidth * 0.12f),
+                        bodyTop + juce::roundToInt((float) bodyHeight * 0.40f),
+                        juce::roundToInt((float) bodyWidth * 0.76f),
+                        juce::roundToInt((float) bodyHeight * 0.22f));
+        knob4.setBounds(0, 0, 0, 0); knob5.setBounds(0, 0, 0, 0); knob6.setBounds(0, 0, 0, 0);
+        knob7.setBounds(0, 0, 0, 0); knob8.setBounds(0, 0, 0, 0); knob9.setBounds(0, 0, 0, 0);
+        return;
+    }
+
     if (pedalName == "RHYTHM BOX")
     {
-        const float aspect = 0.88f;
+        const float aspect = 0.72f;
         const int bodyHeight = juce::jmin(getHeight() - 6, juce::roundToInt((float) getWidth() / aspect));
         const int bodyTop = (getHeight() - bodyHeight) / 2;
-        const int bodyLeft = 3;
-        const int bodyWidth = getWidth() - 6;
-        const int knobSize = 45;
-        const int knobCY = bodyTop + juce::roundToInt(bodyHeight * 0.205f);
-        const float knobCentres[] = { 0.205f, 0.500f, 0.795f };
+        const int bodyWidth = juce::jmin(getWidth() - 6, juce::roundToInt((float) bodyHeight * aspect));
+        const int bodyLeft = (getWidth() - bodyWidth) / 2;
+        // The raster is intentionally control-free. Place the complete native knobs
+        // over the printed labels using the same crop coordinates as paint().
+        const int knobSize = juce::roundToInt((float) bodyWidth * 0.150f);
+        const int knobCY = bodyTop + juce::roundToInt(bodyHeight * 0.121f);
+        const float knobCentres[] = { 0.160f, 0.500f, 0.840f };
         juce::Slider* topKnobs[] = { &knob1, &knob2, &knob3 };
         for (int i = 0; i < 3; ++i)
         {
@@ -1212,13 +1719,104 @@ void FXPedalComponent::resized()
         }
 
         // Invisible layout anchors used by MainComponent for the interactive screen controls.
-        const int screenX = bodyLeft + juce::roundToInt(bodyWidth * 0.13f);
-        const int screenW = juce::roundToInt(bodyWidth * 0.74f);
-        const int screenY = bodyTop + juce::roundToInt(bodyHeight * 0.395f);
-        const int controlH = 23;
+        // Keep a small inset from the full-width glass rectangle defined above.
+        const int screenX = bodyLeft + juce::roundToInt(bodyWidth * (kBeatBuddyScreenX + 0.012f));
+        const int screenW = juce::roundToInt(bodyWidth * (kBeatBuddyScreenW - 0.024f));
+        const int screenY = bodyTop + juce::roundToInt(bodyHeight * 0.340f);
+        const int controlH = juce::jmax(12, juce::roundToInt(bodyHeight * 0.058f));
         knob4.setBounds(screenX, screenY, screenW, controlH);
-        knob5.setBounds(screenX, screenY + 32, screenW / 2 - 3, controlH);
-        knob6.setBounds(screenX + screenW / 2 + 3, screenY + 32, screenW / 2 - 3, controlH);
+        knob5.setBounds(screenX, screenY + controlH + 1, screenW / 2 - 1, controlH);
+        knob6.setBounds(screenX + screenW / 2 + 1, screenY + controlH + 1,
+                        screenW - screenW / 2 - 1, controlH);
+        knob7.setBounds(0, 0, 0, 0);
+        knob8.setBounds(0, 0, 0, 0);
+        knob9.setBounds(0, 0, 0, 0);
+        return;
+    }
+
+    if (pedalName == "ROOM REVERB")
+    {
+        const float aspect = kBigSkyFaceAspect;
+        const int availableWidth = getWidth() - 6;
+        const int availableHeight = getHeight() - 6;
+        const int bodyHeight = juce::jmin(availableHeight,
+                                          juce::roundToInt((float) availableWidth / aspect));
+        const int bodyWidth = juce::jmin(availableWidth,
+                                         juce::roundToInt((float) bodyHeight * aspect));
+        const int bodyTop = (getHeight() - bodyHeight) / 2;
+        const int bodyLeft = (getWidth() - bodyWidth) / 2;
+        auto place = [bodyLeft, bodyTop, bodyWidth, bodyHeight](juce::Slider& knob,
+                                                               float nx, float ny, int size)
+        {
+            const int cx = bodyLeft + juce::roundToInt((float) bodyWidth * nx);
+            const int cy = bodyTop + juce::roundToInt((float) bodyHeight * ny);
+            knob.setBounds(cx - size / 2, cy - size / 2, size, size);
+        };
+        place(knob8, 0.140f, 0.172f, scaled(36)); // TYPE
+        place(knob9, 0.927f, 0.172f, scaled(34)); // VALUE
+        place(knob1, 0.069f, 0.424f, scaled(32)); // DECAY
+        place(knob2, 0.214f, 0.424f, scaled(32)); // PRE-DELAY
+        place(knob4, 0.356f, 0.424f, scaled(32)); // TONE
+        place(knob7, 0.500f, 0.424f, scaled(32)); // MOD
+        place(knob5, 0.644f, 0.424f, scaled(32)); // PARAM 1
+        place(knob6, 0.786f, 0.424f, scaled(32)); // PARAM 2
+        place(knob3, 0.929f, 0.424f, scaled(32)); // MIX
+        return;
+    }
+
+    if (pedalName == "TAPE DELAY")
+    {
+        const int availableWidth = getWidth() - 6;
+        const int availableHeight = getHeight() - 6;
+        const int bodyHeight = juce::jmin(availableHeight,
+                                          juce::roundToInt((float) availableWidth / kTimelineFaceAspect));
+        const int bodyWidth = juce::jmin(availableWidth,
+                                         juce::roundToInt((float) bodyHeight * kTimelineFaceAspect));
+        const int bodyTop = (getHeight() - bodyHeight) / 2;
+        const int bodyLeft = (getWidth() - bodyWidth) / 2;
+        auto place = [bodyLeft, bodyTop, bodyWidth, bodyHeight](juce::Slider& knob,
+                                                               float nx, float ny, int size)
+        {
+            const int cx = bodyLeft + juce::roundToInt((float) bodyWidth * nx);
+            const int cy = bodyTop + juce::roundToInt((float) bodyHeight * ny);
+            knob.setBounds(cx - size / 2, cy - size / 2, size, size);
+        };
+        place(knob8, timelineX(221.0f),  timelineY(190.0f), scaled(38)); // TYPE
+        place(knob9, timelineX(1414.0f), timelineY(190.0f), scaled(36)); // VALUE
+        place(knob1, timelineX(115.0f),  timelineY(445.0f), scaled(34)); // TIME
+        place(knob2, timelineX(336.0f),  timelineY(445.0f), scaled(34)); // REPEATS
+        place(knob3, timelineX(552.0f),  timelineY(445.0f), scaled(34)); // FILTER
+        place(knob4, timelineX(768.0f),  timelineY(445.0f), scaled(34)); // GRIT
+        place(knob5, timelineX(984.0f),  timelineY(445.0f), scaled(34)); // SPEED
+        place(knob6, timelineX(1204.0f), timelineY(445.0f), scaled(34)); // DEPTH
+        place(knob7, timelineX(1420.0f), timelineY(445.0f), scaled(34)); // MIX
+        return;
+    }
+
+    if (pedalName.containsIgnoreCase("NOISE GATE"))
+    {
+        constexpr float aspect = 976.0f / 1612.0f;
+        const int availableWidth = getWidth() - 6;
+        const int availableHeight = getHeight() - 6;
+        const int bodyHeight = juce::jmin(availableHeight,
+                                          juce::roundToInt((float) availableWidth / aspect));
+        const int bodyWidth = juce::jmin(availableWidth,
+                                         juce::roundToInt((float) bodyHeight * aspect));
+        const int bodyTop = (getHeight() - bodyHeight) / 2;
+        const int bodyLeft = (getWidth() - bodyWidth) / 2;
+        const int knobSize = juce::jmax(22, juce::roundToInt(bodyWidth * 0.200f));
+        const int knobCY = bodyTop + juce::roundToInt(bodyHeight * 0.163f);
+        const float centres[] = { 0.399f, 0.606f, 0.810f };
+        juce::Slider* knobs[] = { &knob1, &knob2, &knob3 };
+        for (int i = 0; i < 3; ++i)
+        {
+            const int cx = bodyLeft + juce::roundToInt(bodyWidth * centres[i]);
+            knobs[i]->setBounds(cx - knobSize / 2, knobCY - knobSize / 2,
+                                knobSize, knobSize);
+        }
+        knob4.setBounds(0, 0, 0, 0);
+        knob5.setBounds(0, 0, 0, 0);
+        knob6.setBounds(0, 0, 0, 0);
         knob7.setBounds(0, 0, 0, 0);
         knob8.setBounds(0, 0, 0, 0);
         knob9.setBounds(0, 0, 0, 0);
@@ -1227,12 +1825,28 @@ void FXPedalComponent::resized()
 
     if (pedalName == "FUZZ")
     {
-        const int top = juce::roundToInt((float) getHeight() * 0.18f);
-        const int knobH = juce::roundToInt((float) getHeight() * 0.21f);
-        const int thirdW = (b.getWidth() - 18) / 3;
-        knob1.setBounds(b.getX() + 3, top, thirdW, knobH);
-        knob2.setBounds(b.getX() + thirdW + 9, top, thirdW, knobH);
-        knob3.setBounds(b.getX() + (thirdW + 6) * 2 + 3, top, thirdW, knobH);
+        // The face artwork is control-free: place the interactive knobs
+        // inside the printed QUILOMBO / TONO / VOLUMEN ornaments using the
+        // same aspect-fitted body rectangle used by paint().
+        constexpr float aspect = 977.0f / 1610.0f;
+        auto body = getLocalBounds().toFloat().reduced(3.0f);
+        const float bodyHeight = juce::jmin(body.getHeight(), body.getWidth() / aspect);
+        const float bodyWidth = juce::jmin(body.getWidth(), bodyHeight * aspect);
+        body = { body.getCentreX() - bodyWidth * 0.5f,
+                 body.getCentreY() - bodyHeight * 0.5f,
+                 bodyWidth, bodyHeight };
+
+        const int knobSize = juce::jmax(16, juce::roundToInt(body.getWidth() * 0.300f));
+        // The three printed rings are centred at y=400 in the 1610 px face.
+        const int knobCY = juce::roundToInt(body.getY() + body.getHeight() * (400.0f / 1610.0f));
+        const float knobCentres[] = { 0.200f, 0.500f, 0.800f };
+        juce::Slider* knobs[] = { &knob1, &knob2, &knob3 };
+        for (int i = 0; i < 3; ++i)
+        {
+            const int cx = juce::roundToInt(body.getX() + body.getWidth() * knobCentres[i]);
+            knobs[i]->setBounds(cx - knobSize / 2, knobCY - knobSize / 2,
+                                knobSize, knobSize);
+        }
         knob4.setBounds(0, 0, 0, 0);
         knob5.setBounds(0, 0, 0, 0);
         knob6.setBounds(0, 0, 0, 0);
@@ -1242,19 +1856,33 @@ void FXPedalComponent::resized()
         return;
     }
 
-    if (pedalName == "OVERDRIVE")
+    if (pedalName == "SUNSET")
     {
-        const int top = juce::roundToInt((float) getHeight() * 0.20f);
-        const int knobH = juce::roundToInt((float) getHeight() * 0.22f);
-        const int thirdW = (b.getWidth() - 18) / 3;
-        // Artwork order is VOLUME, TONE, GAIN; DSP order is DRIVE, TONE, LEVEL.
-        knob3.setBounds(b.getX() + 3, top, thirdW, knobH);
-        knob2.setBounds(b.getX() + thirdW + 9, top, thirdW, knobH);
-        knob1.setBounds(b.getX() + (thirdW + 6) * 2 + 3, top, thirdW, knobH);
-        knob4.setBounds(0, 0, 0, 0);
-        knob5.setBounds(0, 0, 0, 0);
-        knob6.setBounds(0, 0, 0, 0);
-        knob7.setBounds(0, 0, 0, 0);
+        constexpr float voxReferenceAspect = 2000.0f / 1874.0f;
+        const int bodyHeight = juce::jmin(getHeight() - 6,
+                                          juce::roundToInt((float) (getWidth() - 6) / voxReferenceAspect));
+        const int bodyWidth = juce::jmin(getWidth() - 6,
+                                         juce::roundToInt((float) bodyHeight * voxReferenceAspect));
+        const int bodyLeft = (getWidth() - bodyWidth) / 2;
+        const int bodyTop = (getHeight() - bodyHeight) / 2;
+        auto place = [bodyLeft, bodyTop, bodyWidth, bodyHeight](juce::Slider& knob,
+                                                               float x, float y, int size)
+        {
+            const int cx = bodyLeft + juce::roundToInt((float) bodyWidth * x);
+            const int cy = bodyTop + juce::roundToInt((float) bodyHeight * y);
+            knob.setBounds(cx - size / 2, cy - size / 2, size, size);
+        };
+
+        const int largeKnobSize = juce::roundToInt((float) bodyWidth * 0.165f);
+        const int smallKnobSize = juce::roundToInt((float) bodyWidth * 0.154f);
+        place(knob2, 0.164f, 0.315f, largeKnobSize); // GAIN 1
+        place(knob1, 0.384f, 0.315f, largeKnobSize); // VOLUME 1
+        place(knob5, 0.614f, 0.315f, largeKnobSize); // GAIN 2
+        place(knob4, 0.837f, 0.315f, largeKnobSize); // VOLUME 2
+        place(knob3, 0.272f, 0.492f, smallKnobSize); // TONE 1
+        place(knob7, 0.500f, 0.492f, smallKnobSize); // BASS BOOST
+        place(knob6, 0.729f, 0.492f, smallKnobSize); // TONE 2
+
         knob8.setBounds(0, 0, 0, 0);
         knob9.setBounds(0, 0, 0, 0);
         return;
@@ -1267,26 +1895,149 @@ void FXPedalComponent::resized()
         const int bodyTop = (getHeight() - bodyHeight) / 2;
         const int bodyLeft = 3;
         const int bodyWidth = getWidth() - 6;
-        // Keep the Jet knob size stable even when the enclosure width changes.
-        const int knobSize = 40;
-        const int topCY = bodyTop + juce::roundToInt(bodyHeight * 0.200f);
-        const int bottomCY = bodyTop + juce::roundToInt(bodyHeight * 0.486f);
-        const int leftCX = bodyLeft + juce::roundToInt(bodyWidth * 0.218f);
-        const int centreCX = bodyLeft + juce::roundToInt(bodyWidth * 0.502f);
-        const int rightCX = bodyLeft + juce::roundToInt(bodyWidth * 0.786f);
+        const int knobSize = scaled(50);
+        const int topCY = bodyTop + juce::roundToInt(bodyHeight * 0.195f);
+        const int lowerCY = bodyTop + juce::roundToInt(bodyHeight * 0.435f);
         auto placeKnob = [knobSize](juce::Slider& knob, int cx, int cy)
         {
             knob.setBounds(cx - knobSize / 2, cy - knobSize / 2, knobSize, knobSize);
         };
-        placeKnob(knob1, leftCX, topCY);
-        placeKnob(knob2, centreCX, topCY);
-        placeKnob(knob3, rightCX, topCY);
-        placeKnob(knob4, leftCX, bottomCY);
-        placeKnob(knob5, centreCX, bottomCY);
-        placeKnob(knob6, rightCX, bottomCY);
+        auto xAt = [bodyLeft, bodyWidth](float proportion)
+        {
+            return bodyLeft + juce::roundToInt(bodyWidth * proportion);
+        };
+        placeKnob(knob1, xAt(0.143f), topCY);   // BLEND
+        placeKnob(knob3, xAt(0.497f), topCY);   // COMP
+        placeKnob(knob4, xAt(0.851f), topCY);   // ATTACK
+        placeKnob(knob2, xAt(0.323f), lowerCY); // GAIN
+        placeKnob(knob6, xAt(0.675f), lowerCY); // TONE
+        knob5.setBounds(0, 0, 0, 0);            // JET 2 has a fixed release time.
         knob7.setBounds(0, 0, 0, 0);
         knob8.setBounds(0, 0, 0, 0);
         knob9.setBounds(0, 0, 0, 0);
+        return;
+    }
+
+    if (pedalName == "TREMOLO")
+    {
+        const float aspect = 4.0f / 3.0f;
+        const int bodyHeight = juce::jmin(getHeight() - 6,
+                                          juce::roundToInt((float)getWidth() / aspect));
+        const int bodyTop = (getHeight() - bodyHeight) / 2;
+        const int bodyLeft = 3;
+        const int bodyWidth = getWidth() - 6;
+        const int knobSize = scaled(44);
+        const int topCY = bodyTop + juce::roundToInt(bodyHeight * 0.198f);
+        const int lowerCY = bodyTop + juce::roundToInt(bodyHeight * 0.433f);
+        const int topX[] = {
+            bodyLeft + juce::roundToInt(bodyWidth * 0.147f),
+            bodyLeft + juce::roundToInt(bodyWidth * 0.500f),
+            bodyLeft + juce::roundToInt(bodyWidth * 0.843f)
+        };
+        const int lowerX[] = {
+            bodyLeft + juce::roundToInt(bodyWidth * 0.326f),
+            bodyLeft + juce::roundToInt(bodyWidth * 0.674f)
+        };
+        auto place = [knobSize](juce::Slider& knob, int cx, int cy)
+        {
+            knob.setBounds(cx - knobSize / 2, cy - knobSize / 2, knobSize, knobSize);
+        };
+        place(knob1, topX[0], topCY);   // DEPTH
+        place(knob2, topX[1], topCY);   // MODE
+        place(knob3, topX[2], topCY);   // RATE / f IN
+        place(knob4, lowerX[0], lowerCY); // BEATS
+        place(knob5, lowerX[1], lowerCY); // SYM / f OUT
+        knob6.setBounds(0, 0, 0, 0);
+        knob7.setBounds(0, 0, 0, 0);
+        knob8.setBounds(0, 0, 0, 0);
+        knob9.setBounds(0, 0, 0, 0);
+        return;
+    }
+
+    if (pedalName == "HARMONIZER")
+    {
+        const float aspect = 976.0f / 1781.0f;
+        const int bodyHeight = juce::jmin(getHeight() - 6, juce::roundToInt((float) (getWidth() - 6) / aspect));
+        const int bodyWidth = juce::jmin(getWidth() - 6, juce::roundToInt((float) bodyHeight * aspect));
+        const int bodyTop = (getHeight() - bodyHeight) / 2;
+        const int bodyLeft = (getWidth() - bodyWidth) / 2;
+        const int knobSize = juce::jmax(32, juce::roundToInt(bodyWidth * 0.330f));
+        const int leftX = bodyLeft + juce::roundToInt(bodyWidth * 0.211f);
+        const int rightX = bodyLeft + juce::roundToInt(bodyWidth * 0.767f);
+        const int topY = bodyTop + juce::roundToInt(bodyHeight * 0.157f);
+        const int lowerY = bodyTop + juce::roundToInt(bodyHeight * 0.370f);
+        knob1.setBounds(leftX - knobSize / 2, topY - knobSize / 2, knobSize, knobSize);
+        knob2.setBounds(rightX - knobSize / 2, topY - knobSize / 2, knobSize, knobSize);
+        knob3.setBounds(leftX - knobSize / 2, lowerY - knobSize / 2, knobSize, knobSize);
+        knob4.setBounds(rightX - knobSize / 2, lowerY - knobSize / 2, knobSize, knobSize);
+        knob5.setBounds(0, 0, 0, 0);
+        knob6.setBounds(0, 0, 0, 0);
+        knob7.setBounds(0, 0, 0, 0);
+        knob8.setBounds(0, 0, 0, 0);
+        knob9.setBounds(0, 0, 0, 0);
+        return;
+    }
+
+    if (pedalName == "SUSTAIN CHORDS")
+    {
+        const float aspect = kGamechangerPlusFaceAspect;
+        const int availableWidth = getWidth() - 6;
+        const int availableHeight = getHeight() - 6;
+        const int bodyHeight = juce::jmin(availableHeight,
+                                          juce::roundToInt((float) availableWidth / aspect));
+        const int bodyTop = (getHeight() - bodyHeight) / 2;
+        const int bodyWidth = juce::jmin(availableWidth,
+                                         juce::roundToInt((float) bodyHeight * aspect));
+        const int bodyLeft = (getWidth() - bodyWidth) / 2;
+
+        // The six controls are raster overlays for the printed hardware. Their
+        // component bounds include the 4 px LookAndFeel inset on each side;
+        // these proportions therefore come from the measured 1024x1536 face
+        // and the non-transparent extents of the two knob rasters.
+        const int largeKnobSize = juce::jmax(26, juce::roundToInt((float) bodyWidth * 0.182f));
+        const int miniKnobSize = juce::jmax(22, juce::roundToInt((float) bodyWidth * 0.141f));
+        auto place = [bodyLeft, bodyTop, bodyWidth, bodyHeight](juce::Slider& knob,
+                                                                 float nx, float ny, int size)
+        {
+            const int cx = bodyLeft + juce::roundToInt((float) bodyWidth * nx);
+            const int cy = bodyTop + juce::roundToInt((float) bodyHeight * ny);
+            knob.setBounds(cx - size / 2, cy - size / 2, size, size);
+        };
+        // Keep the historical knob indices: this preserves old session values.
+        place(knob1, 0.174f, 0.087f, largeKnobSize); // LEVEL -> old mix
+        place(knob4, 0.200f, 0.178f, miniKnobSize);  // TONE -> old tone
+        place(knob2, 0.174f, 0.274f, largeKnobSize); // RISE -> old fade-in
+        place(knob6, 0.803f, 0.086f, largeKnobSize); // LAYERS -> old crossfade/density
+        place(knob5, 0.780f, 0.178f, miniKnobSize);  // RESONANCE -> old window
+        place(knob3, 0.805f, 0.273f, largeKnobSize); // DECAY -> old fade-out
+        knob7.setBounds(0, 0, 0, 0);
+        knob8.setBounds(0, 0, 0, 0);
+        knob9.setBounds(0, 0, 0, 0);
+        return;
+    }
+
+    if (tenBandGraphicEq)
+    {
+        const float aspect = 124.0f / 92.0f;
+        const int bodyHeight = juce::jmin(getHeight() - 6, juce::roundToInt((float)getWidth() / aspect));
+        const int bodyTop = (getHeight() - bodyHeight) / 2;
+        const int bodyLeft = 3;
+        const int bodyWidth = getWidth() - 6;
+        const float left = (float)bodyLeft + (float)bodyWidth * 0.055f;
+        const float right = (float)(bodyLeft + bodyWidth) - (float)bodyWidth * 0.055f;
+        const int top = bodyTop + juce::roundToInt((float)bodyHeight * 0.285f);
+        const int bottom = bodyTop + juce::roundToInt((float)bodyHeight * 0.650f);
+        const float cellW = (right - left) / 12.0f;
+        juce::Slider* sliders[] = { &eqVolumeSlider,
+                                    &eqBandSliders[0], &eqBandSliders[1], &eqBandSliders[2], &eqBandSliders[3], &eqBandSliders[4],
+                                    &eqBandSliders[5], &eqBandSliders[6], &eqBandSliders[7], &eqBandSliders[8], &eqBandSliders[9],
+                                    &eqGainSlider };
+        for (int i = 0; i < 12; ++i)
+        {
+            const int cx = juce::roundToInt(left + ((float)i + 0.5f) * cellW);
+            const int sliderW = juce::jmax(12, juce::roundToInt(cellW * 0.78f));
+            sliders[i]->setBounds(cx - sliderW / 2, top, sliderW, bottom - top);
+        }
         return;
     }
 

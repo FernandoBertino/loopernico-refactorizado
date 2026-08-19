@@ -57,6 +57,8 @@ public:
         setColour(juce::PopupMenu::backgroundColourId,            LnfC::Panel);
         setColour(juce::PopupMenu::textColourId,                  LnfC::TextHi);
         setColour(juce::PopupMenu::highlightedBackgroundColourId, LnfC::Accent.withAlpha(0.28f));
+        setColour(juce::PopupMenu::highlightedTextColourId,       LnfC::TextHi);
+        setColour(juce::PopupMenu::headerTextColourId,            LnfC::OvdAmber);
         setColour(juce::Label::textColourId,                      LnfC::TextHi);
         setColour(juce::Label::backgroundColourId,                juce::Colours::transparentBlack);
         setColour(juce::Slider::rotarySliderFillColourId,         LnfC::KnobArc);
@@ -75,49 +77,364 @@ public:
         float radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.46f;
         auto centre = bounds.getCentre();
 
+        if (slider.getComponentID() == "smallCloneDepthSwitch")
+        {
+            auto slot = bounds.reduced(bounds.getWidth() * 0.28f, bounds.getHeight() * 0.08f);
+            g.setColour(juce::Colours::black.withAlpha(0.72f));
+            g.fillRoundedRectangle(slot.translated(1.0f, 1.5f), 2.5f);
+            juce::ColourGradient slotMetal(juce::Colour(0xff3f3e3b), slot.getX(), slot.getY(),
+                                            juce::Colour(0xff080808), slot.getRight(), slot.getBottom(), true);
+            g.setGradientFill(slotMetal);
+            g.fillRoundedRectangle(slot, 2.5f);
+            const float capH = slot.getHeight() * 0.48f;
+            const float capY = pos >= 0.5f ? slot.getY() + 1.5f : slot.getBottom() - capH - 1.5f;
+            auto cap = juce::Rectangle<float>(slot.getX() - 2.0f, capY, slot.getWidth() + 4.0f, capH);
+            juce::ColourGradient plastic(juce::Colour(0xff4e4e4b), cap.getX(), cap.getY(),
+                                          juce::Colour(0xff090909), cap.getRight(), cap.getBottom(), true);
+            g.setGradientFill(plastic);
+            g.fillRoundedRectangle(cap, 2.0f);
+            for (int i = 1; i < 4; ++i)
+            {
+                const float yy = cap.getY() + cap.getHeight() * (float) i / 4.0f;
+                g.setColour(juce::Colours::white.withAlpha(0.12f));
+                g.drawHorizontalLine(juce::roundToInt(yy), cap.getX() + 2.0f, cap.getRight() - 2.0f);
+            }
+            return;
+        }
+
+        const bool plusLargeKnob = slider.getComponentID() == "gamechangerPlusLargeKnob";
+        const bool plusMiniKnob = slider.getComponentID() == "gamechangerPlusMiniKnob";
+
+        if (plusLargeKnob || plusMiniKnob)
+        {
+            static const auto largeRaster = []
+            {
+                const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
+                const juce::File candidates[] = {
+                    sourceDirectory.getSiblingFile("Assets").getChildFile("Hardware/gamechanger-plus-pedal-ii-knob-large-v1.png"),
+                    juce::File::getCurrentWorkingDirectory().getChildFile("Assets/Hardware/gamechanger-plus-pedal-ii-knob-large-v1.png"),
+                    juce::File::getCurrentWorkingDirectory()
+                        .getChildFile("Loopernico Refactorizado/Assets/Hardware/gamechanger-plus-pedal-ii-knob-large-v1.png")
+                };
+                for (const auto& file : candidates)
+                    if (file.existsAsFile())
+                        if (auto image = juce::ImageFileFormat::loadFrom(file); image.isValid())
+                            return image;
+                return juce::Image{};
+            }();
+            static const auto miniRaster = []
+            {
+                const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
+                const juce::File candidates[] = {
+                    sourceDirectory.getSiblingFile("Assets").getChildFile("Hardware/gamechanger-plus-pedal-ii-knob-mini-v1.png"),
+                    juce::File::getCurrentWorkingDirectory().getChildFile("Assets/Hardware/gamechanger-plus-pedal-ii-knob-mini-v1.png"),
+                    juce::File::getCurrentWorkingDirectory()
+                        .getChildFile("Loopernico Refactorizado/Assets/Hardware/gamechanger-plus-pedal-ii-knob-mini-v1.png")
+                };
+                for (const auto& file : candidates)
+                    if (file.existsAsFile())
+                        if (auto image = juce::ImageFileFormat::loadFrom(file); image.isValid())
+                            return image;
+                return juce::Image{};
+            }();
+
+            const auto& raster = plusLargeKnob ? largeRaster : miniRaster;
+            if (raster.isValid())
+            {
+                const float angle = startAngle + pos * (endAngle - startAngle);
+                juce::Graphics::ScopedSaveState state(g);
+                g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+                g.addTransform(juce::AffineTransform::rotation(angle, centre.x, centre.y));
+                g.drawImage(raster, bounds);
+            }
+            return;
+        }
+
+        const bool voxCooltronLargeKnob = slider.getComponentID() == "voxCooltronLargeKnob";
+        const bool voxCooltronSmallKnob = slider.getComponentID() == "voxCooltronSmallKnob";
+        if (voxCooltronLargeKnob || voxCooltronSmallKnob)
+        {
+            static const auto largeRaster = []
+            {
+                const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
+                const juce::File candidates[] = {
+                    sourceDirectory.getSiblingFile("Assets").getChildFile("Hardware/vox-cooltron-large-knob-v1.png"),
+                    juce::File::getCurrentWorkingDirectory().getChildFile("Assets/Hardware/vox-cooltron-large-knob-v1.png"),
+                    juce::File::getCurrentWorkingDirectory()
+                        .getChildFile("Loopernico Refactorizado/Assets/Hardware/vox-cooltron-large-knob-v1.png")
+                };
+                for (const auto& file : candidates)
+                    if (file.existsAsFile())
+                        if (auto image = juce::ImageFileFormat::loadFrom(file); image.isValid())
+                            return image;
+                return juce::Image{};
+            }();
+            static const auto smallRaster = []
+            {
+                const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
+                const juce::File candidates[] = {
+                    sourceDirectory.getSiblingFile("Assets").getChildFile("Hardware/vox-cooltron-small-knob-v1.png"),
+                    juce::File::getCurrentWorkingDirectory().getChildFile("Assets/Hardware/vox-cooltron-small-knob-v1.png"),
+                    juce::File::getCurrentWorkingDirectory()
+                        .getChildFile("Loopernico Refactorizado/Assets/Hardware/vox-cooltron-small-knob-v1.png")
+                };
+                for (const auto& file : candidates)
+                    if (file.existsAsFile())
+                        if (auto image = juce::ImageFileFormat::loadFrom(file); image.isValid())
+                            return image;
+                return juce::Image{};
+            }();
+
+            const auto& raster = voxCooltronLargeKnob ? largeRaster : smallRaster;
+            if (!raster.isValid())
+                return;
+
+            const float angle = startAngle + pos * (endAngle - startAngle);
+            const float imageScale = voxCooltronLargeKnob ? 1.10f : 1.05f;
+            const auto target = bounds.withSizeKeepingCentre(bounds.getWidth() * imageScale,
+                                                              bounds.getHeight() * imageScale);
+            juce::Graphics::ScopedSaveState state(g);
+            g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+            g.addTransform(juce::AffineTransform::rotation(angle, centre.x, centre.y));
+            g.drawImage(raster, target);
+            return;
+        }
+
+        const bool ehxPicoKnob = slider.getComponentID() == "ehxPicoKnob";
+        if (slider.getComponentID() != "bossNoiseKnob" && !ehxPicoKnob)
+        {
+            // Broad drop shadow from the physical height of the knob. The darker,
+            // tighter ellipses in each knob style remain as contact occlusion.
+            const float shadowOffsetX = juce::jlimit(0.8f, 3.2f, radius * 0.10f);
+            const float shadowOffsetY = juce::jlimit(1.2f, 4.2f, radius * 0.17f);
+            const float shadowRadius = radius * 1.10f;
+            const auto shadowCentre = centre.translated(shadowOffsetX, shadowOffsetY);
+            juce::ColourGradient knobShadow(juce::Colours::black.withAlpha(0.31f),
+                                            shadowCentre.x, shadowCentre.y,
+                                            juce::Colours::transparentBlack,
+                                            shadowCentre.x + shadowRadius, shadowCentre.y, true);
+            knobShadow.addColour(0.66, juce::Colours::black.withAlpha(0.17f));
+            g.setGradientFill(knobShadow);
+            g.fillEllipse(shadowCentre.x - shadowRadius, shadowCentre.y - shadowRadius,
+                          shadowRadius * 2.0f, shadowRadius * 2.0f);
+        }
+
+        if (ehxPicoKnob)
+        {
+            const float angle = startAngle + pos * (endAngle - startAngle);
+            const float r = radius * 1.03f;
+
+            // The Pico's controls are plain black EHX knobs. Keep the metal
+            // rim restrained and avoid the generic cast-shadow/tick treatment
+            // used by the other pedals.
+            juce::ColourGradient rim(juce::Colour(0xff686866),
+                                      centre.x - r * 0.60f, centre.y - r * 0.75f,
+                                      juce::Colour(0xff242423),
+                                      centre.x + r * 0.60f, centre.y + r * 0.75f, true);
+            g.setGradientFill(rim);
+            g.fillEllipse(centre.x - r, centre.y - r, r * 2.0f, r * 2.0f);
+
+            const float capRadius = r * 0.87f;
+            juce::ColourGradient cap(juce::Colour(0xff3d3d3b),
+                                     centre.x - capRadius * 0.48f,
+                                     centre.y - capRadius * 0.70f,
+                                     juce::Colour(0xff090909),
+                                     centre.x + capRadius * 0.52f,
+                                     centre.y + capRadius * 0.66f, true);
+            g.setGradientFill(cap);
+            g.fillEllipse(centre.x - capRadius, centre.y - capRadius,
+                          capRadius * 2.0f, capRadius * 2.0f);
+            g.setColour(juce::Colours::white.withAlpha(0.12f));
+            g.fillEllipse(centre.x - capRadius * 0.47f,
+                          centre.y - capRadius * 0.60f,
+                          capRadius * 0.74f, capRadius * 0.22f);
+
+            const auto markerStart = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (capRadius * 0.18f);
+            const auto markerEnd = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (capRadius * 0.68f);
+            g.setColour(juce::Colour(0xfff1f0ea));
+            g.drawLine({ markerStart, markerEnd }, 1.8f);
+            return;
+        }
+
+        if (slider.getComponentID() == "smallCloneRateKnob")
+        {
+            const float angle = startAngle + pos * (endAngle - startAngle);
+            const float r = radius * 0.96f;
+            g.setColour(juce::Colours::black.withAlpha(0.55f));
+            g.fillEllipse(centre.x - r - 1.5f, centre.y - r + 2.2f,
+                          r * 2.0f + 3.0f, r * 2.0f + 3.0f);
+            for (int i = 0; i < 36; ++i)
+            {
+                const float a = juce::MathConstants<float>::twoPi * (float) i / 36.0f;
+                const auto p1 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * (r * 0.86f);
+                const auto p2 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * r;
+                g.setColour(juce::Colours::white.withAlpha(i % 2 == 0 ? 0.12f : 0.05f));
+                g.drawLine({ p1, p2 }, 0.75f);
+            }
+            juce::ColourGradient cap(juce::Colour(0xff555451), centre.x - r * 0.55f, centre.y - r * 0.65f,
+                                      juce::Colour(0xff070707), centre.x + r * 0.50f, centre.y + r * 0.58f, true);
+            cap.addColour(0.44, juce::Colour(0xff242422));
+            g.setGradientFill(cap);
+            g.fillEllipse(centre.x - r * 0.85f, centre.y - r * 0.85f, r * 1.70f, r * 1.70f);
+            g.setColour(juce::Colours::white.withAlpha(0.13f));
+            g.fillEllipse(centre.x - r * 0.48f, centre.y - r * 0.60f, r * 0.72f, r * 0.21f);
+            const auto markerStart = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.18f);
+            const auto markerEnd = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.68f);
+            g.setColour(juce::Colours::black.withAlpha(0.76f));
+            g.drawLine({ markerStart.translated(0.9f, 1.0f), markerEnd.translated(0.9f, 1.0f) }, 3.0f);
+            g.setColour(juce::Colour(0xfff1f0ea));
+            g.drawLine({ markerStart, markerEnd }, 2.1f);
+            return;
+        }
+
+        if (slider.getComponentID() == "timeLineKnob")
+        {
+            const float angle = startAngle + pos * (endAngle - startAngle);
+            const float r = radius * 0.95f;
+            g.setColour(juce::Colours::black.withAlpha(0.68f));
+            g.fillEllipse(centre.x - r - 1.6f, centre.y - r + 2.2f,
+                          r * 2.0f + 3.2f, r * 2.0f + 3.2f);
+            for (int i = 0; i < 34; ++i)
+            {
+                const float a = juce::MathConstants<float>::twoPi * (float) i / 34.0f;
+                const auto p1 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * (r * 0.84f);
+                const auto p2 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * r;
+                g.setColour(juce::Colours::white.withAlpha(i % 2 == 0 ? 0.13f : 0.055f));
+                g.drawLine({ p1, p2 }, 0.75f);
+            }
+            juce::ColourGradient cap(juce::Colour(0xff65676a), centre.x - r * 0.55f, centre.y - r * 0.68f,
+                                      juce::Colour(0xff050607), centre.x + r * 0.52f, centre.y + r * 0.62f, true);
+            cap.addColour(0.43, juce::Colour(0xff25272a));
+            g.setGradientFill(cap);
+            g.fillEllipse(centre.x - r * 0.84f, centre.y - r * 0.84f, r * 1.68f, r * 1.68f);
+            g.setColour(juce::Colours::white.withAlpha(0.14f));
+            g.fillEllipse(centre.x - r * 0.48f, centre.y - r * 0.60f, r * 0.72f, r * 0.21f);
+            const auto markerStart = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.18f);
+            const auto markerEnd = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.71f);
+            g.setColour(juce::Colours::black.withAlpha(0.78f));
+            g.drawLine({ markerStart.translated(0.9f, 1.0f), markerEnd.translated(0.9f, 1.0f) }, 3.0f);
+            g.setColour(juce::Colour(0xfff1f1ed));
+            g.drawLine({ markerStart, markerEnd }, 2.1f);
+            return;
+        }
+
+        if (slider.getComponentID() == "bigSkyKnob")
+        {
+            const float angle = startAngle + pos * (endAngle - startAngle);
+            const float r = radius * 0.94f;
+            g.setColour(juce::Colours::black.withAlpha(0.62f));
+            g.fillEllipse(centre.x - r - 1.5f, centre.y - r + 2.0f,
+                          r * 2.0f + 3.0f, r * 2.0f + 3.0f);
+            for (int i = 0; i < 32; ++i)
+            {
+                const float a = juce::MathConstants<float>::twoPi * (float)i / 32.0f;
+                const auto p1 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * (r * 0.86f);
+                const auto p2 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * r;
+                g.setColour((i % 2 == 0 ? juce::Colours::white : juce::Colours::black)
+                                .withAlpha(i % 2 == 0 ? 0.10f : 0.72f));
+                g.drawLine({ p1, p2 }, 0.8f);
+            }
+            juce::ColourGradient cap(juce::Colour(0xff55575a), centre.x - r * 0.52f, centre.y - r * 0.65f,
+                                      juce::Colour(0xff060708), centre.x + r * 0.48f, centre.y + r * 0.58f, true);
+            cap.addColour(0.44, juce::Colour(0xff242629));
+            g.setGradientFill(cap);
+            g.fillEllipse(centre.x - r * 0.85f, centre.y - r * 0.85f, r * 1.70f, r * 1.70f);
+            g.setColour(juce::Colours::white.withAlpha(0.13f));
+            g.fillEllipse(centre.x - r * 0.48f, centre.y - r * 0.60f, r * 0.72f, r * 0.22f);
+            const auto markerStart = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.20f);
+            const auto markerEnd = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.70f);
+            g.setColour(juce::Colours::black.withAlpha(0.72f));
+            g.drawLine({ markerStart.translated(0.9f, 1.0f), markerEnd.translated(0.9f, 1.0f) }, 2.8f);
+            g.setColour(juce::Colour(0xffe8e8e4));
+            g.drawLine({ markerStart, markerEnd }, 2.0f);
+            return;
+        }
+
         if (slider.getComponentID() == "beatBuddyKnob")
         {
             const float angle = startAngle + pos * (endAngle - startAngle);
-            const float r = radius * 0.92f;
-            const auto gold = juce::Colour(0xffd6a144);
+            const float bezelR = juce::jmin((float) w, (float) h) * 0.46f;
+            const float recessR = bezelR * 0.78f;
+            const float r = bezelR * 0.58f;
 
-            g.setColour(juce::Colours::black.withAlpha(0.60f));
-            g.fillEllipse(centre.x - r - 2.0f, centre.y - r + 2.8f,
-                          (r + 2.0f) * 2.0f, (r + 2.0f) * 2.0f);
-            juce::ColourGradient metal(juce::Colour(0xffffd879), centre.x - r * 0.58f, centre.y - r * 0.68f,
-                                       juce::Colour(0xff67400b), centre.x + r * 0.60f, centre.y + r * 0.64f, true);
-            metal.addColour(0.48, gold);
-            g.setGradientFill(metal);
+            g.setColour(juce::Colours::black.withAlpha(0.58f));
+            g.fillEllipse(centre.x - bezelR - 1.2f, centre.y - bezelR + 1.8f,
+                          bezelR * 2.0f + 2.4f, bezelR * 2.0f + 2.4f);
+            juce::ColourGradient bezel(juce::Colour(0xffffe4a6), centre.x - bezelR * 0.58f,
+                                       centre.y - bezelR * 0.72f, juce::Colour(0xff7c551f),
+                                       centre.x + bezelR * 0.62f, centre.y + bezelR * 0.70f, true);
+            bezel.addColour(0.48, juce::Colour(0xffd7aa55));
+            g.setGradientFill(bezel);
+            g.fillEllipse(centre.x - bezelR, centre.y - bezelR, bezelR * 2.0f, bezelR * 2.0f);
+            g.setColour(juce::Colour(0xff171716));
+            g.fillEllipse(centre.x - recessR, centre.y - recessR, recessR * 2.0f, recessR * 2.0f);
+            g.setColour(juce::Colours::black.withAlpha(0.78f));
+            g.drawEllipse(centre.x - recessR, centre.y - recessR, recessR * 2.0f, recessR * 2.0f,
+                          juce::jmax(0.7f, bezelR * 0.07f));
+
+            juce::ColourGradient cap(juce::Colour(0xff5c5e61), centre.x - r * 0.48f, centre.y - r * 0.58f,
+                                     juce::Colour(0xff070809), centre.x + r * 0.46f, centre.y + r * 0.54f, true);
+            cap.addColour(0.44, juce::Colour(0xff242628));
+            g.setGradientFill(cap);
             g.fillEllipse(centre.x - r, centre.y - r, r * 2.0f, r * 2.0f);
-            g.setColour(juce::Colours::black.withAlpha(0.68f));
-            g.fillEllipse(centre.x - r * 0.79f, centre.y - r * 0.79f,
-                          r * 1.58f, r * 1.58f);
+            g.setColour(juce::Colours::black.withAlpha(0.70f));
+            g.drawEllipse(centre.x - r, centre.y - r, r * 2.0f, r * 2.0f,
+                          juce::jmax(0.7f, r * 0.08f));
+            g.setColour(juce::Colours::white.withAlpha(0.12f));
+            g.fillEllipse(centre.x - r * 0.55f, centre.y - r * 0.66f,
+                          r * 0.88f, r * 0.22f);
 
-            for (int i = 0; i < 30; ++i)
+            const auto markerStart = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.18f);
+            const auto markerEnd = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.72f);
+            g.setColour(juce::Colours::black.withAlpha(0.72f));
+            g.drawLine({ markerStart.translated(0.7f, 0.8f), markerEnd.translated(0.7f, 0.8f) },
+                       juce::jmax(1.4f, r * 0.25f));
+            g.setColour(juce::Colour(0xffffe6ae));
+            g.drawLine({ markerStart, markerEnd }, juce::jmax(1.0f, r * 0.16f));
+            return;
+        }
+
+        if (slider.getComponentID() == "bossNoiseKnob")
+        {
+            const float angle = startAngle + pos * (endAngle - startAngle);
+            static const auto rasterKnob = []
             {
-                const float a = juce::MathConstants<float>::twoPi * (float) i / 30.0f;
-                const auto p1 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * (r * 0.68f);
-                const auto p2 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * (r * 0.79f);
-                g.setColour(juce::Colours::white.withAlpha(i % 2 == 0 ? 0.18f : 0.08f));
-                g.drawLine({ p1, p2 }, 0.9f);
+                const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
+                const juce::File candidates[] = {
+                    sourceDirectory.getSiblingFile("Assets").getChildFile("Hardware/boss-ns2-knob-v4.png"),
+                    juce::File::getCurrentWorkingDirectory().getChildFile("Assets/Hardware/boss-ns2-knob-v4.png"),
+                    juce::File::getCurrentWorkingDirectory()
+                        .getChildFile("Loopernico Refactorizado/Assets/Hardware/boss-ns2-knob-v4.png")
+                };
+                for (const auto& file : candidates)
+                    if (file.existsAsFile())
+                        if (auto image = juce::ImageFileFormat::loadFrom(file); image.isValid())
+                            return image;
+                return juce::Image{};
+            }();
+
+            if (rasterKnob.isValid())
+            {
+                const auto target = bounds.reduced(0.5f, 0.5f);
+                g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+                g.drawImage(rasterKnob, target);
+
+                const auto capCentre = target.getCentre();
+                const float capRadius = target.getWidth() * 0.405f;
+                const auto markerStart = capCentre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (capRadius * 0.08f);
+                const auto markerEnd = capCentre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (capRadius * 0.72f);
+                g.setColour(juce::Colour(0xff111111));
+                g.drawLine({ markerStart, markerEnd }, juce::jmax(1.6f, capRadius * 0.10f));
+                return;
             }
 
-            juce::ColourGradient cap(juce::Colour(0xff505152), centre.x - r * 0.45f, centre.y - r * 0.55f,
-                                     juce::Colour(0xff08090a), centre.x + r * 0.42f, centre.y + r * 0.50f, true);
-            cap.addColour(0.46, juce::Colour(0xff252627));
-            g.setGradientFill(cap);
-            g.fillEllipse(centre.x - r * 0.66f, centre.y - r * 0.66f,
-                          r * 1.32f, r * 1.32f);
-            g.setColour(juce::Colours::white.withAlpha(0.13f));
-            g.fillEllipse(centre.x - r * 0.38f, centre.y - r * 0.50f,
-                          r * 0.60f, r * 0.18f);
-
-            const auto markerStart = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.20f);
-            const auto markerEnd = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.58f);
-            g.setColour(juce::Colours::black.withAlpha(0.72f));
-            g.drawLine({ markerStart.translated(1.0f, 1.0f), markerEnd.translated(1.0f, 1.0f) }, 3.0f);
-            g.setColour(juce::Colour(0xffffe6ae));
-            g.drawLine({ markerStart, markerEnd }, 2.1f);
+            const float r = radius * 0.88f;
+            g.setColour(juce::Colour(0xff242424));
+            g.fillEllipse(centre.x - r, centre.y - r, r * 2.0f, r * 2.0f);
+            const auto markerStart = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.16f);
+            const auto markerEnd = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.62f);
+            g.setColour(juce::Colour(0xff181818));
+            g.drawLine({ markerStart, markerEnd }, 2.0f);
             return;
         }
 
@@ -125,6 +442,34 @@ public:
         {
             const float angle = startAngle + pos * (endAngle - startAngle);
             const float r = radius * 0.90f;
+
+            static const auto rasterKnob = []
+            {
+                const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
+                const juce::File candidates[] = {
+                    sourceDirectory.getSiblingFile("Assets").getChildFile("Hardware/dedalo-jet-knob-v1.png"),
+                    juce::File::getCurrentWorkingDirectory()
+                        .getChildFile("Assets/Hardware/dedalo-jet-knob-v1.png"),
+                    juce::File::getCurrentWorkingDirectory()
+                        .getChildFile("Loopernico Refactorizado/Assets/Hardware/dedalo-jet-knob-v1.png")
+                };
+                for (const auto& file : candidates)
+                    if (file.existsAsFile())
+                        if (auto image = juce::ImageFileFormat::loadFrom(file); image.isValid())
+                            return image;
+                return juce::Image{};
+            }();
+
+            if (rasterKnob.isValid())
+            {
+                const float imageSize = radius * 2.50f;
+                const auto target = juce::Rectangle<float>(imageSize, imageSize).withCentre(centre);
+                juce::Graphics::ScopedSaveState state(g);
+                g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+                g.addTransform(juce::AffineTransform::rotation(angle, centre.x, centre.y));
+                g.drawImage(rasterKnob, target);
+                return;
+            }
 
             g.setColour(juce::Colours::black.withAlpha(0.30f));
             g.fillEllipse(centre.x - r - 1.5f, centre.y - r + 2.8f,
@@ -169,41 +514,44 @@ public:
             return;
         }
 
-        if (slider.getComponentID() == "pampaFuzzKnob" || slider.getComponentID() == "mirrorDriveKnob")
+        if (slider.getComponentID() == "pampaFuzzKnob")
         {
-            const float r = radius * 0.84f;
             const float angle = startAngle + pos * (endAngle - startAngle);
-            g.setColour(juce::Colours::black.withAlpha(0.40f));
-            g.fillEllipse(centre.x - r - 1.5f, centre.y - r + 2.2f, r * 2.0f + 3.0f, r * 2.0f + 3.0f);
-            g.setColour(juce::Colour(0xff050505));
-            g.fillEllipse(centre.x - r - 1.0f, centre.y - r - 1.0f, r * 2.0f + 2.0f, r * 2.0f + 2.0f);
-
-            for (int i = 0; i < 36; ++i)
+            static const auto rasterKnob = []
             {
-                const float a = juce::MathConstants<float>::twoPi * (float) i / 36.0f;
-                const auto p1 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * (r * 0.87f);
-                const auto p2 = centre + juce::Point<float>(std::sin(a), -std::cos(a)) * (r * 1.05f);
-                g.setColour((i % 2 == 0 ? juce::Colours::white : juce::Colours::black)
-                                .withAlpha(i % 2 == 0 ? 0.13f : 0.72f));
-                g.drawLine({ p1, p2 }, 1.25f);
+                const auto sourceDirectory = juce::File(__FILE__).getParentDirectory();
+                const juce::File candidates[] = {
+                    sourceDirectory.getSiblingFile("Assets").getChildFile("Hardware/pampa-fuzz-filete-knob-v1.png"),
+                    juce::File::getCurrentWorkingDirectory().getChildFile("Assets/Hardware/pampa-fuzz-filete-knob-v1.png"),
+                    juce::File::getCurrentWorkingDirectory()
+                        .getChildFile("Loopernico Refactorizado/Assets/Hardware/pampa-fuzz-filete-knob-v1.png")
+                };
+                for (const auto& file : candidates)
+                    if (file.existsAsFile())
+                        if (auto image = juce::ImageFileFormat::loadFrom(file); image.isValid())
+                            return image;
+                return juce::Image{};
+            }();
+
+            if (rasterKnob.isValid())
+            {
+                constexpr float assetMarkerAngle = -0.50f;
+                const auto target = bounds.reduced(0.5f, 0.5f);
+                juce::Graphics::ScopedSaveState state(g);
+                g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+                g.addTransform(juce::AffineTransform::rotation(angle - assetMarkerAngle,
+                                                               centre.x, centre.y));
+                g.drawImage(rasterKnob, target);
+                return;
             }
 
-            juce::ColourGradient vintageBlack(juce::Colour(0xff55534d), centre.x - r * 0.48f, centre.y - r * 0.58f,
-                                               juce::Colour(0xff090909), centre.x + r * 0.42f, centre.y + r * 0.52f, true);
-            vintageBlack.addColour(0.45, juce::Colour(0xff292927));
-            g.setGradientFill(vintageBlack);
-            g.fillEllipse(centre.x - r * 0.86f, centre.y - r * 0.86f, r * 1.72f, r * 1.72f);
-            g.setColour(juce::Colours::white.withAlpha(0.12f));
-            g.drawEllipse(centre.x - r * 0.84f, centre.y - r * 0.84f, r * 1.68f, r * 1.68f, 1.0f);
-
+            const float r = radius * 0.84f;
+            g.setColour(juce::Colour(0xff050505));
+            g.fillEllipse(centre.x - r, centre.y - r, r * 2.0f, r * 2.0f);
             const auto markerStart = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.18f);
             const auto markerEnd = centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * (r * 0.69f);
-            g.setColour(juce::Colours::black.withAlpha(0.70f));
-            g.drawLine({ markerStart.translated(1.0f, 1.2f), markerEnd.translated(1.0f, 1.2f) }, 3.0f);
             g.setColour(juce::Colour(0xffe8d8ad));
             g.drawLine({ markerStart, markerEnd }, 2.1f);
-            g.setColour(juce::Colours::white.withAlpha(0.16f));
-            g.fillEllipse(centre.x - r * 0.44f, centre.y - r * 0.68f, r * 0.68f, r * 0.24f);
             return;
         }
 
@@ -288,6 +636,12 @@ public:
     void drawButtonBackground(juce::Graphics& g, juce::Button& btn,
                               const juce::Colour& bgCol, bool hl, bool dn) override
     {
+        if (btn.getComponentID() == "headerConsoleButton")
+        {
+            drawHeaderConsoleButton(g, btn, hl, dn);
+            return;
+        }
+
         auto b = btn.getLocalBounds().toFloat().reduced(0.5f);
         bool on = btn.getToggleState();
         auto col = on ? bgCol.brighter(0.12f) : dn ? bgCol.darker(0.08f)
@@ -339,7 +693,7 @@ public:
             g.drawRoundedRectangle(b, 4.0f, 1.0f);
         }
 
-        if (txt.contains("PLAY"))
+        if (txt.contains("PLAY") && btn.getComponentID() != "vstPatternTransportButton")
         {
             float cy = b.getCentreY();
             float tx = b.getX() + 11.0f;
@@ -352,7 +706,8 @@ public:
             g.fillPath(tri);
         }
 
-        if (on)
+        if (on && btn.getComponentID() != "outputModeButton"
+            && btn.getComponentID() != "vstPatternTransportButton")
         {
             const auto led = on && txt.contains("CONFIRM") ? LnfC::RecRed : LnfC::Accent;
             const float lr = 2.4f;
@@ -367,7 +722,57 @@ public:
         }
     }
 
-    void drawComboBox(juce::Graphics& g, int w, int h, bool,
+    void drawButtonText(juce::Graphics& g, juce::TextButton& btn,
+                        bool isMouseOverButton, bool isButtonDown) override
+    {
+        if (btn.getComponentID() == "vstPatternTransportButton")
+        {
+            const auto bounds = btn.getLocalBounds().toFloat();
+            const float size = juce::jmin(11.0f, bounds.getHeight() * 0.52f);
+            const float cx = bounds.getCentreX();
+            const float cy = bounds.getCentreY() + (isButtonDown ? 1.0f : 0.0f);
+            const auto colour = btn.getToggleState() ? LnfC::RecRed : LnfC::PlayGreen;
+            g.setColour(colour.withAlpha(isButtonDown ? 0.72f : 1.0f));
+
+            if (btn.getToggleState())
+                g.fillRoundedRectangle(cx - size * 0.48f, cy - size * 0.48f,
+                                       size * 0.96f, size * 0.96f, 1.2f);
+            else
+            {
+                juce::Path triangle;
+                triangle.addTriangle(cx - size * 0.38f, cy - size * 0.62f,
+                                     cx - size * 0.38f, cy + size * 0.62f,
+                                     cx + size * 0.68f, cy);
+                g.fillPath(triangle);
+            }
+            return;
+        }
+
+        if (btn.getComponentID() != "headerConsoleButton")
+        {
+            juce::LookAndFeel_V4::drawButtonText(g, btn, isMouseOverButton, isButtonDown);
+            return;
+        }
+
+        const bool illuminated = btn.getToggleState() || isButtonDown;
+        const auto led = btn.findColour(juce::TextButton::buttonOnColourId);
+        auto textArea = btn.getLocalBounds().reduced(7, 1);
+        if (isButtonDown)
+            textArea.translate(0, 1);
+
+        g.setFont(juce::Font(juce::FontOptions(9.6f).withStyle("Bold"))
+                      .withExtraKerningFactor(0.045f));
+        g.setColour(juce::Colours::black.withAlpha(illuminated ? 0.48f : 0.78f));
+        g.drawFittedText(btn.getButtonText(), textArea.translated(0, 1),
+                         juce::Justification::centred, 1, 0.82f);
+        g.setColour(illuminated ? juce::Colours::white
+                                : isMouseOverButton ? led.brighter(0.75f)
+                                                    : juce::Colour(0xffe2e5e9));
+        g.drawFittedText(btn.getButtonText(), textArea,
+                         juce::Justification::centred, 1, 0.82f);
+    }
+
+    void drawComboBox(juce::Graphics& g, int w, int h, bool isButtonDown,
                       int bx, int by, int bw, int bh, juce::ComboBox& box) override
     {
         juce::Rectangle<float> b(0.0f, 0.0f, (float)w, (float)h);
@@ -390,25 +795,132 @@ public:
             return;
         }
 
-        g.setColour(juce::Colours::black.withAlpha(0.45f));
+        const bool enabled = box.isEnabled();
+        const bool active = enabled && (box.isMouseOver() || box.hasKeyboardFocus(true));
+        const auto accent = active ? LnfC::Accent : LnfC::Border;
+        const float pressOffset = isButtonDown ? 0.5f : 0.0f;
+
+        g.setColour(juce::Colours::black.withAlpha(enabled ? 0.45f : 0.24f));
         g.fillRoundedRectangle(b.translated(0.0f, 1.0f), 3.0f);
         juce::ColourGradient boxGrad(
-            juce::Colour(0xff191b20), b.getX(), b.getY(),
-            juce::Colour(0xff07080a), b.getX(), b.getBottom(), false);
+            enabled ? juce::Colour(0xff1b1e24) : juce::Colour(0xff121418), b.getX(), b.getY(),
+            enabled ? juce::Colour(0xff080a0d) : juce::Colour(0xff0b0d10), b.getX(), b.getBottom(), false);
         g.setGradientFill(boxGrad);
-        g.fillRoundedRectangle(b, 3.0f);
-        g.setColour(LnfC::Border.withAlpha(0.95f));
+        g.fillRoundedRectangle(b.translated(0.0f, pressOffset), 3.5f);
+        g.setColour(accent.withAlpha(enabled ? (active ? 0.95f : 0.85f) : 0.42f));
         g.drawRoundedRectangle(b.reduced(0.5f), 3.0f, 1.0f);
         auto ac = juce::Rectangle<float>((float)bx, (float)by, (float)bw, (float)bh).getCentre();
         float as = (float)bh * 0.28f;
         juce::Path arr;
         arr.addTriangle({ ac.x - as, ac.y - as * 0.5f }, { ac.x + as, ac.y - as * 0.5f }, { ac.x, ac.y + as * 0.5f });
-        g.setColour(LnfC::TextDim.brighter(0.25f));
+        g.setColour(enabled ? (active ? LnfC::Accent : LnfC::TextDim.brighter(0.25f))
+                            : LnfC::TextDim.withAlpha(0.42f));
         g.fillPath(arr);
+    }
+
+    void drawPopupMenuBackground(juce::Graphics& g, int width, int height) override
+    {
+        const auto bounds = juce::Rectangle<float>(0.0f, 0.0f, (float) width, (float) height);
+        g.setColour(juce::Colours::black.withAlpha(0.52f));
+        g.fillRoundedRectangle(bounds.translated(0.0f, 3.0f).expanded(2.0f), 8.0f);
+
+        juce::ColourGradient menuGrad(juce::Colour(0xff1a1e24), 0.0f, 0.0f,
+                                      juce::Colour(0xff090b0e), 0.0f, (float) height, false);
+        g.setGradientFill(menuGrad);
+        g.fillRoundedRectangle(bounds, 7.0f);
+        g.setColour(LnfC::Border.brighter(0.18f).withAlpha(0.92f));
+        g.drawRoundedRectangle(bounds.reduced(0.5f), 7.0f, 1.0f);
+        g.setColour(LnfC::Accent.withAlpha(0.16f));
+        g.drawHorizontalLine(1, 8.0f, (float) width - 8.0f);
+    }
+
+    void drawPopupMenuItem(juce::Graphics& g, const juce::Rectangle<int>& area,
+                           bool isSeparator, bool isActive, bool isHighlighted,
+                           bool isTicked, bool hasSubMenu, const juce::String& text,
+                           const juce::String& shortcutKeyText, const juce::Drawable* icon,
+                           const juce::Colour* textColour) override
+    {
+        if (isSeparator)
+        {
+            auto line = area.reduced(10, 0).withHeight(1).withCentre(area.getCentre());
+            g.setColour(LnfC::Border.withAlpha(0.72f));
+            g.fillRect(line);
+            return;
+        }
+
+        auto row = area.reduced(5, 2);
+        if (isHighlighted && isActive)
+        {
+            g.setColour(LnfC::Accent.withAlpha(0.20f));
+            g.fillRoundedRectangle(row.toFloat(), 4.0f);
+            g.setColour(LnfC::Accent.withAlpha(0.72f));
+            g.fillRoundedRectangle(row.removeFromLeft(2).toFloat(), 1.0f);
+        }
+
+        auto content = area.reduced(14, 0);
+        if (icon != nullptr)
+        {
+            icon->drawWithin(g, content.removeFromLeft(22).toFloat().reduced(3.0f),
+                             juce::RectanglePlacement::centred, 1.0f);
+            content.removeFromLeft(7);
+        }
+        else if (isTicked)
+        {
+            auto tick = content.removeFromLeft(16).toFloat().reduced(3.0f);
+            g.setColour(isHighlighted ? LnfC::Accent : LnfC::OvdAmber);
+            g.drawEllipse(tick, 1.2f);
+            g.fillEllipse(tick.reduced(3.0f));
+            content.removeFromLeft(10);
+        }
+
+        const auto baseColour = textColour != nullptr ? *textColour : findColour(juce::PopupMenu::textColourId);
+        g.setColour(isActive ? (isHighlighted ? findColour(juce::PopupMenu::highlightedTextColourId) : baseColour)
+                            : baseColour.withAlpha(0.38f));
+        g.setFont(getPopupMenuFont());
+        g.drawFittedText(text, content, juce::Justification::centredLeft, 1);
+
+        if (shortcutKeyText.isNotEmpty())
+        {
+            g.setColour(baseColour.withAlpha(isActive ? 0.52f : 0.24f));
+            g.setFont(juce::Font(juce::FontOptions(10.0f)));
+            g.drawText(shortcutKeyText, area.getRight() - 70, area.getY(), 56, area.getHeight(),
+                       juce::Justification::centredRight, false);
+        }
+
+        if (hasSubMenu)
+        {
+            g.setColour(baseColour.withAlpha(isActive ? 0.72f : 0.30f));
+            juce::Path arrow;
+            const float cx = (float) area.getRight() - 12.0f;
+            const float cy = (float) area.getCentreY();
+            arrow.addTriangle(cx - 3.0f, cy - 4.0f, cx - 3.0f, cy + 4.0f, cx + 3.0f, cy);
+            g.fillPath(arrow);
+        }
+    }
+
+    int getPopupMenuBorderSize() override { return 7; }
+
+    void getIdealPopupMenuItemSize(const juce::String&, bool isSeparator,
+                                   int standardMenuItemHeight, int& idealWidth,
+                                   int& idealHeight) override
+    {
+        juce::ignoreUnused(idealWidth);
+        idealHeight = isSeparator ? 9 : juce::jmax(30, standardMenuItemHeight + 4);
+    }
+
+    juce::Font getPopupMenuFont() override
+    {
+        return juce::Font(juce::FontOptions(12.0f).withStyle("Bold"));
     }
 
     void positionComboBoxText(juce::ComboBox& cb, juce::Label& lbl) override
     {
+        if (cb.getComponentID() == "rhythmScreenCombo")
+        {
+            lbl.setBounds(3, 0, cb.getWidth() - 13, cb.getHeight());
+            lbl.setFont(getComboBoxFont(cb));
+            return;
+        }
         lbl.setBounds(4, 1, cb.getWidth() - 26, cb.getHeight() - 2);
         lbl.setFont(getComboBoxFont(cb));
     }
@@ -449,7 +961,10 @@ public:
     juce::Font getComboBoxFont(juce::ComboBox& box) override
     {
         if (box.getComponentID() == "rhythmScreenCombo")
-            return juce::Font(juce::FontOptions(9.0f).withStyle("Bold"));
+        {
+            const float fontHeight = juce::jlimit(7.2f, 19.0f, (float) box.getHeight() * 0.55f);
+            return juce::Font(juce::FontOptions(fontHeight).withStyle("Bold"));
+        }
         return juce::Font(juce::FontOptions(11.5f));
     }
 
@@ -472,6 +987,39 @@ public:
     {
         bool horiz = (style == juce::Slider::LinearHorizontal);
         auto b = juce::Rectangle<int>(x, y, w, h).toFloat();
+
+        if (slider.getComponentID() == "mxrTenBandSlider")
+        {
+            // Slider children are not affected by the parent's artwork
+            // transform, so scale their hardware from the actual pedal size.
+            // 72 px is the compact EQ slider travel; focus mode can enlarge
+            // it, but the fader hardware must remain proportional to the
+            // pedal rather than growing at the design-coordinate scale.
+            const float uiScale = juce::jmax(0.55f, b.getHeight() / 72.0f);
+            const auto px = [uiScale](float value) { return value * uiScale; };
+            const float cx = b.getCentreX();
+            const float trackTop = b.getY() + px(4.0f);
+            const float trackBottom = b.getBottom() - px(4.0f);
+            g.setColour(juce::Colours::black.withAlpha(0.86f));
+            g.fillRoundedRectangle(cx - px(2.3f), trackTop, px(4.6f), trackBottom - trackTop, px(1.4f));
+            g.setColour(juce::Colours::white.withAlpha(0.12f));
+            g.drawVerticalLine(juce::roundToInt(cx - px(0.5f)), trackTop + px(1.0f), trackBottom - px(1.0f));
+
+            const auto blue = slider.findColour(juce::Slider::trackColourId);
+            g.setColour(blue.withAlpha(0.20f));
+            g.fillEllipse(cx - px(8.5f), pos - px(8.5f), px(17.0f), px(17.0f));
+            g.setColour(juce::Colours::black.withAlpha(0.58f));
+            g.fillRoundedRectangle(cx - px(7.2f), pos - px(4.6f), px(14.4f), px(10.8f), px(2.5f));
+            juce::ColourGradient cap(juce::Colour(0xfff5f6f6), cx - px(5.5f), pos - px(4.0f),
+                                     juce::Colour(0xff6e7478), cx + px(5.0f), pos + px(5.0f), true);
+            g.setGradientFill(cap);
+            g.fillRoundedRectangle(cx - px(6.2f), pos - px(5.0f), px(12.4f), px(10.0f), px(2.0f));
+            g.setColour(blue.withAlpha(0.96f));
+            g.fillRoundedRectangle(cx - px(2.2f), pos - px(3.6f), px(4.4f), px(7.2f), px(1.2f));
+            g.setColour(juce::Colours::white.withAlpha(0.72f));
+            g.drawHorizontalLine(juce::roundToInt(pos - px(3.0f)), cx - px(1.5f), cx + px(1.5f));
+            return;
+        }
 
         float trackThick = 3.0f;
         juce::Rectangle<float> track;
@@ -497,8 +1045,11 @@ public:
         float tx = horiz ? pos : b.getCentreX();
         float ty = horiz ? b.getCentreY() : pos;
 
-        g.setColour(fillColour.withAlpha(0.20f));
-        g.fillEllipse(tx - thumbR * 1.8f, ty - thumbR * 1.8f, thumbR * 3.6f, thumbR * 3.6f);
+        if (slider.getComponentID() != "signalThresholdSlider")
+        {
+            g.setColour(fillColour.withAlpha(0.20f));
+            g.fillEllipse(tx - thumbR * 1.8f, ty - thumbR * 1.8f, thumbR * 3.6f, thumbR * 3.6f);
+        }
         juce::ColourGradient thumbGrad(LnfC::MetalHi, tx - thumbR, ty - thumbR,
                                        LnfC::MetalLo, tx + thumbR, ty + thumbR, false);
         g.setGradientFill(thumbGrad);
@@ -507,6 +1058,74 @@ public:
         g.drawEllipse(tx - thumbR, ty - thumbR, thumbR * 2.0f, thumbR * 2.0f, 1.0f);
 
         juce::ignoreUnused(slider);
+    }
+
+private:
+    static void drawHeaderConsoleButton(juce::Graphics& g, juce::Button& btn,
+                                        bool isMouseOverButton, bool isButtonDown)
+    {
+        auto bounds = btn.getLocalBounds().toFloat().reduced(1.0f, 0.8f);
+        const bool illuminated = btn.getToggleState() || isButtonDown;
+        const auto led = btn.findColour(juce::TextButton::buttonOnColourId);
+        const float glowStrength = illuminated ? 1.0f : isMouseOverButton ? 0.52f : 0.22f;
+
+        // Recessed socket first: everything that follows is seen through the clear cap.
+        g.setColour(juce::Colours::black.withAlpha(0.78f));
+        g.fillRoundedRectangle(bounds.translated(0.0f, 1.6f), 3.4f);
+        juce::ColourGradient socket(juce::Colour(0xff111419), bounds.getX(), bounds.getY(),
+                                    juce::Colour(0xff010203), bounds.getX(), bounds.getBottom(), false);
+        g.setGradientFill(socket);
+        g.fillRoundedRectangle(bounds, 3.4f);
+        g.setColour(juce::Colours::black.withAlpha(0.82f));
+        g.drawRoundedRectangle(bounds.reduced(0.4f), 3.2f, 0.8f);
+
+        auto cap = bounds.reduced(2.1f, 1.8f);
+        if (isButtonDown)
+            cap.translate(0.0f, 1.0f);
+
+        // A small emitter and its bloom are painted underneath, not mixed into the plastic.
+        const float emitterWidth = juce::jlimit(22.0f, 48.0f, cap.getWidth() * 0.34f);
+        auto emitter = juce::Rectangle<float>(cap.getCentreX() - emitterWidth * 0.5f,
+                                               cap.getBottom() - 4.2f,
+                                               emitterWidth, 2.3f);
+        g.setColour(led.withAlpha(0.055f * glowStrength));
+        g.fillRoundedRectangle(cap.expanded(1.4f, 0.9f), 3.5f);
+        juce::ColourGradient bloom(led.withAlpha(0.015f), cap.getCentreX(), cap.getY(),
+                                   led.withAlpha(0.62f * glowStrength), cap.getCentreX(), cap.getBottom(), false);
+        bloom.addColour(0.58, led.withAlpha(0.11f * glowStrength));
+        bloom.addColour(0.82, led.withAlpha(0.32f * glowStrength));
+        g.setGradientFill(bloom);
+        g.fillRoundedRectangle(cap.reduced(0.5f), 2.7f);
+        g.setColour(led.withAlpha(illuminated ? 0.94f : isMouseOverButton ? 0.58f : 0.30f));
+        g.fillRoundedRectangle(emitter, 1.1f);
+        g.setColour(led.brighter(0.85f).withAlpha(illuminated ? 0.76f : 0.20f));
+        g.fillRoundedRectangle(emitter.reduced(5.0f, 0.5f), 0.6f);
+
+        // Neutral, genuinely translucent acrylic: the colour visible here comes from the LED below.
+        juce::ColourGradient acrylic(juce::Colours::white.withAlpha(isButtonDown ? 0.10f : 0.22f),
+                                     cap.getX(), cap.getY(),
+                                     juce::Colour(0xff9aa2ac).withAlpha(0.035f),
+                                     cap.getX(), cap.getBottom(), false);
+        acrylic.addColour(0.30, juce::Colour(0xffe8edf2).withAlpha(isMouseOverButton ? 0.13f : 0.085f));
+        acrylic.addColour(0.68, juce::Colour(0xff48505a).withAlpha(0.055f));
+        acrylic.addColour(0.88, juce::Colours::white.withAlpha(0.025f));
+        g.setGradientFill(acrylic);
+        g.fillRoundedRectangle(cap, 2.6f);
+
+        // Bevel and refraction cues define the clear shell without making it opaque.
+        g.setColour(juce::Colours::white.withAlpha(isButtonDown ? 0.16f : 0.48f));
+        g.drawRoundedRectangle(cap.reduced(0.35f), 2.45f, 0.75f);
+        g.setColour(juce::Colours::white.withAlpha(isButtonDown ? 0.04f : 0.19f));
+        g.fillRoundedRectangle(cap.reduced(1.3f).withHeight(2.7f), 1.3f);
+        g.setColour(juce::Colours::white.withAlpha(0.10f));
+        g.drawVerticalLine(juce::roundToInt(cap.getX() + 1.2f),
+                           cap.getY() + 3.0f, cap.getBottom() - 3.0f);
+        g.setColour(juce::Colours::black.withAlpha(0.30f));
+        g.drawHorizontalLine(juce::roundToInt(cap.getBottom() - 0.9f),
+                             cap.getX() + 2.0f, cap.getRight() - 2.0f);
+        g.setColour(led.withAlpha(0.13f + 0.16f * glowStrength));
+        g.drawHorizontalLine(juce::roundToInt(cap.getBottom() - 1.8f),
+                             cap.getX() + 5.0f, cap.getRight() - 5.0f);
     }
 };
 
@@ -633,7 +1252,8 @@ namespace LoopernicoUi
     }
 
     static inline void drawPanel(juce::Graphics& g, juce::Rectangle<int> r,
-                                 const juce::String& title, juce::Colour accent)
+                                 const juce::String& title, juce::Colour accent,
+                                 bool showHeader = true)
     {
         auto rf = r.toFloat();
 
@@ -788,7 +1408,8 @@ namespace LoopernicoUi
         drawFineRackTexture(g, rf.reduced(2.0f), 0.38f);
 
         juce::Rectangle<float> grain = rf.reduced(1.5f);
-        grain.removeFromTop(28.0f);
+        if (showHeader)
+            grain.removeFromTop(28.0f);
         for (int i = 0; i < (int)grain.getHeight(); i += 5)
         {
             float alpha = (i % 10 == 0) ? 0.010f : 0.003f;
@@ -806,6 +1427,9 @@ namespace LoopernicoUi
         g.drawRoundedRectangle(rf.reduced(0.5f), 8.0f, 1.0f);
         g.setColour(juce::Colours::black.withAlpha(0.75f));
         g.drawRoundedRectangle(rf.reduced(2.0f), 7.0f, 0.8f);
+
+        if (!showHeader)
+            return;
 
         auto hdr = r.removeFromTop(28);
         auto hdrf = hdr.toFloat();
@@ -825,11 +1449,14 @@ namespace LoopernicoUi
         drawScrew(g, (float)hdr.getX() + 12.0f, (float)hdr.getCentreY(), 5.5f);
         drawScrew(g, (float)hdr.getRight() - 12.0f, (float)hdr.getCentreY(), 5.5f);
 
-        g.setColour(LnfC::TextHi.withAlpha(0.95f));
-        g.setFont(juce::Font(juce::FontOptions(11.5f).withStyle("Bold")));
-        g.drawText(title,
-                   hdr.getX() + 26, hdr.getY() + 2,
-                   hdr.getWidth() - 52, hdr.getHeight() - 4,
-                   juce::Justification::centredLeft);
+        if (title.isNotEmpty())
+        {
+            g.setColour(LnfC::TextHi.withAlpha(0.95f));
+            g.setFont(juce::Font(juce::FontOptions(11.5f).withStyle("Bold")));
+            g.drawText(title,
+                       hdr.getX() + 26, hdr.getY() + 2,
+                       hdr.getWidth() - 52, hdr.getHeight() - 4,
+                       juce::Justification::centredLeft);
+        }
     }
 }

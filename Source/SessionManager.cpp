@@ -94,42 +94,52 @@ bool SessionManager::writeSessionFile(const juce::File& file,
         return false;
     }
 
-    juce::FileOutputStream fileStream(file);
-    if (!fileStream.openedOk())
-    {
-        errorMessage = "No se pudo abrir el archivo destino.";
-        return false;
-    }
-
-    juce::GZIPCompressorOutputStream gzipStream(&fileStream, 9, false);
     const juce::String xmlText = xml->toString();
     const juce::MemoryBlock xmlBytes(xmlText.toRawUTF8(), xmlText.getNumBytesAsUTF8());
+    juce::TemporaryFile temporary(file);
 
-    gzipStream.writeInt(kSessionMagic);
-    gzipStream.writeInt(SessionManager::currentVersion);
-    gzipStream.writeCompressedInt((int) xmlBytes.getSize());
-    if (!gzipStream.write(xmlBytes.getData(), xmlBytes.getSize()))
     {
-        errorMessage = "No se pudo escribir la cabecera de la sesion.";
-        return false;
-    }
-
-    for (int i = 0; i < LooperEngine::kMaxTracks; ++i)
-        if (!writeAudioBufferToStream(gzipStream, looperSnapshot.tracks[(size_t) i].audio))
+        juce::FileOutputStream fileStream(temporary.getFile());
+        if (!fileStream.openedOk())
         {
-            errorMessage = "No se pudo escribir el audio de la sesion.";
+            errorMessage = "No se pudo abrir el archivo temporal de la sesion.";
             return false;
         }
 
-    gzipStream.writeCompressedInt((int) vstState.getSize());
+        juce::GZIPCompressorOutputStream gzipStream(&fileStream, 9, false);
+        gzipStream.writeInt(kSessionMagic);
+        gzipStream.writeInt(SessionManager::currentVersion);
+        gzipStream.writeCompressedInt((int) xmlBytes.getSize());
+        if (!gzipStream.write(xmlBytes.getData(), xmlBytes.getSize()))
+        {
+            errorMessage = "No se pudo escribir la cabecera de la sesion.";
+            return false;
+        }
 
-    if (vstState.getSize() > 0 && !gzipStream.write(vstState.getData(), vstState.getSize()))
+        for (int i = 0; i < LooperEngine::kMaxTracks; ++i)
+            if (!writeAudioBufferToStream(gzipStream, looperSnapshot.tracks[(size_t) i].audio))
+            {
+                errorMessage = "No se pudo escribir el audio de la sesion.";
+                return false;
+            }
+
+        gzipStream.writeCompressedInt((int) vstState.getSize());
+
+        if (vstState.getSize() > 0 && !gzipStream.write(vstState.getData(), vstState.getSize()))
+        {
+            errorMessage = "No se pudo escribir el estado interno del VST3.";
+            return false;
+        }
+
+        gzipStream.flush();
+    }
+
+    if (!temporary.overwriteTargetFileWithTemporary())
     {
-        errorMessage = "No se pudo escribir el estado interno del VST3.";
+        errorMessage = "No se pudo reemplazar el archivo de sesion anterior.";
         return false;
     }
 
-    gzipStream.flush();
     return true;
 }
 
@@ -275,16 +285,19 @@ bool SessionManager::readSessionFile(const juce::File& file,
                                                                    track.audio.getNumSamples());
         if (storedAudioSamples != track.audio.getNumSamples()
             || track.lengthSamples < 0 || track.lengthSamples > track.audio.getNumSamples()
-            || track.redoLengthSamples < 0 || track.redoLengthSamples > track.audio.getNumSamples()
-            || track.pausedReadPos < 0
-            || (track.audio.getNumSamples() == 0
-                ? track.pausedReadPos != 0
-                : track.pausedReadPos >= track.audio.getNumSamples()))
+            || track.redoLengthSamples < 0 || track.redoLengthSamples > track.audio.getNumSamples())
         {
             errorMessage = "Las longitudes de la pista " + juce::String(i + 1)
                          + " no coinciden con su audio.";
             return false;
         }
+
+        // Older saves could copy the global pause cursor into every track,
+        // including empty tracks.  It is playback state, not an audio length:
+        // normalise it instead of rejecting otherwise intact recorded audio.
+        track.pausedReadPos = track.audio.getNumSamples() > 0
+            ? juce::jlimit(0, track.audio.getNumSamples() - 1, track.pausedReadPos)
+            : 0;
     }
 
     if (gzipStream.isExhausted())
@@ -309,4 +322,3 @@ bool SessionManager::readSessionFile(const juce::File& file,
 
     return true;
 }
-
