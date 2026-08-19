@@ -6,6 +6,11 @@ namespace
 {
 juce::File installedStemComponent(const juce::String& relativePath)
 {
+    const auto bundled = juce::File::getSpecialLocation(juce::File::currentExecutableFile)
+        .getParentDirectory().getChildFile("StemSeparation").getChildFile(relativePath);
+    if (bundled.existsAsFile())
+        return bundled;
+
     auto localAppData = juce::SystemStats::getEnvironmentVariable("LOCALAPPDATA", {});
     if (localAppData.isEmpty())
         localAppData = juce::File::getSpecialLocation(

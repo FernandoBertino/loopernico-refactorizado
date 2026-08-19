@@ -1,3 +1,49 @@
+# Tarea terminada 2026-08-19: instalador Full y catalogo VST3
+
+- `CONFIGURACION` incorpora una vista `PLUGINS VST3` con carpetas persistentes,
+  agregado/retiro de rutas, restauracion de rutas habituales y escaneo en un
+  worker. Busca solo archivos/paquetes `.vst3`, no instancia plugins y detiene
+  la recursion al encontrar un bundle para evitar duplicados internos.
+- Las rutas iniciales son Common Files VST3 x64/x86, Descargas y `Plugins` junto
+  al ejecutable. Rutas y resultados se guardan en
+  `%APPDATA%/Loopernico/vst3-catalog.xml`. El boton `CARGAR` de los cuatro hosts
+  muestra el catalogo y conserva el selector manual como respaldo.
+- El escaneo real encontro seis entradas unicas: Bertom, BFD Player, TONEX,
+  VZtec NAM Studio, Malibu y MT Power Drum Kit. Overdrive/Fuzz apareceran tras
+  instalarlos mediante el Setup Full.
+- `Installer/Loopernico.iss` genera un instalador en espanol con tipo Completo,
+  Compacto y Personalizado. Incluye MT Power Drum Kit y Malibu directamente;
+  encadena los instaladores Inno Setup de Bertom 3.0.11 y VZtec Overdrive 0.1.1,
+  Fuzz 0.1.0 y NAM Studio 0.1.0 con flags silenciosos. Bertom esta firmado; los
+  tres instaladores VZtec no estan firmados y se identifican como opcionales.
+- Demucs CPU y el modelo se instalan bajo `{app}/StemSeparation`; el panel busca
+  primero ese layout Full/portable y mantiene el fallback historico bajo
+  `%LOCALAPPDATA%`.
+
+Verificacion y despliegue:
+- Projucer regenerado y `Release | x64` correcto, sin advertencias nuevas.
+- `31/31` pruebas deterministas pasaron en candidato y desplegado. Humo final de
+  `Current`: 10/12 lecturas responsivas, cierre normal y codigo 0.
+- Escaneo real correcto con seis VST3 unicos. Captura revisada en
+  `tmp/vst3-scanner-settings-verified.png`: rutas, acciones, resultados y estado
+  quedan legibles sin regresiones visuales.
+- Inno Setup 6.7.3 compilo sin advertencias
+  `Installer/Output/Loopernico-Setup-1.0.0.exe`, 275.309.442 bytes, SHA-256
+  `CDA245623797FA25B3059A79620E0AD5D27B54F629ADA8C7D0AA7C51AA10916A`.
+  El Setup final no esta firmado digitalmente y Windows puede advertirlo.
+- `Current` SHA-256:
+  `544F0CFA6AFD4062A300AE3A1334DA0B411B9218E2117C83EE1540274B730AE1`.
+  `Previous` conserva el Release funcional anterior:
+  `35311219B77A8868C97F1CB796CDE3ED1217A79CDA1127BC9527162FE7EBAAF1`.
+  Hay exactamente dos EXE desplegados; acceso directo y asociacion `.loopernico`
+  apuntan a `Current` con tipo, comando e iconos correctos.
+
+Limitacion real: el Setup Full se compilo y valido estructuralmente, pero no se
+ejecuto sobre esta PC para no reinstalar plugins ni reemplazar temporalmente el
+despliegue diario. El paquete es privado/personal; revisar licencias y firma antes
+de cualquier redistribucion. El ZIP portable completo sigue siendo una mejora
+separada, porque los plugins con instalador/activacion no son portables reales.
+
 # Funcion comprobada 2026-08-04: separacion offline de stems (arquitectura y mock)
 
 - Se agrego `Source/StemSeparation/` con fachada `StemSeparationEngine`, trabajo

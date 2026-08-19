@@ -31,6 +31,10 @@
             file="Source/AudioSettingsPanel.h"/>
       <FILE id="AudPanC" name="AudioSettingsPanel.cpp" compile="1" resource="0"
             file="Source/AudioSettingsPanel.cpp"/>
+      <FILE id="VstCatH" name="Vst3PluginCatalog.h" compile="0" resource="0"
+            file="Source/Vst3PluginCatalog.h"/>
+      <FILE id="VstCatC" name="Vst3PluginCatalog.cpp" compile="1" resource="0"
+            file="Source/Vst3PluginCatalog.cpp"/>
       <FILE id="SysAudH" name="SystemAudioCapture.h" compile="0" resource="0"
             file="Source/SystemAudioCapture.h"/>
       <FILE id="qg52we" name="Main.cpp" compile="1" resource="0" file="Source/Main.cpp"/>

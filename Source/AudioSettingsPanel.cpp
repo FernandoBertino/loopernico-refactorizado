@@ -10,8 +10,10 @@ namespace
     }
 }
 
-AudioSettingsPanel::AudioSettingsPanel(AudioDeviceController& controllerToUse)
+AudioSettingsPanel::AudioSettingsPanel(AudioDeviceController& controllerToUse,
+                                       Vst3PluginCatalog& pluginCatalogToUse)
     : controller(controllerToUse),
+      pluginCatalog(pluginCatalogToUse),
       selector(controller.getDeviceManager(), 1, 2, 1, 2, false, false, true, false)
 {
     setVisible(false);
@@ -81,6 +83,12 @@ AudioSettingsPanel::AudioSettingsPanel(AudioDeviceController& controllerToUse)
     styleButton(automaticButton, LnfC::OvdAmber);
     styleButton(softwareMonitoringButton, LnfC::Accent);
     styleButton(closeButton, LnfC::RecRed);
+    styleButton(pluginViewButton, juce::Colour(0xffb36bff));
+    styleButton(audioViewButton, LnfC::Accent);
+    styleButton(addPluginPathButton, LnfC::PlayGreen);
+    styleButton(removePluginPathButton, LnfC::RecRed);
+    styleButton(defaultPluginPathsButton, LnfC::OvdAmber);
+    styleButton(scanPluginsButton, juce::Colour(0xffb36bff));
 
     softwareMonitoringButton.setClickingTogglesState(true);
     softwareMonitoringButton.onClick = [this]()
@@ -136,11 +144,168 @@ AudioSettingsPanel::AudioSettingsPanel(AudioDeviceController& controllerToUse)
             onClose();
     };
 
+    pluginViewButton.onClick = [this]() { setPluginView(true); };
+    audioViewButton.onClick = [this]() { setPluginView(false); };
+    addPluginPathButton.onClick = [this]()
+    {
+        pluginFolderChooser = std::make_unique<juce::FileChooser>(
+            "Agregar carpeta para buscar plugins VST3",
+            juce::File::getSpecialLocation(juce::File::userHomeDirectory));
+        pluginFolderChooser->launchAsync(juce::FileBrowserComponent::openMode
+                                       | juce::FileBrowserComponent::canSelectDirectories,
+            [this](const juce::FileChooser& chooser)
+            {
+                const auto folder = chooser.getResult();
+                pluginFolderChooser.reset();
+                if (folder.isDirectory())
+                    pluginCatalog.addSearchPath(folder);
+            });
+    };
+    removePluginPathButton.onClick = [this]()
+    {
+        pluginCatalog.removeSearchPath(pluginPathList.getSelectedRow());
+    };
+    defaultPluginPathsButton.onClick = [this]() { pluginCatalog.restoreDefaultPaths(); };
+    scanPluginsButton.onClick = [this]() { pluginCatalog.startScan(); };
+
+    pluginInstructions.setText(
+        "Loopernico busca solamente archivos o paquetes .vst3. El escaneo no abre ni ejecuta "
+        "plugins. Las rutas habituales incluyen Common Files\\VST3, Descargas y Plugins junto "
+        "al ejecutable.", juce::dontSendNotification);
+    pluginInstructions.setFont(juce::Font(juce::FontOptions(12.0f)));
+    pluginInstructions.setColour(juce::Label::textColourId, juce::Colour(0xffcad3dc));
+    pluginInstructions.setJustificationType(juce::Justification::topLeft);
+    pluginPathsTitle.setText("CARPETAS DE BUSQUEDA", juce::dontSendNotification);
+    pluginResultsTitle.setText("PLUGINS ENCONTRADOS", juce::dontSendNotification);
+    for (auto* label : { &pluginPathsTitle, &pluginResultsTitle })
+    {
+        label->setFont(juce::Font(juce::FontOptions(13.0f).withStyle("Bold")));
+        label->setColour(juce::Label::textColourId, LnfC::OvdAmber);
+    }
+    pluginScanStatus.setFont(juce::Font(juce::FontOptions(12.0f).withStyle("Bold")));
+    pluginScanStatus.setColour(juce::Label::textColourId, LnfC::TextDim);
+    pluginPathList.setRowHeight(30);
+    pluginPathList.setColour(juce::ListBox::backgroundColourId, juce::Colour(0xff101419));
+    pluginResults.setTextWhenNothingSelected("NINGUN PLUGIN SELECCIONADO");
+
+    for (auto* component : { static_cast<juce::Component*>(&pluginViewButton),
+                             static_cast<juce::Component*>(&audioViewButton),
+                             static_cast<juce::Component*>(&addPluginPathButton),
+                             static_cast<juce::Component*>(&removePluginPathButton),
+                             static_cast<juce::Component*>(&defaultPluginPathsButton),
+                             static_cast<juce::Component*>(&scanPluginsButton),
+                             static_cast<juce::Component*>(&pluginInstructions),
+                             static_cast<juce::Component*>(&pluginPathsTitle),
+                             static_cast<juce::Component*>(&pluginResultsTitle),
+                             static_cast<juce::Component*>(&pluginScanStatus),
+                             static_cast<juce::Component*>(&pluginPathList),
+                             static_cast<juce::Component*>(&pluginResults) })
+        addAndMakeVisible(component);
+
     addAndMakeVisible(recommendedButton);
     addAndMakeVisible(controlPanelButton);
     addAndMakeVisible(automaticButton);
     addAndMakeVisible(softwareMonitoringButton);
     addAndMakeVisible(closeButton);
+
+    pluginCatalog.addChangeListener(this);
+    refreshPluginView();
+    setPluginView(false);
+}
+
+AudioSettingsPanel::~AudioSettingsPanel()
+{
+    pluginCatalog.removeChangeListener(this);
+}
+
+int AudioSettingsPanel::SearchPathListModel::getNumRows()
+{
+    return owner.visibleSearchPaths.size();
+}
+
+void AudioSettingsPanel::SearchPathListModel::paintListBoxItem(
+    int row, juce::Graphics& g, int width, int height, bool rowIsSelected)
+{
+    if (!juce::isPositiveAndBelow(row, owner.visibleSearchPaths.size()))
+        return;
+    if (rowIsSelected)
+        g.fillAll(LnfC::Accent.withAlpha(0.22f));
+    g.setColour(juce::Colour(0xffe7edf3));
+    g.setFont(juce::Font(juce::FontOptions(11.5f)));
+    g.drawFittedText(owner.visibleSearchPaths[row], 9, 0, width - 18, height,
+                     juce::Justification::centredLeft, 1, 0.82f);
+}
+
+void AudioSettingsPanel::showPluginSettings()
+{
+    setPluginView(true);
+}
+
+void AudioSettingsPanel::setPluginView(bool shouldShowPlugins)
+{
+    pluginView = shouldShowPlugins;
+    title.setText(pluginView ? "CONFIGURACION DE PLUGINS VST3"
+                             : "CONFIGURACION Y DIAGNOSTICO DE AUDIO",
+                  juce::dontSendNotification);
+
+    for (auto* component : { static_cast<juce::Component*>(&selector),
+                             static_cast<juce::Component*>(&summary),
+                             static_cast<juce::Component*>(&calibrationTitle),
+                             static_cast<juce::Component*>(&calibrationReadout),
+                             static_cast<juce::Component*>(&directMonitoringNote),
+                             static_cast<juce::Component*>(&physicalLoopbackNote),
+                             static_cast<juce::Component*>(&actionStatus),
+                             static_cast<juce::Component*>(&calibrationSlider),
+                             static_cast<juce::Component*>(&automaticButton),
+                             static_cast<juce::Component*>(&softwareMonitoringButton),
+                             static_cast<juce::Component*>(&recommendedButton),
+                             static_cast<juce::Component*>(&controlPanelButton),
+                             static_cast<juce::Component*>(&pluginViewButton) })
+        component->setVisible(!pluginView);
+
+    for (auto* component : { static_cast<juce::Component*>(&audioViewButton),
+                             static_cast<juce::Component*>(&addPluginPathButton),
+                             static_cast<juce::Component*>(&removePluginPathButton),
+                             static_cast<juce::Component*>(&defaultPluginPathsButton),
+                             static_cast<juce::Component*>(&scanPluginsButton),
+                             static_cast<juce::Component*>(&pluginInstructions),
+                             static_cast<juce::Component*>(&pluginPathsTitle),
+                             static_cast<juce::Component*>(&pluginResultsTitle),
+                             static_cast<juce::Component*>(&pluginScanStatus),
+                             static_cast<juce::Component*>(&pluginPathList),
+                             static_cast<juce::Component*>(&pluginResults) })
+        component->setVisible(pluginView);
+
+    if (pluginView)
+        refreshPluginView();
+    resized();
+    repaint();
+}
+
+void AudioSettingsPanel::refreshPluginView()
+{
+    visibleSearchPaths = pluginCatalog.getSearchPaths();
+    pluginPathList.updateContent();
+    if (pluginPathList.getSelectedRow() >= visibleSearchPaths.size())
+        pluginPathList.deselectAllRows();
+
+    pluginResults.clear(juce::dontSendNotification);
+    const auto plugins = pluginCatalog.getPlugins();
+    int itemId = 1;
+    for (const auto& plugin : plugins)
+        pluginResults.addItem(plugin.getFileNameWithoutExtension() + "  -  "
+                                  + plugin.getParentDirectory().getFullPathName(), itemId++);
+
+    pluginScanStatus.setText(pluginCatalog.getStatus(), juce::dontSendNotification);
+    pluginScanStatus.setColour(juce::Label::textColourId,
+        pluginCatalog.isScanning() ? LnfC::OvdAmber : LnfC::PlayGreen);
+    scanPluginsButton.setEnabled(!pluginCatalog.isScanning());
+}
+
+void AudioSettingsPanel::changeListenerCallback(juce::ChangeBroadcaster* source)
+{
+    if (source == &pluginCatalog)
+        refreshPluginView();
 }
 
 void AudioSettingsPanel::styleButton(juce::TextButton& button, juce::Colour accent)
@@ -237,10 +402,13 @@ void AudioSettingsPanel::paint(juce::Graphics& g)
     g.setColour(LnfC::Accent.withAlpha(0.42f));
     g.drawRoundedRectangle(card.reduced(0.8f), 16.0f, 1.4f);
 
-    const int dividerX = cardBounds.getX() + cardBounds.getWidth() / 2;
-    g.setColour(juce::Colours::white.withAlpha(0.10f));
-    g.drawVerticalLine(dividerX, (float) cardBounds.getY() + 72.0f,
-                       (float) cardBounds.getBottom() - 78.0f);
+    if (!pluginView)
+    {
+        const int dividerX = cardBounds.getX() + cardBounds.getWidth() / 2;
+        g.setColour(juce::Colours::white.withAlpha(0.10f));
+        g.drawVerticalLine(dividerX, (float) cardBounds.getY() + 72.0f,
+                           (float) cardBounds.getBottom() - 78.0f);
+    }
 }
 
 void AudioSettingsPanel::resized()
@@ -259,6 +427,25 @@ void AudioSettingsPanel::resized()
     title.setBounds(left, top, cardBounds.getWidth() - pad * 2 - 150, 34);
     closeButton.setBounds(cardBounds.getRight() - pad - 126, top, 126, 30);
 
+    if (pluginView)
+    {
+        audioViewButton.setBounds(cardBounds.getRight() - pad - 270, top, 132, 30);
+        pluginInstructions.setBounds(left, top + 54, cardBounds.getWidth() - pad * 2, 46);
+        pluginPathsTitle.setBounds(left, top + 112, cardBounds.getWidth() - pad * 2, 22);
+        pluginPathList.setBounds(left, top + 140, cardBounds.getWidth() - pad * 2, 270);
+
+        const int actionY = top + 422;
+        addPluginPathButton.setBounds(left, actionY, 170, 30);
+        removePluginPathButton.setBounds(left + 182, actionY, 170, 30);
+        defaultPluginPathsButton.setBounds(left + 364, actionY, 170, 30);
+        scanPluginsButton.setBounds(cardBounds.getRight() - pad - 150, actionY, 150, 30);
+
+        pluginResultsTitle.setBounds(left, top + 474, cardBounds.getWidth() - pad * 2, 22);
+        pluginResults.setBounds(left, top + 502, cardBounds.getWidth() - pad * 2, 32);
+        pluginScanStatus.setBounds(left, top + 548, cardBounds.getWidth() - pad * 2, 26);
+        return;
+    }
+
     selector.setBounds(left, top + 52, cardBounds.getWidth() / 2 - pad - 18,
                        cardBounds.getHeight() - 142);
     summary.setBounds(right, top + 54, rightWidth, 330);
@@ -275,6 +462,7 @@ void AudioSettingsPanel::resized()
     const int buttonsY = cardBounds.getBottom() - 40;
     recommendedButton.setBounds(left, buttonsY, 210, 28);
     controlPanelButton.setBounds(left + 222, buttonsY, 170, 28);
+    pluginViewButton.setBounds(left + 404, buttonsY, 150, 28);
 }
 
 bool AudioSettingsPanel::keyPressed(const juce::KeyPress& key)

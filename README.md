@@ -26,12 +26,31 @@ hosting VST3 y exportacion de audio.
 
 1. Compilar primero `Release | x64`.
 2. Instalar Inno Setup 6 y abrir `Installer/Loopernico.iss`.
-3. Elegir **Build > Compile**. El instalador queda en `Installer/Output`.
+3. Mantener en Descargas los paquetes privados esperados de MT Power Drum Kit,
+   Malibu, Bertom Denoiser Classic y VZtec, y conservar el runtime/modelo Demucs
+   bajo `%LOCALAPPDATA%/Loopernico/StemSeparation`.
+4. Elegir **Build > Compile**. El instalador queda en `Installer/Output`.
 
 El instalador crea el acceso directo **Loopernico** en el escritorio, conserva
 los recursos visuales y de audio bajo la carpeta de instalacion y registra
 `.loopernico` como **Archivo de Loopernico**, con su icono propio. Al hacer doble
 clic en una sesion, Windows inicia Loopernico y carga directamente ese archivo.
+La instalacion `Completa` agrega Demucs y ofrece componentes opcionales para los
+VST3. MT Power Drum Kit y Malibu se copian directamente; Bertom y VZtec se
+instalan mediante sus instaladores originales en modo silencioso. Este paquete
+con binarios de terceros es para uso privado y no debe redistribuirse sin revisar
+sus licencias.
+
+## Catalogo de plugins VST3
+
+En `CONFIGURACION > PLUGINS VST3` se pueden agregar y quitar carpetas, restaurar
+las rutas habituales y escanear. Por defecto se revisan `Common Files/VST3`,
+Descargas y una carpeta `Plugins` junto al ejecutable. El escaneo corre fuera del
+hilo de audio, busca solamente paquetes `.vst3` y no los abre ni ejecuta.
+
+El boton `CARGAR` de cada host muestra el catalogo encontrado y conserva la
+opcion de elegir manualmente un archivo. Las rutas y resultados se guardan en
+`Loopernico/vst3-catalog.xml` dentro de los datos del usuario.
 
 Los archivos de `Builds` son generados por Projucer. Si se agregan o quitan
 fuentes, el cambio debe hacerse en el `.jucer` y luego regenerarse la solucion.

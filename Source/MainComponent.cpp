@@ -1325,7 +1325,8 @@ MainComponent::MainComponent(bool forceAudioFallbackForDiagnostics)
     audioSourcePlayer.setSource(this);
     deviceManager.addAudioCallback(&audioSourcePlayer);
 
-    audioSettingsPanel = std::make_unique<AudioSettingsPanel>(audioDeviceController);
+    audioSettingsPanel = std::make_unique<AudioSettingsPanel>(audioDeviceController,
+                                                               vst3PluginCatalog);
     audioSettingsPanel->onClose = [this]() { closeAudioSettings(); };
     audioSettingsPanel->onConfigurationChanged = [this]()
     {
@@ -2599,6 +2600,53 @@ void MainComponent::loadExternalVst3Plugin(int slot)
 {
     if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
         return;
+
+    const auto catalogPlugins = vst3PluginCatalog.getPlugins();
+    juce::Array<juce::File> plugins;
+    juce::PopupMenu menu;
+    int itemId = 1;
+    for (const auto& plugin : catalogPlugins)
+    {
+        if (plugin.exists())
+        {
+            plugins.add(plugin);
+            menu.addItem(itemId++, plugin.getFileNameWithoutExtension() + "  -  "
+                                   + plugin.getParentDirectory().getFileName());
+        }
+    }
+
+    if (itemId > 1)
+        menu.addSeparator();
+    const int browseItem = itemId++;
+    const int scanItem = itemId;
+    menu.addItem(browseItem, "ELEGIR ARCHIVO VST3...");
+    menu.addItem(scanItem, "ESCANEAR CARPETAS EN CONFIGURACION...");
+
+    auto safeThis = juce::Component::SafePointer<MainComponent>(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&btnLoadVst3[(size_t) slot]),
+        [safeThis, plugins, slot, browseItem, scanItem](int result)
+        {
+            if (auto* component = safeThis.getComponent())
+            {
+                if (result > 0 && result < browseItem
+                    && juce::isPositiveAndBelow(result - 1, plugins.size()))
+                    component->loadExternalVst3FromFile(slot, plugins.getReference(result - 1));
+                else if (result == browseItem)
+                    component->chooseExternalVst3File(slot);
+                else if (result == scanItem)
+                {
+                    component->showAudioSettings();
+                    if (component->audioSettingsPanel != nullptr)
+                        component->audioSettingsPanel->showPluginSettings();
+                }
+            }
+        });
+}
+
+void MainComponent::chooseExternalVst3File(int slot)
+{
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals))
+        return;
     juce::File defaultFolder = juce::File::getSpecialLocation(juce::File::globalApplicationsDirectory)
         .getChildFile("Common Files")
         .getChildFile("VST3");
@@ -2618,25 +2666,32 @@ void MainComponent::loadExternalVst3Plugin(int slot)
 
         if (selectedFile == juce::File())
             return;
-
-        EffectsChain::PreparedExternalPlugin candidate;
-        juce::String errorMessage;
-        if (!effectsChain.prepareExternalVst3(selectedFile, candidate, errorMessage))
-        {
-            updateExternalVstUi(slot);
-            lblVst3Status[(size_t) slot].setDisplayText(errorMessage);
-            return;
-        }
-
-        closeExternalVst3Editor(slot);
-        EffectsChain::PreparedExternalPlugin retired;
-        {
-            const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
-            retired = effectsChain.commitExternalPlugin(std::move(candidate), slot);
-        }
-
-        updateExternalVstUi(slot);
+        loadExternalVst3FromFile(slot, selectedFile);
     });
+}
+
+void MainComponent::loadExternalVst3FromFile(int slot, const juce::File& pluginFile)
+{
+    if (!juce::isPositiveAndBelow(slot, kMaxVst3Pedals) || !pluginFile.exists())
+        return;
+
+    EffectsChain::PreparedExternalPlugin candidate;
+    juce::String errorMessage;
+    if (!effectsChain.prepareExternalVst3(pluginFile, candidate, errorMessage))
+    {
+        updateExternalVstUi(slot);
+        lblVst3Status[(size_t) slot].setDisplayText(errorMessage);
+        return;
+    }
+
+    closeExternalVst3Editor(slot);
+    EffectsChain::PreparedExternalPlugin retired;
+    {
+        const juce::ScopedLock audioLock(deviceManager.getAudioCallbackLock());
+        retired = effectsChain.commitExternalPlugin(std::move(candidate), slot);
+    }
+
+    updateExternalVstUi(slot);
 }
 
 void MainComponent::unloadExternalVst3Plugin(int slot)
@@ -4642,6 +4697,14 @@ juce::Image MainComponent::createStemSeparationSnapshot() const
 void MainComponent::showAudioSettingsForSnapshot()
 {
     showAudioSettings();
+}
+
+void MainComponent::showPluginSettingsForSnapshot()
+{
+    showAudioSettings();
+    if (audioSettingsPanel != nullptr)
+        audioSettingsPanel->showPluginSettings();
+    vst3PluginCatalog.startScan();
 }
 
 bool MainComponent::setAudioBufferForSnapshot(int bufferSamples)

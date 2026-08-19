@@ -10,6 +10,7 @@
 #include "OrbitLoadingIndicator.h"
 #include "AudioDeviceController.h"
 #include "AudioSettingsPanel.h"
+#include "Vst3PluginCatalog.h"
 #include "SystemAudioCapture.h"
 #include "StemSeparation/StemSeparationEngine.h"
 #include "StemSeparation/StemImportController.h"
@@ -178,6 +179,7 @@ public:
     void focusFxPedalForSnapshot(int pedalIndex);
     void setVst3DisplayTextForSnapshot(const juce::String& text);
     void showAudioSettingsForSnapshot();
+    void showPluginSettingsForSnapshot();
     void showStemSeparationForSnapshot();
     juce::Image createStemSeparationSnapshot() const;
     bool openSessionFile(const juce::File& sessionFile);
@@ -419,6 +421,8 @@ private:
     void layoutVst3PedalControls(FXPedalComponent& pedal);
     void styleVstButton(juce::TextButton& button, juce::Colour accent);
     void loadExternalVst3Plugin(int slot = 0);
+    void chooseExternalVst3File(int slot);
+    void loadExternalVst3FromFile(int slot, const juce::File& pluginFile);
     void unloadExternalVst3Plugin(int slot = 0);
     void openExternalVst3Editor(int slot = 0);
     void openExternalVst3DrumMapEditor(int slot = 0);
@@ -469,6 +473,7 @@ private:
     std::unique_ptr<juce::FileChooser> sessionFileChooser;
     std::unique_ptr<juce::FileChooser> exportFileChooser;
     std::array<std::unique_ptr<juce::DocumentWindow>, kMaxVst3Pedals> vst3EditorWindows;
+    Vst3PluginCatalog vst3PluginCatalog;
     std::unique_ptr<AudioSettingsPanel> audioSettingsPanel;
     std::array<juce::ComboBox, kChainItemCount> pedalPresetSelectors;
     std::array<juce::TextButton, kChainItemCount> pedalPresetSaveButtons;

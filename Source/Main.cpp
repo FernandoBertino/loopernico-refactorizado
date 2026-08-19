@@ -21,6 +21,7 @@ namespace
         juce::String vstDisplayText;
         juce::File sessionFile;
         bool showAudioSettings = false;
+        bool showPluginSettings = false;
         bool showStemSeparation = false;
         bool forceAudioFallback = false;
         int audioBufferSamples = 0;
@@ -72,6 +73,11 @@ namespace
             {
                 request.enabled = true;
                 request.showAudioSettings = true;
+            }
+            else if (argument.equalsIgnoreCase("--snapshot-plugins"))
+            {
+                request.enabled = true;
+                request.showPluginSettings = true;
             }
             else if (argument.equalsIgnoreCase("--snapshot-stems"))
             {
@@ -396,6 +402,10 @@ public:
             if (snapshotRequest.enabled && snapshotRequest.showAudioSettings)
                 if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
                     main->showAudioSettingsForSnapshot();
+
+            if (snapshotRequest.enabled && snapshotRequest.showPluginSettings)
+                if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
+                    main->showPluginSettingsForSnapshot();
 
             if (snapshotRequest.enabled && snapshotRequest.showStemSeparation)
                 if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
